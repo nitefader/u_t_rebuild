@@ -4,7 +4,7 @@ import inspect
 from datetime import datetime, timedelta, timezone
 from uuid import UUID, uuid4
 
-from backend.app.brokers import BrokerOrderStatus, FakeBrokerAdapter
+from backend.app.brokers import AlpacaBrokerAdapter, BrokerOrderStatus, FakeBrokerAdapter
 from backend.app.control_plane import ControlPlane
 from backend.app.domain import (
     CandidateSide,
@@ -29,6 +29,7 @@ from backend.app.orders import InternalOrderIntent, InternalOrderStatus, OrderMa
 from backend.app.pipeline import PipelineEventType, RuntimeOrchestrator
 from backend.app.runtime import DeploymentContext, ExecutionIntent
 import backend.app.pipeline.orchestrator as orchestrator_module
+import backend.app.brokers.alpaca as alpaca_module
 
 
 ACCOUNT_ID = UUID("11111111-2222-3333-4444-555555555555")
@@ -147,6 +148,49 @@ def _orchestrator(
         order_manager=order_manager,
         control_plane=control_plane,
     )
+
+
+class FakeAlpacaOrderRequest:
+    def __init__(self, **kwargs) -> None:
+        self.kwargs = kwargs
+
+
+class PipelineAlpacaClient:
+    def __init__(self) -> None:
+        self.submitted_client_order_ids: list[str] = []
+        self.existing_by_client_order_id: dict[str, dict] = {}
+
+    def get_order_by_client_id(self, client_order_id: str):
+        try:
+            return self.existing_by_client_order_id[client_order_id]
+        except KeyError as exc:
+            raise RuntimeError("order not found") from exc
+
+    def submit_order(self, *, order_data):
+        client_order_id = order_data.kwargs["client_order_id"]
+        self.submitted_client_order_ids.append(client_order_id)
+        payload = {
+            "id": f"alpaca-{client_order_id}",
+            "client_order_id": client_order_id,
+            "symbol": order_data.kwargs["symbol"],
+            "side": "buy",
+            "type": "market",
+            "qty": str(order_data.kwargs["qty"]),
+            "status": "new",
+            "filled_qty": "0",
+        }
+        self.existing_by_client_order_id[client_order_id] = payload
+        return payload
+
+
+class CountingGovernor(PortfolioGovernor):
+    def __init__(self) -> None:
+        super().__init__()
+        self.evaluate_calls = 0
+
+    def evaluate(self, request):  # type: ignore[no-untyped-def]
+        self.evaluate_calls += 1
+        return super().evaluate(request)
 
 
 def _exit_intent(components: ResolvedProgramComponents, *, approved: bool = False) -> ExecutionIntent:
@@ -305,3 +349,38 @@ def test_pipeline_matches_batch_signal_expectation() -> None:
 
     assert pipeline_feature_values
     assert batch_snapshot.value_for(next(key for key in batch_snapshot.values if "price.close" in key)) == 100
+
+
+def test_full_pipeline_governor_order_manager_alpaca_adapter_broker_sync(monkeypatch) -> None:
+    monkeypatch.setattr(alpaca_module, "MarketOrderRequest", FakeAlpacaOrderRequest)
+    components = _components()
+    client = PipelineAlpacaClient()
+    adapter = AlpacaBrokerAdapter(trading_client=client, load_env=False)
+    governor = CountingGovernor()
+    pipeline = _orchestrator(components=components, governor=governor, broker_adapter=adapter)  # type: ignore[arg-type]
+
+    result = pipeline.process_bar(_bar())
+
+    assert governor.evaluate_calls == 1
+    assert len(result.orders) == 1
+    assert len(result.broker_results) == 1
+    assert len(result.ledger_updates) == 1
+    assert result.orders[0].program_id == components.program.id
+    assert result.broker_results[0].client_order_id == result.orders[0].client_order_id
+    assert result.ledger_updates[0].status == InternalOrderStatus.ACCEPTED
+    assert client.submitted_client_order_ids == [result.orders[0].client_order_id]
+
+
+def test_full_pipeline_does_not_submit_when_governor_blocks_with_real_adapter(monkeypatch) -> None:
+    monkeypatch.setattr(alpaca_module, "MarketOrderRequest", FakeAlpacaOrderRequest)
+    client = PipelineAlpacaClient()
+    adapter = AlpacaBrokerAdapter(trading_client=client, load_env=False)
+    pipeline = _orchestrator(
+        governor=PortfolioGovernor(GovernorPolicy(global_kill_active=True)),
+        broker_adapter=adapter,  # type: ignore[arg-type]
+    )
+
+    result = pipeline.process_bar(_bar())
+
+    assert result.orders == ()
+    assert client.submitted_client_order_ids == []

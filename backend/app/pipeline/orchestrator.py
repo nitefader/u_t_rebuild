@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import UUID
 
-from backend.app.brokers import BrokerAdapter, BrokerOrderResult, BrokerSync, FakeBrokerAdapter
+from backend.app.brokers import BrokerAdapter, BrokerAdapterError, BrokerOrderResult, BrokerOrderStatus, BrokerSync, FakeBrokerAdapter
 from backend.app.control_plane.service import ControlPlane
 from backend.app.decision import SignalEngine, SignalEvaluationError
 from backend.app.domain import CandidateTradeIntent
@@ -291,7 +291,18 @@ class RuntimeOrchestrator:
             message="internal order created",
             details={"order_id": str(order.order_id), "client_order_id": order.client_order_id, "intent": order.intent.value},
         )
-        broker_result = self._broker_adapter.submit_order(order)
+        try:
+            broker_result = self._broker_adapter.submit_order(order)
+        except BrokerAdapterError as exc:
+            broker_result = BrokerOrderResult(
+                order_id=order.order_id,
+                client_order_id=order.client_order_id,
+                status=BrokerOrderStatus.REJECTED,
+                filled_quantity=0,
+                remaining_quantity=order.quantity,
+                reason=self._broker_error_reason(exc),
+                raw_status="adapter_error",
+            )
         self._event_log.append(
             timestamp=broker_result.received_at,
             event_type=PipelineEventType.BROKER_RESULT,
@@ -308,6 +319,13 @@ class RuntimeOrchestrator:
             details={"status": ledger_update.status.value, "filled_quantity": ledger_update.filled_quantity},
         )
         return order, broker_result, ledger_update
+
+    def _broker_error_reason(self, exc: BrokerAdapterError) -> str:
+        details = getattr(exc, "details", None)
+        code = getattr(details, "code", None)
+        if code:
+            return f"broker_adapter_error:{code}"
+        return "broker_adapter_error"
 
     def _evaluate_governor(self, *, intent: ExecutionIntent, order_intent: InternalOrderIntent) -> GovernorDecision:
         return self._governor.evaluate(

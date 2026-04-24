@@ -56,7 +56,7 @@ def _order(*, order_type: OrderType = OrderType.MARKET, limit_price: float | Non
 
 
 class FakeTradingClient:
-    def __init__(self, response: dict | None = None) -> None:
+    def __init__(self, response: dict | None = None, *, existing_order: dict | None = None) -> None:
         self.response = response or {
             "id": "alpaca-order-1",
             "client_order_id": "utos-11111111-aaaaaaaa-99999999-open-000001",
@@ -64,14 +64,21 @@ class FakeTradingClient:
             "filled_qty": "0",
             "qty": "10",
         }
+        self.existing_order = existing_order
         self.submitted_order_data = None
+        self.get_order_calls = 0
+        self.submit_order_calls = 0
 
     def submit_order(self, *, order_data):
+        self.submit_order_calls += 1
         self.submitted_order_data = order_data
         return self.response
 
     def get_order_by_client_id(self, client_order_id: str):
-        payload = dict(self.response)
+        self.get_order_calls += 1
+        if self.existing_order is None:
+            raise RuntimeError("order not found")
+        payload = dict(self.existing_order)
         payload["client_order_id"] = client_order_id
         return payload
 
@@ -111,19 +118,18 @@ def test_market_order_translation_correct() -> None:
     }
 
 
-def test_limit_order_translation_correct() -> None:
-    request = _adapter().translate_order_request(_order(order_type=OrderType.LIMIT, limit_price=101.25))
+def test_limit_order_translation_rejected_for_v1_safe_path() -> None:
+    with pytest.raises(AlpacaBrokerError) as exc_info:
+        _adapter().translate_order_request(_order(order_type=OrderType.LIMIT, limit_price=101.25))
 
-    assert request["type"] == "limit"
-    assert request["limit_price"] == 101.25
-    assert request["client_order_id"] == "utos-11111111-aaaaaaaa-99999999-open-000001"
+    assert exc_info.value.details.code == "submit_supports_market_only"
 
 
 def test_invalid_unsupported_order_type_rejected() -> None:
     with pytest.raises(AlpacaBrokerError) as exc_info:
         _adapter().translate_order_request(_order(order_type=OrderType.STOP))
 
-    assert exc_info.value.details.code == "unsupported_order_type"
+    assert exc_info.value.details.code == "submit_supports_market_only"
 
 
 def test_status_normalization_works() -> None:
@@ -275,6 +281,8 @@ def test_mocked_submission_uses_trading_client(monkeypatch) -> None:
     result = adapter.submit_order(_order())
 
     assert result.status == BrokerOrderStatus.ACCEPTED
+    assert fake_client.get_order_calls == 1
+    assert fake_client.submit_order_calls == 1
     assert isinstance(fake_client.submitted_order_data, FakeOrderRequest)
     assert fake_client.submitted_order_data.kwargs["client_order_id"] == "utos-11111111-aaaaaaaa-99999999-open-000001"
 

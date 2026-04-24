@@ -2412,3 +2412,66 @@ Test results:
 - Runtime-adjacent targeted suites: `107 passed`
 - Persistence tests: `15 passed`
 - Full backend suite: `339 passed`
+
+## 2026-04-24 15:41 ET - Alpaca Broker Adapter Live Integration (Paper Mode)
+
+Files created:
+
+- `backend/tests/unit/brokers/test_alpaca_live_adapter.py`
+
+Files updated:
+
+- `backend/app/brokers/alpaca.py`
+- `backend/app/pipeline/orchestrator.py`
+- `backend/tests/unit/brokers/test_alpaca_broker_adapter.py`
+- `backend/tests/unit/pipeline/test_runtime_orchestrator.py`
+- `docs/system_rebuild_outputs/IMPLEMENTATION_LOG.md`
+
+Implementation:
+
+- Tightened `AlpacaBrokerAdapter` to paper-only V1 submission through `alpaca-py`.
+- Supported order submission is market-only: symbol, quantity, side, time-in-force, and deterministic `client_order_id`.
+- Removed limit-order request construction from the Alpaca V1 safe submission path.
+- Added broker-side idempotency: submit first checks `get_order_by_client_id`; existing broker orders are normalized and returned without duplicate submission.
+- Preserved response normalization into `BrokerOrderResult` for accepted/new, partial fill, full fill, canceled, rejected, and expired states.
+- Unknown Alpaca statuses fail closed with structured `AlpacaBrokerError`.
+- Account snapshots, position snapshots, and open-order polling continue through adapter methods consumed by `BrokerSync`.
+- Runtime submission remains `OrderManager.create_order` -> `BrokerAdapter.submit_order` -> `BrokerSync.apply_result`.
+- Runtime adapter failures are converted into rejected broker results and applied through BrokerSync, so the pipeline records a terminal ledger update instead of crashing through the runtime.
+
+Safety limitations:
+
+- Paper trading only.
+- Market orders only.
+- No live trading.
+- No bracket orders.
+- No trailing stops.
+- No adapter-side internal order creation.
+- No adapter-side broker truth writes.
+- No feature computation or signal logic in the adapter.
+
+Error handling model:
+
+- Retryable structured errors: network/connectivity/timeouts and Alpaca rate limits.
+- Fatal structured errors: invalid order, insufficient buying power, symbol not tradable, auth, unknown broker errors, and unknown statuses.
+- Missing broker order during idempotency lookup is treated as non-fatal and allows a single submit attempt.
+
+Tests run:
+
+- `python -m pytest backend/tests/unit/brokers/test_alpaca_broker_adapter.py backend/tests/unit/brokers/test_alpaca_live_adapter.py backend/tests/unit/pipeline/test_runtime_orchestrator.py`
+- `python -m pytest backend/tests/unit/brokers/test_broker_adapter_boundary.py backend/tests/unit/brokers/test_broker_interface_expansion.py backend/tests/unit/brokers/test_broker_sync_reconciliation.py`
+- `python -m pytest backend/tests/unit`
+
+Test results:
+
+- Focused Alpaca and pipeline tests: `36 passed`
+- Broker boundary/reconciliation tests: `37 passed`
+- Full unit suite: `351 passed`
+
+Architecture confirmations:
+
+- BrokerAdapter remains the only broker-trading layer that calls Alpaca.
+- BrokerSync remains the only writer of broker-derived order truth.
+- OrderManager remains the only creator of InternalOrder.
+- PortfolioGovernor approval remains required before runtime open submission.
+- No duplicate Alpaca submission occurs when the deterministic client order id already exists at the broker.

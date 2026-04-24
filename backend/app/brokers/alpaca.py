@@ -33,11 +33,10 @@ try:  # pragma: no cover - real SDK is optional in unit tests.
     from alpaca.trading.client import TradingClient
     from alpaca.trading.enums import OrderSide as AlpacaOrderSide
     from alpaca.trading.enums import TimeInForce as AlpacaTimeInForce
-    from alpaca.trading.requests import LimitOrderRequest, MarketOrderRequest
+    from alpaca.trading.requests import MarketOrderRequest
 except ImportError:  # pragma: no cover
     TradingClient = None  # type: ignore[assignment]
     MarketOrderRequest = None  # type: ignore[assignment]
-    LimitOrderRequest = None  # type: ignore[assignment]
     AlpacaOrderSide = None  # type: ignore[assignment]
     AlpacaTimeInForce = None  # type: ignore[assignment]
 
@@ -73,7 +72,7 @@ class AlpacaBrokerCapabilities(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     supports_market_orders: bool = True
-    supports_limit_orders: bool = True
+    supports_limit_orders: bool = False
     supports_stop_orders: bool = False
     supports_brackets: bool = False
     supports_fractional: bool = False
@@ -113,6 +112,9 @@ class AlpacaBrokerAdapter:
                 "Alpaca BROKER_PAPER execution currently submits market orders only",
                 context={"order_id": str(order.order_id), "order_type": order.order_type.value},
             )
+        existing = self._get_existing_order(order)
+        if existing is not None:
+            return existing
         try:
             response = self._client.submit_order(order_data=self.to_alpaca_order_request(order))
         except Exception as exc:  # noqa: BLE001 - normalize external SDK errors at boundary.
@@ -203,63 +205,34 @@ class AlpacaBrokerAdapter:
 
     def translate_order_request(self, order: InternalOrder) -> dict[str, object]:
         self._require_internal_order(order)
-        if order.order_type == OrderType.MARKET:
-            request: dict[str, object] = {
-                "symbol": order.symbol,
-                "qty": order.quantity,
-                "side": self._alpaca_side(order.side),
-                "type": "market",
-                "time_in_force": order.time_in_force.value,
-                "client_order_id": order.client_order_id,
-            }
-        elif order.order_type == OrderType.LIMIT:
-            if order.limit_price is None:
-                raise AlpacaBrokerError(
-                    "missing_limit_price",
-                    "limit order translation requires limit_price",
-                    context={"order_id": str(order.order_id)},
-                )
-            request = {
-                "symbol": order.symbol,
-                "qty": order.quantity,
-                "side": self._alpaca_side(order.side),
-                "type": "limit",
-                "time_in_force": order.time_in_force.value,
-                "limit_price": order.limit_price,
-                "client_order_id": order.client_order_id,
-            }
-        else:
+        if order.order_type != OrderType.MARKET:
             raise AlpacaBrokerError(
-                "unsupported_order_type",
-                f"Alpaca skeleton supports market and limit orders only, got {order.order_type.value}",
+                "submit_supports_market_only",
+                "Alpaca BROKER_PAPER execution currently supports market orders only",
                 context={"order_id": str(order.order_id), "order_type": order.order_type.value},
             )
+        request: dict[str, object] = {
+            "symbol": order.symbol,
+            "qty": order.quantity,
+            "side": self._alpaca_side(order.side),
+            "type": "market",
+            "time_in_force": order.time_in_force.value,
+            "client_order_id": order.client_order_id,
+        }
         if order.extended_hours:
             request["extended_hours"] = True
         return request
 
     def to_alpaca_order_request(self, order: InternalOrder) -> Any:
         request = self.translate_order_request(order)
-        if order.order_type == OrderType.MARKET:
-            self._require_sdk_class(MarketOrderRequest, "MarketOrderRequest")
-            return MarketOrderRequest(  # type: ignore[misc,operator]
-                symbol=request["symbol"],
-                qty=request["qty"],
-                side=self._enum_value(AlpacaOrderSide, str(request["side"])),
-                time_in_force=self._enum_value(AlpacaTimeInForce, str(request["time_in_force"])),
-                client_order_id=request["client_order_id"],
-            )
-        if order.order_type == OrderType.LIMIT:
-            self._require_sdk_class(LimitOrderRequest, "LimitOrderRequest")
-            return LimitOrderRequest(  # type: ignore[misc,operator]
-                symbol=request["symbol"],
-                qty=request["qty"],
-                side=self._enum_value(AlpacaOrderSide, str(request["side"])),
-                time_in_force=self._enum_value(AlpacaTimeInForce, str(request["time_in_force"])),
-                limit_price=request["limit_price"],
-                client_order_id=request["client_order_id"],
-            )
-        raise AlpacaBrokerError("unsupported_order_type", f"Unsupported Alpaca order type: {order.order_type.value}")
+        self._require_sdk_class(MarketOrderRequest, "MarketOrderRequest")
+        return MarketOrderRequest(  # type: ignore[misc,operator]
+            symbol=request["symbol"],
+            qty=request["qty"],
+            side=self._enum_value(AlpacaOrderSide, str(request["side"])),
+            time_in_force=self._enum_value(AlpacaTimeInForce, str(request["time_in_force"])),
+            client_order_id=request["client_order_id"],
+        )
 
     def normalize_status(self, status: object) -> BrokerOrderStatus:
         normalized = self._status_token(status)
@@ -383,6 +356,14 @@ class AlpacaBrokerAdapter:
             kwargs["url_override"] = base_url
         return TradingClient(api_key, secret_key, **kwargs)  # type: ignore[misc,operator]
 
+    def _get_existing_order(self, order: InternalOrder) -> BrokerOrderResult | None:
+        try:
+            return self.get_order(order)
+        except AlpacaBrokerError as exc:
+            if exc.details.code == "order_not_found":
+                return None
+            raise
+
     def _require_internal_order(self, order: InternalOrder) -> None:
         if not isinstance(order, InternalOrder):
             raise AlpacaBrokerError("invalid_order_boundary", "Alpaca adapter requires an already-created InternalOrder")
@@ -471,10 +452,19 @@ class AlpacaBrokerAdapter:
     def _normalize_exception(self, exc: Exception) -> AlpacaBrokerError:
         message = str(exc)
         lowered = message.lower()
+        status_code = getattr(exc, "status_code", None) or getattr(exc, "status", None)
+        if status_code == 404 or "not found" in lowered:
+            return AlpacaBrokerError("order_not_found", message, retryable=False)
+        if status_code == 429 or "rate limit" in lowered or "too many requests" in lowered:
+            return AlpacaBrokerError("rate_limited", message, retryable=True)
+        if any(token in lowered for token in ("timeout", "temporarily unavailable", "connection", "network")):
+            return AlpacaBrokerError("network_error", message, retryable=True)
         if "auth" in lowered or "unauthorized" in lowered or "forbidden" in lowered:
             return AlpacaBrokerError("auth_error", message, retryable=False)
         if "buying power" in lowered or "insufficient" in lowered:
             return AlpacaBrokerError("insufficient_buying_power", message, retryable=False)
+        if "tradable" in lowered or "not active" in lowered:
+            return AlpacaBrokerError("symbol_not_tradable", message, retryable=False)
         if "validation" in lowered or "invalid" in lowered:
             return AlpacaBrokerError("validation_error", message, retryable=False)
-        return AlpacaBrokerError("network_error", message, retryable=True)
+        return AlpacaBrokerError("broker_error", message, retryable=False)
