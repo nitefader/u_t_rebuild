@@ -5,7 +5,6 @@ from uuid import UUID, uuid4
 
 from backend.app.domain import IntentType
 from backend.app.domain._base import utc_now
-from backend.app.runtime import ExecutionIntent
 
 from .ledger import OrderLedger
 from .models import InternalOrder, InternalOrderIntent, InternalOrderStatus, OrderManagerError
@@ -24,9 +23,11 @@ class OrderManager:
         self,
         *,
         account_id: UUID,
-        execution_intent: ExecutionIntent,
+        execution_intent,
         order_intent: InternalOrderIntent | str | None = None,
     ) -> InternalOrder:
+        if not execution_intent.governor_approved:
+            raise OrderManagerError("execution intent is not approved by Portfolio Governor")
         intent = self._resolve_order_intent(execution_intent, order_intent)
         sequence = self._next_sequence(
             account_id=account_id,
@@ -84,7 +85,7 @@ class OrderManager:
 
     def _resolve_order_intent(
         self,
-        execution_intent: ExecutionIntent,
+        execution_intent,
         order_intent: InternalOrderIntent | str | None,
     ) -> InternalOrderIntent:
         if order_intent is not None:

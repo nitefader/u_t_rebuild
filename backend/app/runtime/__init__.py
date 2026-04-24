@@ -1,6 +1,6 @@
 """Internal runtime decision loop contracts."""
 
-from .engine import ExecutionIntentBuilder, PortfolioGovernor, RuntimeEngine, RuntimeEventLog, RuntimeStateStore
+from .engine import ExecutionIntentBuilder, RuntimeEngine, RuntimeEventLog, RuntimeStateStore
 from .models import (
     DeploymentContext,
     ExecutionIntent,
@@ -16,7 +16,6 @@ __all__ = [
     "DeploymentContext",
     "ExecutionIntent",
     "ExecutionIntentBuilder",
-    "PortfolioGovernor",
     "RuntimeDecisionBatch",
     "RuntimeEngine",
     "RuntimeError",

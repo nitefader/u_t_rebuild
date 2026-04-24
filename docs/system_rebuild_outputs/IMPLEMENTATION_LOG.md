@@ -624,3 +624,59 @@ Result:
 
 - Broker tests: `8 passed`
 - Targeted backend unit slice: `174 passed`
+
+## 2026-04-24 - Portfolio Governor Foundation
+
+Implemented the Portfolio Governor as the final internal approval gate before internal order creation.
+
+Created:
+
+- `backend/app/governor/__init__.py`
+- `backend/app/governor/models.py`
+- `backend/app/governor/service.py`
+- `backend/tests/unit/governor/test_portfolio_governor.py`
+
+Updated:
+
+- `backend/app/runtime/engine.py`
+- `backend/app/runtime/__init__.py`
+- `backend/app/orders/manager.py`
+
+Implemented:
+
+- `PortfolioGovernor`
+- `GovernorPolicy`
+- `GovernorRequest`
+- `GovernorDecision`
+- `BrokerSyncFreshness`
+- `PortfolioSnapshot`
+- `PositionSummary`
+- global kill blocking new opens
+- account pause blocking new opens for the paused account only
+- deployment pause blocking new opens for the paused deployment only
+- stale broker sync blocking new opens
+- max open positions blocking new opens
+- symbol concentration placeholder projected state
+- protective close / take-profit / stop-loss approval during pause or kill
+- runtime integration with the Governor package
+- OrderManager rejection of unapproved execution intents
+
+Scope kept out:
+
+- No Alpaca
+- No broker API client
+- No API routes
+- No frontend
+- No database models or migrations
+- No BrokerAccount policy ownership
+
+Validation performed:
+
+- `python -m pytest backend\tests\unit\governor -q`
+- `python -m pytest backend\tests\unit\governor backend\tests\unit\brokers backend\tests\unit\orders backend\tests\unit\runtime backend\tests\unit\simulation backend\tests\unit\chart_lab backend\tests\unit\decision backend\tests\unit\features backend\tests\unit\domain -q`
+- `python -m compileall -q backend\app\governor backend\tests\unit\governor backend\app\runtime backend\app\orders`
+
+Result:
+
+- Governor tests: `9 passed`
+- Targeted backend unit slice: `183 passed`

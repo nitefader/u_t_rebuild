@@ -18,6 +18,8 @@ from backend.app.features import (
     ResolvedProgramComponents,
     build_feature_plan,
 )
+from backend.app.governor import BrokerSyncFreshness, GovernorRequest, PortfolioGovernor, PortfolioSnapshot
+from backend.app.orders.models import InternalOrderIntent
 
 from .models import (
     DeploymentContext,
@@ -104,17 +106,6 @@ class RuntimeStateStore:
         self._state = self._state.model_copy(update={"status": RuntimeStatus.ERROR, "last_error": message})
 
 
-class PortfolioGovernor:
-    """Minimal internal authority for runtime decisions before broker work exists."""
-
-    def approve(self, *, state: RuntimeState, intent: ExecutionIntent) -> tuple[bool, str]:
-        if state.status in {RuntimeStatus.PAUSED, RuntimeStatus.KILLED, RuntimeStatus.ERROR}:
-            return False, f"runtime_state_{state.status.value}"
-        if intent.qty <= 0:
-            return False, "invalid_qty"
-        return True, "approved"
-
-
 class ExecutionIntentBuilder:
     def build_with_risk_profile(
         self,
@@ -184,6 +175,9 @@ class RuntimeEngine:
         governor: PortfolioGovernor | None = None,
         intent_builder: ExecutionIntentBuilder | None = None,
         feature_cache: FeatureCache | None = None,
+        account_id=None,  # type: ignore[no-untyped-def]
+        broker_sync: BrokerSyncFreshness | None = None,
+        portfolio_snapshot: PortfolioSnapshot | None = None,
     ) -> None:
         self._deployment = deployment
         self._components = components
@@ -193,6 +187,9 @@ class RuntimeEngine:
         self._governor = governor or PortfolioGovernor()
         self._intent_builder = intent_builder or ExecutionIntentBuilder()
         self._feature_cache = feature_cache or FeatureCache()
+        self._account_id = account_id or deployment.deployment_id
+        self._broker_sync = broker_sync or BrokerSyncFreshness()
+        self._portfolio_snapshot = portfolio_snapshot or PortfolioSnapshot()
         self._feature_plan = build_feature_plan(components, consumer="runtime")
         self._state_store = RuntimeStateStore(
             RuntimeState(deployment_id=deployment.deployment_id, status=deployment.status)
@@ -308,9 +305,18 @@ class RuntimeEngine:
                 price=bar.close,
                 initial_cash=self._initial_cash,
             )
-            approved, reason = self._governor.approve(state=self._state_store.state, intent=intent)
-            intent = intent.model_copy(update={"governor_approved": approved, "governor_reason": reason})
-            if approved:
+            decision = self._governor.evaluate(
+                GovernorRequest(
+                    account_id=self._account_id,
+                    execution_intent=intent,
+                    runtime_state=self._state_store.state,
+                    broker_sync=self._broker_sync,
+                    portfolio=self._portfolio_snapshot,
+                    order_intent=InternalOrderIntent.OPEN,
+                )
+            )
+            intent = intent.model_copy(update={"governor_approved": decision.approved, "governor_reason": decision.reason})
+            if decision.approved:
                 self._state_store.record_execution_intent(intent.timestamp)
                 execution_intents.append(intent)
                 self._event_log.append(
@@ -319,7 +325,7 @@ class RuntimeEngine:
                     symbol=intent.symbol,
                     timeframe=bar.timeframe,
                     message="execution intent created",
-                    details={"qty": intent.qty, "order_type": intent.order_type.value, "governor_reason": reason},
+                    details={"qty": intent.qty, "order_type": intent.order_type.value, "governor_reason": decision.reason},
                 )
             else:
                 self._event_log.append(
@@ -328,7 +334,7 @@ class RuntimeEngine:
                     symbol=intent.symbol,
                     timeframe=bar.timeframe,
                     message="execution intent blocked by portfolio governor",
-                    details={"governor_reason": reason},
+                    details={"governor_reason": decision.reason, "rule_id": decision.rule_id},
                 )
         return execution_intents
 
