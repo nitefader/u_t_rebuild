@@ -8,7 +8,7 @@ from uuid import uuid4
 from pydantic import BaseModel, ConfigDict, Field
 
 from backend.app.decision import SignalEngine, SignalEvaluationError
-from backend.app.domain import ChartLabMode, ChartLabSession
+from backend.app.domain import ChartLabSession, TradingMode
 from backend.app.features import (
     BatchFeatureEngine,
     FeatureAvailability,
@@ -86,7 +86,7 @@ class ChartLabPreviewService:
     ) -> ChartLabPreviewResponse:
         session = ChartLabSession(
             id=uuid4(),
-            mode=ChartLabMode.PROGRAM_PREVIEW,
+            mode=TradingMode.CHART_LAB_BATCH,
             symbol=symbol.upper(),
             timeframe=timeframe,
             start=start,

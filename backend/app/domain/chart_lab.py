@@ -1,22 +1,17 @@
 from __future__ import annotations
 
 from datetime import datetime
-from enum import StrEnum
 from uuid import UUID
 
 from pydantic import Field, model_validator
 
 from ._base import DomainSchema, JsonDict, utc_now
-
-
-class ChartLabMode(StrEnum):
-    STRATEGY_PREVIEW = "strategy_preview"
-    PROGRAM_PREVIEW = "program_preview"
+from .trading_mode import CHART_LAB_MODES, TradingMode
 
 
 class ChartLabSession(DomainSchema):
     id: UUID
-    mode: ChartLabMode
+    mode: TradingMode
     symbol: str
     timeframe: str
     start: datetime
@@ -52,8 +47,8 @@ class ChartLabSession(DomainSchema):
     def validate_mode_reference(self) -> "ChartLabSession":
         if self.start >= self.end:
             raise ValueError("chart lab start must be before end")
-        if self.mode == ChartLabMode.STRATEGY_PREVIEW and self.strategy_version_id is None:
-            raise ValueError("strategy_preview requires strategy_version_id")
-        if self.mode == ChartLabMode.PROGRAM_PREVIEW and self.program_version_id is None:
-            raise ValueError("program_preview requires program_version_id")
+        if self.mode not in CHART_LAB_MODES:
+            raise ValueError(f"chart lab session requires CHART_LAB mode, got {self.mode.value}")
+        if self.strategy_version_id is None and self.program_version_id is None:
+            raise ValueError("chart lab session requires strategy_version_id or program_version_id")
         return self

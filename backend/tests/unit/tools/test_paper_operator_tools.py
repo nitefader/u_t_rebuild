@@ -5,7 +5,6 @@ from datetime import datetime, timezone
 from uuid import UUID, uuid4
 
 from backend.app.brokers import (
-    BrokerAccountMode,
     BrokerAccountSnapshot,
     BrokerSync,
     BrokerOrderResult,
@@ -13,6 +12,7 @@ from backend.app.brokers import (
     BrokerPositionSide,
     BrokerPositionSnapshot,
 )
+from backend.app.domain import TradingMode
 from backend.app.domain._base import utc_now
 from backend.app.features import NormalizedBar
 from backend.app.governor import GovernorPolicy, PortfolioGovernor
@@ -68,7 +68,7 @@ class FakeReadinessAdapter:
         return BrokerAccountSnapshot(
             account_id=account_id,
             provider="fake",
-            mode=BrokerAccountMode.PAPER,
+            mode=TradingMode.BROKER_PAPER,
             buying_power=100_000,
             cash=100_000,
             equity=100_000,
@@ -133,7 +133,7 @@ class FakeRuntimeAdapter:
         return BrokerAccountSnapshot(
             account_id=account_id,
             provider="fake",
-            mode=BrokerAccountMode.PAPER,
+            mode=TradingMode.BROKER_PAPER,
             buying_power=100_000,
             cash=100_000,
             equity=100_000,

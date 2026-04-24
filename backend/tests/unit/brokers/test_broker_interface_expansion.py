@@ -7,7 +7,6 @@ from uuid import UUID
 import pytest
 
 from backend.app.brokers import (
-    BrokerAccountMode,
     BrokerAccountSnapshot,
     BrokerAdapterError,
     BrokerOpenOrderSnapshot,
@@ -19,7 +18,7 @@ from backend.app.brokers import (
     BrokerSync,
     FakeBrokerAdapter,
 )
-from backend.app.domain import CandidateSide, IntentType, OrderType, TimeInForce
+from backend.app.domain import CandidateSide, IntentType, OrderType, TimeInForce, TradingMode
 from backend.app.orders import InternalOrderStatus, OrderManager
 from backend.app.runtime import ExecutionIntent
 import backend.app.brokers.adapter as adapter_module
@@ -59,7 +58,7 @@ def test_fake_broker_adapter_supports_expanded_protocol() -> None:
     account_snapshot = BrokerAccountSnapshot(
         account_id=ACCOUNT_ID,
         provider="fake",
-        mode=BrokerAccountMode.PAPER,
+        mode=TradingMode.BROKER_PAPER,
         buying_power=50_000,
         cash=25_000,
         equity=55_000,
@@ -126,7 +125,7 @@ def test_account_snapshot_freshness_can_be_read() -> None:
     snapshot = BrokerAccountSnapshot(
         account_id=ACCOUNT_ID,
         provider="fake",
-        mode=BrokerAccountMode.PAPER,
+        mode=TradingMode.BROKER_PAPER,
         buying_power=100_000,
         cash=100_000,
         equity=100_000,

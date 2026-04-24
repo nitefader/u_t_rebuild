@@ -8,8 +8,8 @@ from backend.app.decision import SignalEngine, SignalEvaluationError
 from backend.app.domain import (
     CandidateSide,
     IntentType,
-    SimulationMode,
     SimulationSession,
+    TradingMode,
 )
 from backend.app.domain.risk_profile import PositionSizingMethod
 from backend.app.features import (
@@ -524,7 +524,7 @@ class HistoricalReplayEngine:
     ) -> SimulationReplayResult:
         session = SimulationSession(
             id=session_id or uuid4(),
-            mode=SimulationMode.HISTORICAL_REPLAY,
+            mode=TradingMode.SIM_LAB_HISTORICAL,
             program_version_id=components.program.id,
             symbol_count=len(components.universe.symbols),
             start=start,

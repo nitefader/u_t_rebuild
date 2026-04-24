@@ -11,13 +11,12 @@ import pytest
 from backend.app.brokers import (
     AlpacaBrokerAdapter,
     AlpacaBrokerError,
-    BrokerAccountMode,
     BrokerAdapter,
     BrokerOpenOrderSnapshot,
     BrokerOrderStatus,
     BrokerPositionSide,
 )
-from backend.app.domain import CandidateSide, OrderType, TimeInForce
+from backend.app.domain import CandidateSide, OrderType, TimeInForce, TradingMode
 from backend.app.domain._base import utc_now
 from backend.app.orders import InternalOrder, InternalOrderIntent, InternalOrderStatus
 from backend.app.runtime import ExecutionIntent
@@ -191,7 +190,7 @@ def test_account_snapshot_normalization_works() -> None:
 
     assert snapshot.account_id == ACCOUNT_ID
     assert snapshot.provider == "alpaca"
-    assert snapshot.mode == BrokerAccountMode.PAPER
+    assert snapshot.mode == TradingMode.BROKER_PAPER
     assert snapshot.buying_power == 50_000
     assert snapshot.pattern_day_trader is True
     assert snapshot.shorting_enabled is True

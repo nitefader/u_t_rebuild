@@ -8,7 +8,6 @@ import pytest
 from pydantic import ValidationError
 
 from backend.app.domain import (
-    ChartLabMode,
     ChartLabSession,
     ConditionNode,
     ConditionOperator,
@@ -17,13 +16,15 @@ from backend.app.domain import (
     OrderType,
     ProgramVersion,
     RiskProfileVersion,
-    SimulationMode,
     SimulationSession,
     StrategyControlsVersion,
     StrategyVersion,
     TimeInForce,
+    TradingMode,
+    TradingModeBoundaryError,
     UniverseSnapshot,
     UniverseSymbol,
+    validate_trading_mode_boundary,
 )
 from backend.app.domain.program import ProgramStatus
 from backend.app.domain.risk_profile import PositionSizingMethod
@@ -187,7 +188,7 @@ def test_chart_lab_session_rejects_execution_state(field_name: str) -> None:
     now = _now()
     payload: dict[str, object] = {
         "id": uuid4(),
-        "mode": ChartLabMode.STRATEGY_PREVIEW,
+        "mode": TradingMode.CHART_LAB_BATCH,
         "symbol": "SPY",
         "timeframe": "5m",
         "start": now,
@@ -214,7 +215,7 @@ def test_simulation_session_rejects_real_broker_submission_fields(field_name: st
     now = _now()
     payload: dict[str, object] = {
         "id": uuid4(),
-        "mode": SimulationMode.HISTORICAL_REPLAY,
+        "mode": TradingMode.SIM_LAB_HISTORICAL,
         "program_version_id": uuid4(),
         "symbol_count": 3,
         "start": now,
@@ -238,5 +239,105 @@ def test_banned_names_do_not_appear_in_domain_files() -> None:
         for banned_name in banned:
             if banned_name in text:
                 offenders.append(f"{path.name}:{banned_name}")
+
+    assert offenders == []
+
+
+def test_chart_lab_modes_cannot_access_broker_adapter() -> None:
+    with pytest.raises(TradingModeBoundaryError, match="cannot access BrokerAdapter"):
+        validate_trading_mode_boundary(
+            TradingMode.CHART_LAB_BATCH,
+            broker_adapter=object(),
+        )
+
+
+def test_chart_lab_modes_cannot_create_orders_or_mutate_ledgers() -> None:
+    for forbidden in (
+        {"creates_orders": True},
+        {"mutates_order_ledger": True},
+        {"mutates_trade_ledger": True},
+    ):
+        with pytest.raises(TradingModeBoundaryError):
+            validate_trading_mode_boundary(TradingMode.CHART_LAB_LIVE_PREVIEW, **forbidden)
+
+
+def test_sim_lab_modes_cannot_access_broker_adapter_or_real_broker_data() -> None:
+    with pytest.raises(TradingModeBoundaryError, match="cannot access BrokerAdapter"):
+        validate_trading_mode_boundary(
+            TradingMode.SIM_LAB_HISTORICAL,
+            broker_adapter=object(),
+        )
+    with pytest.raises(TradingModeBoundaryError, match="cannot use real broker data"):
+        validate_trading_mode_boundary(
+            TradingMode.SIM_LAB_LIVE_SIMULATION,
+            uses_real_broker_data=True,
+        )
+
+
+def test_broker_modes_require_adapter_and_sync() -> None:
+    with pytest.raises(TradingModeBoundaryError, match="requires BrokerAdapter"):
+        validate_trading_mode_boundary(TradingMode.BROKER_PAPER)
+    with pytest.raises(TradingModeBoundaryError, match="requires BrokerSync"):
+        validate_trading_mode_boundary(TradingMode.BROKER_LIVE, broker_adapter=object())
+    validate_trading_mode_boundary(TradingMode.BROKER_PAPER, broker_adapter=object(), broker_sync=object())
+
+
+def test_lab_sessions_reject_invalid_canonical_mode_usage() -> None:
+    now = _now()
+    with pytest.raises(ValidationError):
+        ChartLabSession(
+            id=uuid4(),
+            mode=TradingMode.BROKER_PAPER,
+            symbol="SPY",
+            timeframe="5m",
+            start=now,
+            end=now + timedelta(days=1),
+            strategy_version_id=uuid4(),
+        )
+    with pytest.raises(ValidationError):
+        SimulationSession(
+            id=uuid4(),
+            mode=TradingMode.CHART_LAB_BATCH,
+            program_version_id=uuid4(),
+            symbol_count=1,
+            start=now,
+            end=now + timedelta(days=1),
+            initial_cash=100000,
+        )
+
+
+def test_no_ambiguous_mode_string_literals_remain_in_backend_app() -> None:
+    app_dir = Path(__file__).parents[3] / "app"
+    ambiguous_patterns = [
+        'mode="paper"',
+        "mode='paper'",
+        'mode: "paper"',
+        "mode: 'paper'",
+        'mode="live"',
+        "mode='live'",
+        'mode: "live"',
+        "mode: 'live'",
+        'mode="simulation"',
+        "mode='simulation'",
+        'mode: "simulation"',
+        "mode: 'simulation'",
+        'mode="chart"',
+        "mode='chart'",
+        'mode: "chart"',
+        "mode: 'chart'",
+        "HISTORICAL_REPLAY",
+        "STRATEGY_PREVIEW",
+        "PROGRAM_PREVIEW",
+        "BrokerAccountMode",
+    ]
+    offenders: list[str] = []
+
+    for path in app_dir.rglob("*.py"):
+        if "__pycache__" in path.parts:
+            continue
+        text = path.read_text(encoding="utf-8")
+        for pattern in ambiguous_patterns:
+            if pattern in text:
+                offenders.append(f"{path.relative_to(app_dir)}:{pattern}")
 
     assert offenders == []

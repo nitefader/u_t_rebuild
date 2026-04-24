@@ -4,7 +4,6 @@ from datetime import datetime, timezone
 from uuid import UUID
 
 from backend.app.brokers import (
-    BrokerAccountMode,
     BrokerAccountSnapshot,
     BrokerOrderResult,
     BrokerOrderStatus,
@@ -21,7 +20,7 @@ from backend.app.control_plane import (
     parse_order_deployment_id,
     parse_order_intent,
 )
-from backend.app.domain import CandidateSide, IntentType, OrderType, TimeInForce
+from backend.app.domain import CandidateSide, IntentType, OrderType, TimeInForce, TradingMode
 from backend.app.orders import InternalOrder, InternalOrderIntent, OrderLedger, OrderManager
 from backend.app.runtime import ExecutionIntent
 
@@ -57,7 +56,7 @@ class CancellableBroker:
         return BrokerAccountSnapshot(
             account_id=account_id,
             provider="fake",
-            mode=BrokerAccountMode.PAPER,
+            mode=TradingMode.BROKER_PAPER,
             buying_power=100_000,
             cash=100_000,
             equity=100_000,

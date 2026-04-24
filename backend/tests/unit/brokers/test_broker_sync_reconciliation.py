@@ -5,7 +5,6 @@ from uuid import UUID, uuid4
 
 from backend.app.brokers import (
     AlpacaAccountStreamAdapter,
-    BrokerAccountMode,
     BrokerAccountSnapshot,
     BrokerAdapterError,
     BrokerFillUpdateEvent,
@@ -19,7 +18,7 @@ from backend.app.brokers import (
     BrokerSync,
     BrokerSyncService,
 )
-from backend.app.domain import CandidateSide, IntentType, OrderType, TimeInForce
+from backend.app.domain import CandidateSide, IntentType, OrderType, TimeInForce, TradingMode
 from backend.app.governor import BrokerSyncFreshness, GovernorRequest, PortfolioGovernor, PortfolioSnapshot
 from backend.app.orders import InternalOrder, InternalOrderStatus, OrderManager
 from backend.app.runtime import ExecutionIntent, RuntimeState
@@ -44,7 +43,7 @@ class ReconciliationAdapter:
         self.account_snapshot = account_snapshot or BrokerAccountSnapshot(
             account_id=ACCOUNT_ID,
             provider="fake",
-            mode=BrokerAccountMode.PAPER,
+            mode=TradingMode.BROKER_PAPER,
             buying_power=100_000,
             cash=100_000,
             equity=100_000,
@@ -242,7 +241,7 @@ def test_stale_sync_blocks_opens() -> None:
     stale_snapshot = BrokerAccountSnapshot(
         account_id=ACCOUNT_ID,
         provider="fake",
-        mode=BrokerAccountMode.PAPER,
+        mode=TradingMode.BROKER_PAPER,
         buying_power=100_000,
         cash=100_000,
         equity=100_000,

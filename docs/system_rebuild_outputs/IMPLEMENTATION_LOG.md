@@ -1966,3 +1966,72 @@ Architecture confirmations:
 Remaining blockers:
 
 - None.
+
+## 2026-04-24 14:25 ET - Mode Naming Standardization
+
+Files created:
+
+- `backend/app/domain/trading_mode.py`
+
+Files modified:
+
+- `backend/app/brokers/__init__.py`
+- `backend/app/brokers/alpaca.py`
+- `backend/app/brokers/fake.py`
+- `backend/app/brokers/models.py`
+- `backend/app/brokers/stream.py`
+- `backend/app/chart_lab/preview_service.py`
+- `backend/app/domain/__init__.py`
+- `backend/app/domain/chart_lab.py`
+- `backend/app/domain/simulation.py`
+- `backend/app/simulation/historical_replay.py`
+- `backend/tests/unit/brokers/test_alpaca_broker_adapter.py`
+- `backend/tests/unit/brokers/test_broker_interface_expansion.py`
+- `backend/tests/unit/brokers/test_broker_sync_reconciliation.py`
+- `backend/tests/unit/control_plane/test_control_plane.py`
+- `backend/tests/unit/domain/test_domain_boundaries.py`
+- `backend/tests/unit/tools/test_paper_operator_tools.py`
+- `docs/system_rebuild_outputs/IMPLEMENTATION_LOG.md`
+
+Replacements performed:
+
+- Replaced `ChartLabMode` usage with canonical `TradingMode.CHART_LAB_BATCH` for the existing batch preview path.
+- Replaced `SimulationMode.HISTORICAL_REPLAY` usage with canonical `TradingMode.SIM_LAB_HISTORICAL`.
+- Replaced `BrokerAccountMode.PAPER` usage with canonical `TradingMode.BROKER_PAPER`.
+- Replaced broker capability and error wording that exposed ambiguous paper/live mode labels with BROKER_PAPER/BROKER_LIVE naming.
+
+Validation rules added:
+
+- Chart Lab modes reject BrokerAdapter access, order creation, OrderLedger mutation, and TradeLedger mutation.
+- Sim Lab modes reject BrokerAdapter access and real broker data usage.
+- Broker modes require both BrokerAdapter and BrokerSync.
+- ChartLabSession now accepts only CHART_LAB modes.
+- SimulationSession now accepts only SIM_LAB modes.
+- BrokerAccountSnapshot now accepts only BROKER modes when a mode is present.
+
+Tests added:
+
+- Chart Lab cannot access BrokerAdapter.
+- Chart Lab cannot create orders or mutate order/trade ledgers.
+- Sim Lab cannot access BrokerAdapter or real broker data.
+- Broker modes require BrokerAdapter and BrokerSync.
+- Invalid canonical mode usage raises explicit validation errors.
+- Ambiguous legacy mode enum/string usage is pinned out of backend app mode contracts.
+
+Tests run:
+
+- `python -m pytest backend/tests/unit/domain backend/tests/unit/brokers -q`
+- `python -m pytest backend/tests -q`
+
+Test results:
+
+- Domain + broker tests: `88 passed`
+- Full backend suite: `300 passed`
+
+Architecture confirmations:
+
+- No behavior changes.
+- No core engines modified.
+- FeatureEngine, SignalEngine, execution pipeline, PortfolioGovernor logic, and BrokerAdapter behavior were not modified.
+- No new runtime paths were introduced.
+- No duplicate responsibility was introduced.

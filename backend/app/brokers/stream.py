@@ -5,11 +5,11 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
+from backend.app.domain import TradingMode
 from backend.app.domain._base import utc_now
 
 from .alpaca import AlpacaBrokerAdapter, AlpacaBrokerError
 from .models import (
-    BrokerAccountMode,
     BrokerAccountSnapshot,
     BrokerFillUpdateEvent,
     BrokerOrderStatus,
@@ -31,7 +31,7 @@ class AlpacaAccountStreamAdapter:
         self,
         *,
         account_id: UUID,
-        mode: BrokerAccountMode = BrokerAccountMode.PAPER,
+        mode: TradingMode = TradingMode.BROKER_PAPER,
         stream_client: Any | None = None,
         normalizer: AlpacaBrokerAdapter | None = None,
     ) -> None:

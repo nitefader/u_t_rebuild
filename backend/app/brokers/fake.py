@@ -4,10 +4,10 @@ from collections import deque
 from collections.abc import Iterable, Mapping
 from uuid import UUID
 
+from backend.app.domain import TradingMode
 from backend.app.orders.models import InternalOrder
 
 from .models import (
-    BrokerAccountMode,
     BrokerAccountSnapshot,
     BrokerAdapterError,
     BrokerOpenOrderSnapshot,
@@ -128,7 +128,7 @@ class FakeBrokerAdapter:
             BrokerAccountSnapshot(
                 account_id=account_id,
                 provider="fake",
-                mode=BrokerAccountMode.PAPER,
+                mode=TradingMode.BROKER_PAPER,
                 buying_power=100_000,
                 cash=100_000,
                 equity=100_000,

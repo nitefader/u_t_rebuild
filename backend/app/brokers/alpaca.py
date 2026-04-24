@@ -8,12 +8,11 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from backend.app.domain import CandidateSide, OrderType
+from backend.app.domain import CandidateSide, OrderType, TradingMode
 from backend.app.domain._base import utc_now
 from backend.app.orders.models import InternalOrder
 
 from .models import (
-    BrokerAccountMode,
     BrokerAccountSnapshot,
     BrokerAdapterError,
     BrokerOpenOrderSnapshot,
@@ -80,8 +79,8 @@ class AlpacaBrokerCapabilities(BaseModel):
     supports_fractional: bool = False
     supports_shorting: bool = False
     supports_streaming_trade_updates: bool = True
-    supports_paper: bool = True
-    supports_live: bool = False
+    supports_broker_paper: bool = True
+    supports_broker_live: bool = False
 
 
 class AlpacaBrokerAdapter:
@@ -96,12 +95,12 @@ class AlpacaBrokerAdapter:
     def __init__(
         self,
         *,
-        mode: BrokerAccountMode = BrokerAccountMode.PAPER,
+        mode: TradingMode = TradingMode.BROKER_PAPER,
         trading_client: Any | None = None,
         load_env: bool = True,
     ) -> None:
-        if mode != BrokerAccountMode.PAPER:
-            raise AlpacaBrokerError("live_disabled", "AlpacaBrokerAdapter is paper-only in this implementation")
+        if mode != TradingMode.BROKER_PAPER:
+            raise AlpacaBrokerError("broker_live_disabled", "AlpacaBrokerAdapter currently supports BROKER_PAPER only")
         self.mode = mode
         self.capabilities = AlpacaBrokerCapabilities()
         self._client = trading_client or self._build_trading_client(load_env=load_env)
@@ -111,7 +110,7 @@ class AlpacaBrokerAdapter:
         if order.order_type != OrderType.MARKET:
             raise AlpacaBrokerError(
                 "submit_supports_market_only",
-                "Alpaca paper execution currently submits market orders only",
+                "Alpaca BROKER_PAPER execution currently submits market orders only",
                 context={"order_id": str(order.order_id), "order_type": order.order_type.value},
             )
         try:
@@ -378,7 +377,7 @@ class AlpacaBrokerAdapter:
         if not api_key or not secret_key:
             raise AlpacaBrokerError("missing_credentials", "ALPACA_API_KEY and ALPACA_SECRET_KEY are required")
         if TradingClient is None:
-            raise AlpacaBrokerError("missing_sdk", "alpaca-py is required for real Alpaca paper execution")
+            raise AlpacaBrokerError("missing_sdk", "alpaca-py is required for Alpaca BROKER_PAPER execution")
         kwargs: dict[str, object] = {"paper": True}
         if base_url:
             kwargs["url_override"] = base_url

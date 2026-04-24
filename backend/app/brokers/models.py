@@ -7,6 +7,7 @@ from uuid import UUID
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
 
 from backend.app.domain._base import utc_now
+from backend.app.domain.trading_mode import BROKER_MODES, TradingMode
 
 
 class BrokerAdapterError(ValueError):
@@ -24,11 +25,6 @@ class BrokerOrderStatus(StrEnum):
     REPLACED = "replaced"
     SUSPENDED = "suspended"
     DONE_FOR_DAY = "done_for_day"
-
-
-class BrokerAccountMode(StrEnum):
-    PAPER = "paper"
-    LIVE = "live"
 
 
 class BrokerPositionSide(StrEnum):
@@ -92,7 +88,7 @@ class BrokerAccountSnapshot(BaseModel):
     account_status: str = "unknown"
     timestamp: datetime = Field(default_factory=utc_now, validation_alias=AliasChoices("timestamp", "last_synced_at"))
     provider: str | None = None
-    mode: BrokerAccountMode | None = None
+    mode: TradingMode | None = None
     account_blocked: bool = False
     shorting_enabled: bool = False
 
@@ -103,6 +99,12 @@ class BrokerAccountSnapshot(BaseModel):
     @property
     def last_synced_at(self) -> datetime:
         return self.timestamp
+
+    @model_validator(mode="after")
+    def validate_broker_mode(self) -> "BrokerAccountSnapshot":
+        if self.mode is not None and self.mode not in BROKER_MODES:
+            raise ValueError(f"broker account snapshot requires BROKER mode, got {self.mode.value}")
+        return self
 
 
 class BrokerPositionSnapshot(BaseModel):

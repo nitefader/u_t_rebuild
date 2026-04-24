@@ -7,10 +7,7 @@ from uuid import UUID
 from pydantic import Field, model_validator
 
 from ._base import DomainSchema, JsonDict, utc_now
-
-
-class SimulationMode(StrEnum):
-    HISTORICAL_REPLAY = "historical_replay"
+from .trading_mode import SIM_LAB_MODES, TradingMode
 
 
 class GovernorMode(StrEnum):
@@ -21,7 +18,7 @@ class GovernorMode(StrEnum):
 
 class SimulationSession(DomainSchema):
     id: UUID
-    mode: SimulationMode
+    mode: TradingMode
     program_version_id: UUID
     feature_plan_id: UUID | None = None
     symbol_count: int = Field(ge=1)
@@ -56,4 +53,6 @@ class SimulationSession(DomainSchema):
     def validate_range(self) -> "SimulationSession":
         if self.start >= self.end:
             raise ValueError("simulation start must be before end")
+        if self.mode not in SIM_LAB_MODES:
+            raise ValueError(f"simulation session requires SIM_LAB mode, got {self.mode.value}")
         return self
