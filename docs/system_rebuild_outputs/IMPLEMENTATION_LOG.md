@@ -2148,3 +2148,102 @@ Architecture confirmations:
 Remaining blockers:
 
 - None.
+
+## 2026-04-24 14:38 ET - Promotion Gate Precondition Clarification
+
+Files modified:
+
+- `backend/app/promotion/__init__.py`
+- `backend/app/promotion/service.py`
+- `backend/tests/unit/promotion/test_promotion_gate.py`
+- `docs/system_rebuild_outputs/IMPLEMENTATION_LOG.md`
+
+Scope implemented:
+
+- Documented `PromotionGateService` as the required precondition service for any future `BROKER_LIVE` deployment creation flow.
+- Clarified that the promotion gate evaluates eligibility only and does not create, start, promote, or mutate deployments.
+- Added a deterministic no-mutation unit test that evaluates the same unsafe context twice and verifies stable blocking reasons plus unchanged supplied state.
+
+Tests run:
+
+- `python -m pytest backend/tests/unit/promotion -q`
+- `python -m pytest backend/tests -q`
+
+Test results:
+
+- Promotion tests: `13 passed`
+- Full backend suite: `313 passed`
+
+Issues fixed:
+
+- Clarified that no live deployment lifecycle is wired because no live deployment creation service exists yet.
+
+Architecture confirmations:
+
+- No deployment creation service was invented.
+- No deployment start or live promotion orchestration was added.
+- No execution pipeline changes.
+- PromotionGateService remains read-only pre-runtime validation.
+
+## 2026-04-24 14:43 ET - Account-Scoped Promotion Gate Clarification
+
+Files modified:
+
+- `backend/app/promotion/models.py`
+- `backend/app/promotion/service.py`
+- `backend/tests/unit/promotion/test_promotion_gate.py`
+- `docs/system_rebuild_outputs/IMPLEMENTATION_LOG.md`
+
+Scope implemented:
+
+- Made promotion evaluation explicitly account-scoped with `source_broker_account_id`, `target_broker_account_id`, `source_mode`, and `target_mode`.
+- Required source mode to be `BROKER_PAPER` and target mode to be `BROKER_LIVE`.
+- Added `broker_account_id` to paper run evidence so promotion checks only the specific source paper account and deployment being promoted.
+- Scoped paper run blockers, runtime error blockers, and warning calculations to matching source account/deployment evidence.
+- Added tests proving evidence from another paper account or deployment does not satisfy promotion requirements or generate scoped warnings.
+
+Tests run:
+
+- `python -m pytest backend/tests/unit/promotion -q`
+- `python -m pytest backend/tests -q`
+
+Test results:
+
+- Promotion tests: `16 passed`
+- Full backend suite: `316 passed`
+
+Issues fixed:
+
+- Removed the implicit single-account assumption from the promotion context.
+- Prevented unrelated paper account evidence from satisfying or warning on a specific promotion evaluation.
+
+Architecture confirmations:
+
+- Multiple `BROKER_PAPER` and `BROKER_LIVE` accounts are supported by the promotion gate contract.
+- No deployment orchestration was introduced.
+- No deployment lifecycle wiring was added.
+- PromotionGateService remains read-only and deterministic.
+
+## 2026-04-24 14:55 ET - Synthesis Blueprint Mode and Validation Clarification
+
+Files modified:
+
+- `docs/system_rebuild_outputs/08_synthesis_blueprint_output.md`
+- `docs/system_rebuild_outputs/IMPLEMENTATION_LOG.md`
+
+Scope:
+
+- Clarified lifecycle mode names using Chart Lab, Sim Lab, Broker Runtime (Paper), Live Promotion Gate, and Broker Runtime (Live).
+- Clarified that Broker Runtime (Paper) is the full runtime pipeline using Alpaca Paper broker endpoint/account, real BrokerAdapter, real BrokerSync, and fake money.
+- Clarified that Broker Runtime (Paper) is not Sim Lab and not Backtest.
+- Clarified that Broker Runtime (Live) is the full runtime pipeline using Alpaca Live broker endpoint/account, real BrokerAdapter, real BrokerSync, and real money.
+- Added validation enforcement levels: Required, Strongly recommended, and Optional / advanced.
+- Documented that Walk-Forward is not strictly required, missing Walk-Forward must create a high-severity PromotionGate warning, and missing Optimization must create a PromotionGate warning.
+- Documented that missing Walk-Forward and missing Optimization warnings must not block promotion by default.
+
+Architecture confirmations:
+
+- Documentation-only update.
+- No code changes were made in this step.
+- No architecture changes were made.
+- No lifecycle order changes were made except clarifying canonical mode names.

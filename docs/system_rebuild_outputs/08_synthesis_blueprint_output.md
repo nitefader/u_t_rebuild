@@ -126,21 +126,35 @@ Program cannot contain inline indicators, conditions, risk fields, session field
 The only valid system flow:
 
 Idea
-→ Strategy + Components
-→ Program Draft
-→ Feature Planner validation
-→ Chart Lab signal validation
-→ Sim Lab execution simulation
+→ Chart Lab (Batch / Live Preview)
+→ Sim Lab (Historical / Live Simulation)
 → Backtest
 → Optimization
 → Walk-Forward
-→ Program Freeze
-→ Paper Deployment
-→ Paper Evidence
+→ Broker Runtime (Paper)
 → Live Promotion Gate
-→ Live Deployment
-→ Operations Center
-→ Improvement creates new versions
+→ Broker Runtime (Live)
+
+This lifecycle uses the canonical mode names from the Mode Naming Contract. It clarifies the mode surfaces without changing architecture or runtime authority.
+
+Broker Runtime (Paper) means:
+
+- full runtime pipeline
+- Alpaca Paper broker endpoint/account
+- real BrokerAdapter
+- real BrokerSync
+- fake money
+- not Sim Lab
+- not Backtest
+
+Broker Runtime (Live) means:
+
+- full runtime pipeline
+- Alpaca Live broker endpoint/account
+- real BrokerAdapter
+- real BrokerSync
+- real money
+
 Runtime signal-to-order chain:
 
 Market Data Stream
@@ -171,8 +185,8 @@ Sim Lab live stream
 Backtest
 Optimization
 Walk-forward
-Paper trading
-Live trading
+Broker Runtime (Paper)
+Broker Runtime (Live)
 Portfolio Governor
 Core objects:
 
@@ -252,8 +266,8 @@ It answers:
 If this frozen Program receives this market stream, how would it behave operationally?
 Modes:
 
-historical_replay
-live_stream
+SIM_LAB_HISTORICAL
+SIM_LAB_LIVE_SIMULATION
 Sim Lab runs:
 
 Strategy through Signal Engine
@@ -718,7 +732,28 @@ Portfolio Governor approves every new exposure.
 Operations Center reflects effective runtime state.
 Promotion gates:
 
-Paper requires:
+Validation enforcement levels before Broker Runtime (Paper):
+
+Required before Broker Runtime (Paper):
+
+- Chart Lab validation
+- Sim Lab validation
+- Backtest with valid metrics
+
+Strongly recommended before Broker Runtime (Paper):
+
+- Optimization
+- Walk-Forward
+
+Optional / advanced:
+
+- Monte Carlo
+- regime stress tests
+- portfolio interaction stress tests
+
+Walk-Forward is not strictly required. Missing Walk-Forward must create a high-severity PromotionGate warning. Missing Optimization must create a PromotionGate warning. These warnings must not block promotion by default.
+
+Broker Runtime (Paper) requires:
 
 frozen Program
 valid FeaturePlan
@@ -726,7 +761,7 @@ Chart Lab evidence
 Sim Lab enforced-governor evidence
 Backtest result
 no unsupported features
-Live requires:
+Broker Runtime (Live) requires:
 
 paper evidence
 broker sync fresh
