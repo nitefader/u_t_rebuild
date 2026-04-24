@@ -2035,3 +2035,25 @@ Architecture confirmations:
 - FeatureEngine, SignalEngine, execution pipeline, PortfolioGovernor logic, and BrokerAdapter behavior were not modified.
 - No new runtime paths were introduced.
 - No duplicate responsibility was introduced.
+
+## 2026-04-24 14:26 ET - Mode Naming Contract Added
+
+Files created:
+
+- `docs/system_rebuild_outputs/MODE_NAMING_CONTRACT.md`
+
+Scope:
+
+- Added a single source of truth document for canonical TradingMode values.
+- Defined each Chart Lab, Sim Lab, and Broker Runtime mode.
+- Documented allowed capabilities and explicit mode boundaries.
+- Documented internal enum naming rules and user-facing label rules.
+- Documented banned ambiguous mode terms.
+- Added the BrokerAdapter anchor rule: if BrokerAdapter is not involved, it is not Broker Runtime.
+
+Architecture confirmations:
+
+- Documentation only.
+- No code changes were made.
+- No enums were renamed.
+- No runtime behavior was changed.
