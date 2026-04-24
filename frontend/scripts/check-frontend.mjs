@@ -11,6 +11,9 @@ async function collectFiles(dir) {
   for (const entry of entries) {
     const path = join(dir, entry.name);
     if (entry.isDirectory()) {
+      if (["dist", "node_modules"].includes(entry.name)) {
+        continue;
+      }
       files.push(...await collectFiles(path));
     } else if (/\.(js|mjs|html|css)$/.test(entry.name)) {
       files.push(path);

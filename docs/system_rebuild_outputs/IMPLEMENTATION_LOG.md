@@ -2746,3 +2746,55 @@ Test results:
 - Paper runtime smoke harness: `6 passed`
 - Compile: passed
 - Full backend suite: `375 passed, 1 skipped`
+
+## 2026-04-24 17:12 ET - Vite Frontend Dev Server With Operations API Proxy
+
+Files created:
+
+- `frontend/package.json`
+- `frontend/package-lock.json`
+- `frontend/vite.config.js`
+
+Files updated:
+
+- `.gitignore`
+- `frontend/scripts/check-frontend.mjs`
+- `docs/system_rebuild_outputs/IMPLEMENTATION_LOG.md`
+
+Implementation:
+
+- Converted the frontend into a minimal Vite app runnable from `frontend` with `npm run dev`.
+- Added Vite scripts for `dev`, `build`, `preview`, and `test`.
+- Added Vite dev-server proxy routing `/api` to `http://127.0.0.1:8000`.
+- Preserved the Operations Center Vite entry through `frontend/index.html` and `frontend/src/main.js`.
+- Kept the Operations API client on relative `/api/v1/operations/...` paths; no backend host is hardcoded in application code.
+- Tightened the frontend architecture scanner to ignore generated `dist` and dependency `node_modules` folders.
+- Normalized `.gitignore` and ignored Vite-generated `frontend/dist/` and `frontend/node_modules/`.
+
+Proxy behavior:
+
+- Browser requests from `http://127.0.0.1:5173/api/v1/operations/overview` are proxied by Vite to `http://127.0.0.1:8000/api/v1/operations/overview`.
+- Normal frontend dev does not require CORS because requests remain same-origin from the browser's perspective.
+
+Architecture preserved:
+
+- Frontend calls only Operations API routes.
+- No frontend imports or calls to BrokerAdapter, Alpaca, OrderManager, BrokerSync internals, FeatureEngine, or SignalEngine.
+
+Tests run:
+
+- `cd frontend; npm install`
+- `cd frontend; npm test`
+- `cd frontend; npm run build`
+- `cd frontend; npm run dev`
+- `python -m pytest backend/tests -q`
+
+Validation results:
+
+- `npm install`: passed, no vulnerabilities
+- `npm test`: `10 passed`; architecture check passed
+- `npm run build`: Vite production build passed
+- `npm run dev`: Vite started at `http://127.0.0.1:5173/`
+- Vite page probe: `GET /` returned `200`
+- Vite proxy probe: `GET /api/v1/operations/overview` returned `200` from the backend Operations API
+- Full backend suite: `375 passed, 1 skipped`
