@@ -1930,3 +1930,39 @@ Architecture confirmations:
 - BrokerSync remains sole writer for broker-derived order truth.
 - No BrokerSync bypass was introduced.
 - No duplicate responsibility was introduced.
+
+## 2026-04-24 14:15 ET - Broker Streaming + Sync Freshness Closeout
+
+Tests run:
+
+- `python -m pytest backend/tests/unit/brokers -q`
+- `python -m pytest backend/tests/unit/governor -q`
+- `python -m pytest backend/tests/unit/pipeline -q`
+- `python -m pytest backend/tests -q`
+
+Test results:
+
+- Broker tests: `51 passed`
+- Governor tests: `14 passed`
+- Pipeline tests: `10 passed`
+- Full backend suite: `294 passed`
+
+Issues fixed:
+
+- None. Verification passed without code changes.
+
+Architecture confirmations:
+
+- `AlpacaAccountStreamAdapter` exists and normalizes order, fill, position, and account events.
+- `BrokerSyncService` handles streaming order, fill, position, and account updates.
+- `BrokerSyncState` tracks `last_event_at`, `last_poll_sync_at`, `last_successful_sync_at`, `is_stale`, and `stale_reason`.
+- Stream disconnect fallback polling is implemented, and failed fallback marks sync stale.
+- PortfolioGovernor blocks new opens when broker sync is stale and still allows protective exits.
+- No FeatureEngine, SignalEngine, StrategyControls, Risk, ExecutionStyle, OrderManager behavior, or execution pipeline behavior changes were made during closeout.
+- BrokerAdapter remains policy-free.
+- BrokerSync remains the sole writer of broker-derived order truth.
+- No duplicate responsibility was introduced.
+
+Remaining blockers:
+
+- None.
