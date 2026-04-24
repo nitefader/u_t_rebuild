@@ -71,6 +71,7 @@ class BrokerSync:
         local_by_client_order_id = {order.client_order_id: order for order in self._ledger.by_account(account_id)}
         updates: list[InternalOrder] = []
         for snapshot in adapter.list_open_orders(account_id):
+            self.record_external_open_order(snapshot)
             order = local_by_client_order_id.get(snapshot.client_order_id)
             if order is None:
                 continue
@@ -135,12 +136,21 @@ class BrokerSync:
         target = self._mapping_store or self._runtime_store
         if target is None:
             return
+        created_at = result.received_at
+        try:
+            if hasattr(target, "lookup_broker_mapping_by_internal_order_id"):
+                created_at = target.lookup_broker_mapping_by_internal_order_id(order.order_id).created_at
+            elif hasattr(target, "get_by_order_id"):
+                created_at = target.get_by_order_id(order.order_id).created_at
+        except KeyError:
+            pass
         mapping = BrokerOrderMapping(
             order_id=order.order_id,
             client_order_id=order.client_order_id,
             broker_order_id=result.broker_order_id,
             provider=self._provider,
             account_id=order.account_id,
+            created_at=created_at,
             last_synced_at=result.received_at,
         )
         if hasattr(target, "save_broker_order_mapping"):
@@ -153,6 +163,49 @@ class BrokerSync:
         if self._runtime_store is None or not hasattr(self._runtime_store, "save_broker_account_snapshot"):
             return
         self._runtime_store.save_broker_account_snapshot(snapshot)
+
+    def record_external_open_order(self, snapshot: BrokerOpenOrderSnapshot) -> BrokerOpenOrderSnapshot:
+        if self._runtime_store is not None and hasattr(self._runtime_store, "save_broker_open_order_snapshot"):
+            self._runtime_store.save_broker_open_order_snapshot(snapshot)
+        return snapshot
+
+    def record_sync_freshness(
+        self,
+        account_snapshot: BrokerAccountSnapshot,
+        *,
+        max_stale_seconds: int = 30,
+    ) -> BrokerSyncState:
+        snapshot_timestamp = _aware(account_snapshot.timestamp)
+        age = datetime.now(timezone.utc) - snapshot_timestamp
+        is_stale = age > timedelta(seconds=max_stale_seconds)
+        state = BrokerSyncState(
+            account_id=account_snapshot.account_id,
+            last_sync_at=snapshot_timestamp,
+            last_poll_sync_at=snapshot_timestamp,
+            last_successful_sync_at=None if is_stale else snapshot_timestamp,
+            is_stale=is_stale,
+            stale_reason=f"broker_snapshot_age_exceeded_{max_stale_seconds}s" if is_stale else None,
+        )
+        if self._runtime_store is not None and hasattr(self._runtime_store, "save_broker_sync_freshness"):
+            self._runtime_store.save_broker_sync_freshness(state)
+        return state
+
+    def mark_missing_broker_order(self, order: InternalOrder, *, reason: str = "recovery_missing_broker_order") -> InternalOrder:
+        if order.status in {
+            InternalOrderStatus.FILLED,
+            InternalOrderStatus.CANCELED,
+            InternalOrderStatus.REJECTED,
+            InternalOrderStatus.FAILED,
+        } and order.reason == reason:
+            return order
+        updated = order.model_copy(
+            update={
+                "status": InternalOrderStatus.CANCELED,
+                "updated_at": datetime.now(timezone.utc),
+                "reason": reason,
+            }
+        )
+        return self._ledger.replace(updated)
 
     def _flag_stale_sync(
         self,

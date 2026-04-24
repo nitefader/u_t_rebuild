@@ -20,6 +20,8 @@ class RuntimeStatus(StrEnum):
     PAUSED = "paused"
     KILLED = "killed"
     ERROR = "error"
+    BLOCKED_RECOVERY = "blocked_recovery"
+    RECOVERED_READY = "recovered_ready"
 
 
 class RuntimeEventType(StrEnum):

@@ -8,7 +8,13 @@ from uuid import UUID
 
 from pydantic import BaseModel
 
-from backend.app.brokers import BrokerAccountSnapshot, BrokerFillUpdateEvent, BrokerOrderMapping, BrokerSyncState
+from backend.app.brokers import (
+    BrokerAccountSnapshot,
+    BrokerFillUpdateEvent,
+    BrokerOpenOrderSnapshot,
+    BrokerOrderMapping,
+    BrokerSyncState,
+)
 from backend.app.control_plane.service import ControlPlaneState
 from backend.app.domain._base import utc_now
 from backend.app.governor import GovernorPolicy
@@ -83,6 +89,10 @@ class SQLiteRuntimeStore:
     def list_orders(self) -> tuple[InternalOrder, ...]:
         rows = self._fetch_all("SELECT payload FROM internal_orders ORDER BY rowid")
         return tuple(_load_model(InternalOrder, row["payload"]) for row in rows)
+
+    def list_deployment_runtime_states(self) -> tuple[RuntimeState, ...]:
+        rows = self._fetch_all("SELECT payload FROM deployment_runtime_states ORDER BY rowid")
+        return tuple(_load_model(RuntimeState, row["payload"]) for row in rows)
 
     def save_trade(self, trade: SimulatedTrade, *, deployment_id: UUID | None = None, account_id: UUID | None = None) -> SimulatedTrade:
         self._save_trade_payload(
@@ -164,6 +174,10 @@ class SQLiteRuntimeStore:
             raise KeyError(f"unknown broker order mapping: {broker_order_id}")
         return _load_model(BrokerOrderMapping, row["payload"])
 
+    def list_broker_order_mappings(self) -> tuple[BrokerOrderMapping, ...]:
+        rows = self._fetch_all("SELECT payload FROM broker_order_mappings ORDER BY rowid")
+        return tuple(_load_model(BrokerOrderMapping, row["payload"]) for row in rows)
+
     def save_broker_account_snapshot(self, snapshot: BrokerAccountSnapshot) -> BrokerAccountSnapshot:
         with self._connect() as connection:
             connection.execute(
@@ -185,6 +199,45 @@ class SQLiteRuntimeStore:
             raise KeyError(f"unknown broker account snapshot: {account_id}")
         return _load_model(BrokerAccountSnapshot, row["payload"])
 
+    def list_broker_account_snapshots(self) -> tuple[BrokerAccountSnapshot, ...]:
+        rows = self._fetch_all("SELECT payload FROM broker_account_snapshots ORDER BY rowid")
+        return tuple(_load_model(BrokerAccountSnapshot, row["payload"]) for row in rows)
+
+    def save_broker_open_order_snapshot(self, snapshot: BrokerOpenOrderSnapshot) -> BrokerOpenOrderSnapshot:
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO broker_open_order_snapshots
+                    (broker_order_id, account_id, client_order_id, symbol, status, payload)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(broker_order_id) DO UPDATE SET
+                    account_id = excluded.account_id,
+                    client_order_id = excluded.client_order_id,
+                    symbol = excluded.symbol,
+                    status = excluded.status,
+                    payload = excluded.payload
+                """,
+                (
+                    snapshot.broker_order_id,
+                    str(snapshot.account_id),
+                    snapshot.client_order_id,
+                    snapshot.symbol.upper(),
+                    snapshot.status.value,
+                    _dump_model(snapshot),
+                ),
+            )
+        return snapshot
+
+    def list_broker_open_order_snapshots(self, account_id: UUID | None = None) -> tuple[BrokerOpenOrderSnapshot, ...]:
+        if account_id is None:
+            rows = self._fetch_all("SELECT payload FROM broker_open_order_snapshots ORDER BY rowid")
+        else:
+            rows = self._fetch_all(
+                "SELECT payload FROM broker_open_order_snapshots WHERE account_id = ? ORDER BY rowid",
+                (str(account_id),),
+            )
+        return tuple(_load_model(BrokerOpenOrderSnapshot, row["payload"]) for row in rows)
+
     def save_broker_sync_freshness(self, state: BrokerSyncState) -> BrokerSyncState:
         with self._connect() as connection:
             connection.execute(
@@ -205,6 +258,10 @@ class SQLiteRuntimeStore:
         if row is None:
             raise KeyError(f"unknown broker sync freshness: {account_id}")
         return _load_model(BrokerSyncState, row["payload"])
+
+    def list_broker_sync_freshness(self) -> tuple[BrokerSyncState, ...]:
+        rows = self._fetch_all("SELECT payload FROM broker_sync_freshness ORDER BY rowid")
+        return tuple(_load_model(BrokerSyncState, row["payload"]) for row in rows)
 
     def save_deployment_runtime_state(self, state: RuntimeState) -> RuntimeState:
         with self._connect() as connection:

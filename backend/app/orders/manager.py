@@ -56,6 +56,8 @@ class OrderManager:
     ) -> InternalOrder:
         if not execution_intent.governor_approved:
             raise OrderManagerError("execution intent is not approved by Portfolio Governor")
+        if self._control_plane.system_recovery_active:
+            raise OrderManagerError("system recovery is active; new order creation is blocked")
         intent = self._resolve_order_intent(execution_intent, order_intent)
         sequence = self._next_sequence(
             account_id=account_id,

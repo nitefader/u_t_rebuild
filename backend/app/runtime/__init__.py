@@ -11,11 +11,13 @@ from .models import (
     RuntimeState,
     RuntimeStatus,
 )
+from .recovery_orchestrator import RecoveryResult, RuntimeRecoveryOrchestrator
 
 __all__ = [
     "DeploymentContext",
     "ExecutionIntent",
     "ExecutionIntentBuilder",
+    "RecoveryResult",
     "RuntimeDecisionBatch",
     "RuntimeEngine",
     "RuntimeError",
@@ -25,4 +27,5 @@ __all__ = [
     "RuntimeState",
     "RuntimeStateStore",
     "RuntimeStatus",
+    "RuntimeRecoveryOrchestrator",
 ]

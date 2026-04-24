@@ -2347,3 +2347,68 @@ Architecture confirmations:
 - Sim Lab does not use BrokerAdapter or runtime persistence.
 - Chart Lab does not create orders, trades, fills, or broker state.
 - No duplicate runtime authority or pipeline bypasses were introduced.
+
+## 2026-04-24 15:27 ET - Runtime Startup Recovery Orchestrator
+
+Files created:
+
+- `backend/app/runtime/recovery_orchestrator.py`
+- `backend/tests/unit/runtime/test_recovery_orchestrator.py`
+- `backend/main.py`
+
+Files updated:
+
+- `backend/app/brokers/sync.py`
+- `backend/app/control_plane/service.py`
+- `backend/app/orders/manager.py`
+- `backend/app/persistence/models.py`
+- `backend/app/persistence/runtime_store.py`
+- `backend/app/runtime/__init__.py`
+- `backend/app/runtime/models.py`
+- `docs/system_rebuild_outputs/IMPLEMENTATION_LOG.md`
+
+Recovery sequence:
+
+- Enters ControlPlane recovery mode before loading runtime state.
+- Loads persisted deployments, orders, trades, broker mappings, broker snapshots, broker sync freshness, governor state, and control-plane state.
+- Rehydrates global kill, account pauses, and deployment pauses while preserving recovery mode until the sequence exits.
+- Reconciles each broker account through BrokerSync only: account snapshot, positions, open orders, order status convergence, missing broker order marking, unknown broker order ingestion, and broker sync freshness persistence.
+- Rebuilds deployment runtime state from persisted runtime state only; no FeatureEngine or SignalEngine execution occurs.
+- Runs fail-closed safety checks before resume eligibility and marks deployments `blocked_recovery` or `recovered_ready`.
+- Exits ControlPlane recovery mode without auto-starting trading.
+
+Reconciliation behavior:
+
+- Open internal orders are converged from broker results through `BrokerSync.apply_result`.
+- Missing broker orders are marked terminal through `BrokerSync.mark_missing_broker_order`.
+- Unknown broker open orders are preserved and ingested as broker-derived open-order snapshots through BrokerSync; no internal orders are created.
+- Broker sync freshness is recorded through BrokerSync and stale accounts produce `trading_blocked_reason=broker_sync_stale`.
+- Recovery is idempotent; rerunning startup recovery leaves persisted order, mapping, snapshot, freshness, control, and deployment state unchanged for the same broker truth.
+
+Safety guarantees:
+
+- ControlPlane exposes and persists `system_recovery_active`.
+- New order creation is blocked while recovery mode is active.
+- Global kill and deployment/account pauses remain ControlPlane-owned and are preserved on restart.
+- OrderManager remains the only creator of internal orders.
+- BrokerAdapter still cannot write runtime state.
+- BrokerSync remains the only writer of broker-derived truth.
+- PortfolioGovernor is not bypassed and no approval logic moved into persistence or recovery.
+- No execution engine, FeatureEngine, or SignalEngine path is invoked during recovery.
+- Trading is never auto-started after recovery.
+
+Tests run:
+
+- `python -m compileall -q backend/app backend/tests`
+- `python -m pytest backend/tests/unit/runtime/test_recovery_orchestrator.py -q`
+- `python -m pytest backend/tests/unit/orders backend/tests/unit/brokers backend/tests/unit/governor backend/tests/unit/pipeline backend/tests/unit/runtime -q`
+- `python -m pytest backend/tests/unit/persistence -q`
+- `python -m pytest backend/tests -q`
+
+Test results:
+
+- Compile: passed
+- Recovery orchestrator tests: `10 passed`
+- Runtime-adjacent targeted suites: `107 passed`
+- Persistence tests: `15 passed`
+- Full backend suite: `339 passed`

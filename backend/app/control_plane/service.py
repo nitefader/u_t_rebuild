@@ -67,6 +67,7 @@ class ControlPlaneState(BaseModel):
     global_kill_active: bool = False
     paused_account_ids: frozenset[UUID] = Field(default_factory=frozenset)
     paused_deployment_ids: frozenset[UUID] = Field(default_factory=frozenset)
+    system_recovery_active: bool = False
 
 
 class ControlPlane:
@@ -87,11 +88,20 @@ class ControlPlane:
         self._paused_deployment_ids = set(
             loaded_state.paused_deployment_ids if loaded_state is not None else paused_deployment_ids or set()
         )
+        self._system_recovery_active = loaded_state.system_recovery_active if loaded_state is not None else False
         self._persist_state()
 
     @property
     def global_kill_active(self) -> bool:
         return self._global_kill_active
+
+    @property
+    def system_recovery_active(self) -> bool:
+        return self._system_recovery_active
+
+    def set_system_recovery_active(self, active: bool) -> None:
+        self._system_recovery_active = active
+        self._persist_state()
 
     def activate_global_kill(self) -> None:
         self._global_kill_active = True
@@ -132,6 +142,8 @@ class ControlPlane:
         side: str,
     ) -> ControlGateDecision:
         _ = symbol, side
+        if self._system_recovery_active:
+            return ControlGateDecision(allowed=False, reason="system_recovery_active", rule_id="recovery_blocks_open")
         if self._global_kill_active:
             return ControlGateDecision(allowed=False, reason="global_kill_active", rule_id="global_kill_blocks_open")
         if account_id in self._paused_account_ids:
@@ -224,7 +236,16 @@ class ControlPlane:
             global_kill_active=self._global_kill_active,
             paused_account_ids=frozenset(self._paused_account_ids),
             paused_deployment_ids=frozenset(self._paused_deployment_ids),
+            system_recovery_active=self._system_recovery_active,
         )
+
+    def apply_state(self, state: ControlPlaneState, *, preserve_recovery_mode: bool = False) -> None:
+        recovery_active = self._system_recovery_active if preserve_recovery_mode else state.system_recovery_active
+        self._global_kill_active = state.global_kill_active
+        self._paused_account_ids = set(state.paused_account_ids)
+        self._paused_deployment_ids = set(state.paused_deployment_ids)
+        self._system_recovery_active = recovery_active
+        self._persist_state()
 
     def _load_state(self) -> ControlPlaneState | None:
         if self._state_store is None or not hasattr(self._state_store, "load_control_plane_state"):

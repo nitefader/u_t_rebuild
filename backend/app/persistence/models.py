@@ -45,6 +45,17 @@ CREATE TABLE IF NOT EXISTS broker_account_snapshots (
     payload TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS broker_open_order_snapshots (
+    broker_order_id TEXT PRIMARY KEY,
+    account_id TEXT NOT NULL,
+    client_order_id TEXT NOT NULL,
+    symbol TEXT NOT NULL,
+    status TEXT NOT NULL,
+    payload TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ix_broker_open_order_snapshots_account_id
+    ON broker_open_order_snapshots(account_id);
+
 CREATE TABLE IF NOT EXISTS broker_sync_freshness (
     account_id TEXT PRIMARY KEY,
     last_sync_at TEXT NOT NULL,
