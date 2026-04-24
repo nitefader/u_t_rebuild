@@ -1967,6 +1967,48 @@ Remaining blockers:
 
 - None.
 
+## 2026-04-24 14:35 ET - Paper-to-Live Promotion Gate
+
+Files created/modified:
+
+- Created `backend/app/promotion/__init__.py`
+- Created `backend/app/promotion/models.py`
+- Created `backend/app/promotion/service.py`
+- Created `backend/tests/unit/promotion/test_promotion_gate.py`
+- Modified `docs/system_rebuild_outputs/IMPLEMENTATION_LOG.md`
+
+Scope implemented:
+
+- Added deterministic `PromotionGateService` for pre-runtime `BROKER_PAPER` to `BROKER_LIVE` eligibility evaluation.
+- Added `PromotionResult` with `program_id`, `deployment_id`, `eligible`, `blocking_reasons`, `warnings`, and `evaluated_at`.
+- Added explicit read-only evidence models for paper runs, simulation validation, governor readiness, broker sync, reconciliation, and control-plane state.
+- Implemented P0 blockers for frozen program status, current paper mode, successful paper run evidence, broker sync freshness, global kill/account pause, PortfolioGovernor readiness, reconciliation mismatches, paper runtime errors, and required enforced Sim Lab evidence.
+- Implemented P1 non-blocking warnings for limited paper trade count, short runtime duration, high rejection rate, high drawdown, and inconsistent broker sync events.
+
+Tests run:
+
+- `python -m pytest backend/tests/unit/promotion -q`
+- `python -m pytest backend/tests -q`
+
+Test results:
+
+- Promotion tests: `12 passed`
+- Full backend suite: `312 passed`
+
+Issues fixed:
+
+- None. New promotion tests and full backend verification passed on first run.
+
+Architecture confirmations:
+
+- No core engines modified.
+- FeatureEngine was not modified and is not imported by the promotion gate.
+- SignalEngine was not modified and is not imported by the promotion gate.
+- StrategyControls, Risk logic, ExecutionStyle, OrderManager behavior, BrokerAdapter behavior, and the execution pipeline were not modified.
+- PortfolioGovernor remains final authority at runtime; the promotion gate only validates pre-runtime evidence.
+- No duplicate responsibility introduced.
+- No live trading behavior changes.
+
 ## 2026-04-24 14:25 ET - Mode Naming Standardization
 
 Files created:
