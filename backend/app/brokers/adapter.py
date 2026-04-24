@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 from typing import Protocol
+from uuid import UUID
 
 from backend.app.orders import InternalOrder
 
-from .models import BrokerOrderResult
+from .models import BrokerAccountSnapshot, BrokerOrderResult, BrokerPositionSnapshot
 
 
 class BrokerAdapter(Protocol):
@@ -17,3 +18,15 @@ class BrokerAdapter(Protocol):
 
     def submit_order(self, order: InternalOrder) -> BrokerOrderResult:
         """Submit an already-created internal order to a broker boundary."""
+
+    def get_order(self, order: InternalOrder) -> BrokerOrderResult:
+        """Fetch broker truth for an already-created internal order."""
+
+    def list_open_orders(self, account_id: UUID) -> tuple[BrokerOrderResult, ...]:
+        """Fetch open broker orders for an account."""
+
+    def get_account_snapshot(self, account_id: UUID) -> BrokerAccountSnapshot:
+        """Fetch external broker account truth."""
+
+    def get_positions(self, account_id: UUID) -> tuple[BrokerPositionSnapshot, ...]:
+        """Fetch external broker position truth."""

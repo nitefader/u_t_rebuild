@@ -733,3 +733,63 @@ Result:
 
 - Pipeline tests: `8 passed`
 - Targeted backend unit slice: `191 passed`
+
+## 2026-04-24 - Broker Interface Expansion Before Alpaca
+
+Expanded broker boundary interfaces for Alpaca readiness without adding Alpaca SDK, credentials, network calls, API routes, or frontend.
+
+Created:
+
+- `backend/tests/unit/brokers/test_broker_interface_expansion.py`
+
+Updated:
+
+- `backend/app/brokers/models.py`
+- `backend/app/brokers/adapter.py`
+- `backend/app/brokers/fake.py`
+- `backend/app/brokers/sync.py`
+- `backend/app/brokers/__init__.py`
+
+Implemented:
+
+- expanded `BrokerOrderResult`
+- `BrokerAccountSnapshot`
+- `BrokerPositionSnapshot`
+- `BrokerOrderMapping`
+- `BrokerAccountMode`
+- `BrokerPositionSide`
+- expanded `BrokerAdapter` protocol:
+  - `submit_order(order)`
+  - `get_order(order)`
+  - `list_open_orders(account_id)`
+  - `get_account_snapshot(account_id)`
+  - `get_positions(account_id)`
+- expanded `FakeBrokerAdapter` protocol support
+- `BrokerSync.sync_open_orders(account_id)`
+- `BrokerSync.sync_positions(account_id)`
+- `BrokerSync.sync_account(account_id)`
+- broker status preservation without raw SDK payload storage
+- broker order mapping separate from `InternalOrder`
+
+Scope kept out:
+
+- No Alpaca SDK
+- No Alpaca imports
+- No credentials
+- No network calls
+- No API routes
+- No frontend
+- No internal order creation inside broker adapter
+- No Governor logic changes
+- No Feature Engine changes
+
+Validation performed:
+
+- `python -m pytest backend\tests\unit\brokers -q`
+- `python -m pytest backend\tests\unit\pipeline backend\tests\unit\governor backend\tests\unit\brokers backend\tests\unit\orders backend\tests\unit\runtime backend\tests\unit\simulation backend\tests\unit\chart_lab backend\tests\unit\decision backend\tests\unit\features backend\tests\unit\domain -q`
+- `python -m compileall -q backend\app\brokers backend\tests\unit\brokers`
+
+Result:
+
+- Broker tests: `16 passed`
+- Targeted backend unit slice: `200 passed`
