@@ -680,3 +680,56 @@ Result:
 
 - Governor tests: `9 passed`
 - Targeted backend unit slice: `183 passed`
+
+## 2026-04-24 - Execution Pipeline Integration
+
+Implemented deterministic internal execution pipeline with no real broker integration.
+
+Created:
+
+- `backend/app/pipeline/__init__.py`
+- `backend/app/pipeline/models.py`
+- `backend/app/pipeline/orchestrator.py`
+- `backend/tests/unit/pipeline/test_runtime_orchestrator.py`
+
+Implemented:
+
+- `RuntimeOrchestrator`
+- `StrategyControlsGate`
+- `RuntimePipelineEventLog`
+- `PipelineEvent`
+- `PipelineEventType`
+- `PipelineResult`
+- end-to-end internal chain:
+  - incremental Feature Engine
+  - Signal Engine
+  - Strategy Controls gate
+  - Risk sizing through `ExecutionIntentBuilder`
+  - Execution Intent creation
+  - Portfolio Governor decision
+  - OrderManager internal order creation
+  - FakeBrokerAdapter result
+  - BrokerSync ledger update
+- debug events for candidate trade intents, execution intents, governor decisions, order creation, broker results, and ledger updates
+- protective close/tp/sl path through Governor under pause/kill
+
+Scope kept out:
+
+- No Alpaca
+- No real broker API client
+- No API routes
+- No frontend
+- No database models or migrations
+- No feature computation outside Feature Engine
+- No direct internal order creation outside OrderManager
+
+Validation performed:
+
+- `python -m pytest backend\tests\unit\pipeline -q`
+- `python -m pytest backend\tests\unit\pipeline backend\tests\unit\governor backend\tests\unit\brokers backend\tests\unit\orders backend\tests\unit\runtime backend\tests\unit\simulation backend\tests\unit\chart_lab backend\tests\unit\decision backend\tests\unit\features backend\tests\unit\domain -q`
+- `python -m compileall -q backend\app\pipeline backend\tests\unit\pipeline`
+
+Result:
+
+- Pipeline tests: `8 passed`
+- Targeted backend unit slice: `191 passed`

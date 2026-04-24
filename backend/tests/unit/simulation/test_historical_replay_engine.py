@@ -250,3 +250,17 @@ def test_simulation_module_makes_no_external_calls() -> None:
 
     for forbidden in ["alpaca", "requests", "httpx", "websocket"]:
         assert forbidden not in source.lower()
+
+
+def test_simulation_uses_only_simulated_order_manager_boundary() -> None:
+    source = inspect.getsource(historical_replay)
+
+    assert "SimulatedOrderManager" in source
+    assert "from backend.app.orders" not in source
+    assert "OrderManager" not in source.replace("SimulatedOrderManager", "")
+    assert "BrokerAdapter" not in source
+    assert "FakeBrokerAdapter" not in source
+    assert "BrokerSync" not in source
+    assert ".create_order(" in source
+    assert ".submit_order(" not in source
+    assert ".apply_result(" not in source
