@@ -4,12 +4,15 @@ from datetime import datetime, timedelta, timezone
 from uuid import UUID, uuid4
 
 from backend.app.brokers import (
+    AlpacaAccountStreamAdapter,
     BrokerAccountMode,
     BrokerAccountSnapshot,
     BrokerAdapterError,
+    BrokerFillUpdateEvent,
     BrokerOpenOrderSnapshot,
     BrokerOrderResult,
     BrokerOrderStatus,
+    BrokerOrderUpdateEvent,
     BrokerPositionSide,
     BrokerPositionSnapshot,
     BrokerReconciliationIssueType,
@@ -36,6 +39,7 @@ class ReconciliationAdapter:
         open_orders: tuple[BrokerOpenOrderSnapshot, ...] = (),
         positions: tuple[BrokerPositionSnapshot, ...] = (),
         missing_client_order_ids: set[str] | None = None,
+        fail_account_snapshot: bool = False,
     ) -> None:
         self.account_snapshot = account_snapshot or BrokerAccountSnapshot(
             account_id=ACCOUNT_ID,
@@ -49,6 +53,7 @@ class ReconciliationAdapter:
         self.open_orders = open_orders
         self.positions = positions
         self.missing_client_order_ids = missing_client_order_ids or set()
+        self.fail_account_snapshot = fail_account_snapshot
         self.submitted_orders: list[InternalOrder] = []
 
     def submit_order(self, order: InternalOrder) -> BrokerOrderResult:
@@ -66,6 +71,8 @@ class ReconciliationAdapter:
 
     def get_account_snapshot(self, account_id: UUID) -> BrokerAccountSnapshot:
         assert account_id == ACCOUNT_ID
+        if self.fail_account_snapshot:
+            raise BrokerAdapterError("poll failed")
         return self.account_snapshot
 
     def get_positions(self, account_id: UUID) -> tuple[BrokerPositionSnapshot, ...]:
@@ -125,6 +132,14 @@ def _external_snapshot(*, client_order_id: str = "external-client-order") -> Bro
         status=BrokerOrderStatus.ACCEPTED,
         order_type="market",
     )
+
+
+class RecordingTradeLedger:
+    def __init__(self) -> None:
+        self.fills: list[BrokerFillUpdateEvent] = []
+
+    def record_fill(self, event: BrokerFillUpdateEvent) -> None:
+        self.fills.append(event)
 
 
 def test_missing_local_order_flagged() -> None:
@@ -314,3 +329,170 @@ def test_unknown_order_intent_preserved_and_flagged() -> None:
     assert issue.client_order_id == "unknown-external-intent"
     assert issue.action == "preserve_external_order_and_flag"
     assert issue.actual == "unknown_intent"
+
+
+def test_alpaca_account_stream_adapter_normalizes_order_fill_position_and_account_updates() -> None:
+    adapter = AlpacaAccountStreamAdapter(account_id=ACCOUNT_ID)
+
+    order_events = adapter.normalize(
+        {
+            "event": "fill",
+            "price": "101.25",
+            "qty": "10",
+            "order": {
+                "id": "alpaca-order-1",
+                "client_order_id": "client-1",
+                "symbol": "SPY",
+                "side": "buy",
+                "status": "filled",
+                "filled_qty": "10",
+                "filled_avg_price": "101.25",
+            },
+        }
+    )
+    position_events = adapter.normalize({"symbol": "SPY", "qty": "10", "market_value": "1012.5", "avg_entry_price": "101.25"})
+    account_events = adapter.normalize({"buying_power": "90000", "cash": "90000", "equity": "100000"})
+
+    assert isinstance(order_events[0], BrokerOrderUpdateEvent)
+    assert isinstance(order_events[1], BrokerFillUpdateEvent)
+    assert isinstance(position_events[0], BrokerPositionSnapshot)
+    assert isinstance(account_events[0], BrokerAccountSnapshot)
+
+
+def test_streaming_order_update_updates_order_ledger_through_broker_sync() -> None:
+    manager, order = _manager_and_order()
+    service = BrokerSyncService(
+        adapter=ReconciliationAdapter(),
+        broker_sync=BrokerSync(ledger=manager.ledger),
+        order_ledger=manager.ledger,
+    )
+
+    updated = service.handle_order_update(
+        BrokerOrderUpdateEvent(
+            account_id=ACCOUNT_ID,
+            client_order_id=order.client_order_id,
+            status=BrokerOrderStatus.FILLED,
+            broker_order_id="broker-stream-1",
+            broker_status="filled",
+            filled_quantity=order.quantity,
+            filled_avg_price=100,
+            remaining_quantity=0,
+        )
+    )
+
+    assert updated.status == InternalOrderStatus.FILLED
+    assert manager.ledger.get(order.order_id).filled_quantity == order.quantity
+    assert service.current_sync_state(ACCOUNT_ID).is_stale is False
+
+
+def test_streaming_fill_update_updates_trade_ledger() -> None:
+    trade_ledger = RecordingTradeLedger()
+    service = BrokerSyncService(
+        adapter=ReconciliationAdapter(),
+        broker_sync=BrokerSync(ledger=OrderManager().ledger),
+        order_ledger=OrderManager().ledger,
+        trade_ledger=trade_ledger,
+    )
+    fill = BrokerFillUpdateEvent(
+        account_id=ACCOUNT_ID,
+        client_order_id="client-1",
+        symbol="SPY",
+        qty=5,
+        price=101,
+        side="buy",
+    )
+
+    service.handle_fill_update(fill)
+
+    assert service.fills() == (fill,)
+    assert trade_ledger.fills == [fill]
+
+
+def test_streaming_position_update_updates_snapshot() -> None:
+    service = BrokerSyncService(
+        adapter=ReconciliationAdapter(),
+        broker_sync=BrokerSync(ledger=OrderManager().ledger),
+        order_ledger=OrderManager().ledger,
+    )
+    position = BrokerPositionSnapshot(
+        account_id=ACCOUNT_ID,
+        symbol="SPY",
+        qty=10,
+        side=BrokerPositionSide.LONG,
+        avg_entry_price=100,
+        market_value=1000,
+    )
+
+    service.handle_position_update(position)
+
+    assert service.latest_positions(ACCOUNT_ID) == (position,)
+
+
+def test_streaming_account_update_updates_buying_power() -> None:
+    service = BrokerSyncService(
+        adapter=ReconciliationAdapter(),
+        broker_sync=BrokerSync(ledger=OrderManager().ledger),
+        order_ledger=OrderManager().ledger,
+    )
+    snapshot = BrokerAccountSnapshot(account_id=ACCOUNT_ID, buying_power=50_000, cash=25_000, equity=75_000)
+
+    service.handle_account_update(snapshot)
+
+    assert service.latest_account_snapshot(ACCOUNT_ID).buying_power == 50_000
+
+
+def test_stream_disconnect_triggers_fallback_poll() -> None:
+    manager = OrderManager()
+    service = BrokerSyncService(
+        adapter=ReconciliationAdapter(),
+        broker_sync=BrokerSync(ledger=manager.ledger),
+        order_ledger=manager.ledger,
+    )
+
+    report = service.handle_stream_disconnect(ACCOUNT_ID)
+
+    assert report is not None
+    assert service.current_sync_state(ACCOUNT_ID).is_stale is False
+    assert service.current_sync_state(ACCOUNT_ID).last_poll_sync_at is not None
+
+
+def test_stream_disconnect_poll_failure_marks_stale() -> None:
+    manager = OrderManager()
+    service = BrokerSyncService(
+        adapter=ReconciliationAdapter(fail_account_snapshot=True),
+        broker_sync=BrokerSync(ledger=manager.ledger),
+        order_ledger=manager.ledger,
+    )
+
+    report = service.handle_stream_disconnect(ACCOUNT_ID)
+
+    assert report is None
+    state = service.current_sync_state(ACCOUNT_ID)
+    assert state.is_stale is True
+    assert state.stale_reason == "stream_disconnect_poll_failed"
+
+
+def test_broker_sync_state_marks_stale_without_recent_event_or_poll() -> None:
+    manager = OrderManager()
+    service = BrokerSyncService(
+        adapter=ReconciliationAdapter(),
+        broker_sync=BrokerSync(ledger=manager.ledger),
+        order_ledger=manager.ledger,
+    )
+
+    state = service.current_sync_state(ACCOUNT_ID)
+
+    assert state.is_stale is True
+    assert state.stale_reason == "broker_truth_never_synced"
+
+
+def test_no_stream_adapter_direct_mutation_outside_broker_sync_service() -> None:
+    import inspect
+    import backend.app.brokers.stream as stream_module
+
+    source = inspect.getsource(stream_module.AlpacaAccountStreamAdapter)
+
+    assert "OrderLedger" not in source
+    assert "TradeLedger" not in source
+    assert "BrokerSyncService" not in source
+    assert "BrokerSync(" not in source

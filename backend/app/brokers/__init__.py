@@ -10,10 +10,12 @@ from .models import (
     BrokerAccountMode,
     BrokerAccountSnapshot,
     BrokerAdapterError,
+    BrokerFillUpdateEvent,
     BrokerOpenOrderSnapshot,
     BrokerOrderMapping,
     BrokerOrderResult,
     BrokerOrderStatus,
+    BrokerOrderUpdateEvent,
     BrokerPositionDelta,
     BrokerPositionSide,
     BrokerPositionSnapshot,
@@ -22,6 +24,7 @@ from .models import (
     BrokerReconciliationReport,
     BrokerSyncState,
 )
+from .stream import AlpacaAccountStreamAdapter, BrokerStreamEvent
 from .sync import BrokerSync, BrokerSyncService
 
 __all__ = [
@@ -33,10 +36,13 @@ __all__ = [
     "BrokerAccountSnapshot",
     "BrokerAdapter",
     "BrokerAdapterError",
+    "AlpacaAccountStreamAdapter",
+    "BrokerFillUpdateEvent",
     "BrokerOpenOrderSnapshot",
     "BrokerOrderMapping",
     "BrokerOrderResult",
     "BrokerOrderStatus",
+    "BrokerOrderUpdateEvent",
     "BrokerPositionDelta",
     "BrokerPositionSide",
     "BrokerPositionSnapshot",
@@ -46,5 +52,6 @@ __all__ = [
     "BrokerSync",
     "BrokerSyncService",
     "BrokerSyncState",
+    "BrokerStreamEvent",
     "FakeBrokerAdapter",
 ]

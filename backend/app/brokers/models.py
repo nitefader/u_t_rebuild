@@ -151,11 +151,49 @@ class BrokerOpenOrderSnapshot(BaseModel):
     timestamp: datetime = Field(default_factory=utc_now)
 
 
+class BrokerOrderUpdateEvent(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    account_id: UUID
+    client_order_id: str
+    status: BrokerOrderStatus
+    broker_order_id: str | None = None
+    broker_status: str | None = None
+    filled_quantity: float = Field(default=0, ge=0)
+    filled_avg_price: float | None = Field(default=None, ge=0)
+    remaining_quantity: float | None = Field(default=None, ge=0)
+    reason: str | None = None
+    event_at: datetime = Field(default_factory=utc_now)
+    submitted_at: datetime | None = None
+    updated_at: datetime | None = None
+    filled_at: datetime | None = None
+    canceled_at: datetime | None = None
+    reject_code: str | None = None
+    raw_status: str | None = None
+    broker_reference: str | None = None
+
+
+class BrokerFillUpdateEvent(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    account_id: UUID
+    client_order_id: str
+    symbol: str
+    qty: float = Field(gt=0)
+    price: float = Field(ge=0)
+    side: str
+    broker_order_id: str | None = None
+    broker_execution_id: str | None = None
+    event_at: datetime = Field(default_factory=utc_now)
+
+
 class BrokerSyncState(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     account_id: UUID
     last_sync_at: datetime
+    last_event_at: datetime | None = None
+    last_poll_sync_at: datetime | None = None
     last_successful_sync_at: datetime | None = None
     is_stale: bool
     stale_reason: str | None = None

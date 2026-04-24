@@ -4,7 +4,7 @@ from collections.abc import Mapping
 from typing import Protocol, runtime_checkable
 from uuid import UUID
 
-from backend.app.orders import InternalOrder
+from backend.app.orders.models import InternalOrder
 
 from .models import BrokerAccountSnapshot, BrokerOpenOrderSnapshot, BrokerOrderResult, BrokerPositionSnapshot
 

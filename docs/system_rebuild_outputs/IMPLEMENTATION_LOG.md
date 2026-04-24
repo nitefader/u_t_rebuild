@@ -1781,7 +1781,7 @@ Architecture confirmations:
 - PortfolioGovernor remains the final approval authority before order creation.
 - No duplicate responsibility was introduced.
 
-## 2026-04-24 - Order Lifecycle Completion
+## 2026-04-24 13:57 ET - Order Lifecycle Completion
 
 Added internal and broker-safe order lifecycle handling for cancel, scoped cancel, replace, and protective order preservation while keeping broker-derived status writes routed through BrokerSync.
 
@@ -1844,3 +1844,89 @@ Architecture confirmations:
 - ControlPlane remains the authority for kill/pause semantics.
 - No duplicate responsibility was introduced.
 - Protective order rules are enforced.
+
+## 2026-04-24 13:57 ET - Implementation Log Timestamp Format Update
+
+Updated the implementation log convention for all future entries.
+
+Files modified:
+
+- `docs/system_rebuild_outputs/IMPLEMENTATION_LOG.md`
+
+Scope implemented:
+
+- All new implementation, verification, closeout, blocker, and partial progress entries must use full Eastern Time timestamps.
+- Required heading format: `## YYYY-MM-DD HH:MM ET - [Task Name]`.
+- Date-only headings must not be used for future entries.
+- Timezone must not be omitted for future entries.
+
+Tests run:
+
+- Not run. Documentation-only format update.
+
+Issues fixed:
+
+- Updated the latest Order Lifecycle Completion heading from date-only to full ET timestamp.
+
+Architecture confirmations:
+
+- No application code was modified.
+- No core engines were modified.
+- No duplicate responsibility was introduced.
+
+## 2026-04-24 14:03 ET - Broker Streaming + Sync Freshness
+
+Files created:
+
+- `backend/app/brokers/stream.py`
+
+Files modified:
+
+- `backend/app/brokers/__init__.py`
+- `backend/app/brokers/adapter.py`
+- `backend/app/brokers/alpaca.py`
+- `backend/app/brokers/fake.py`
+- `backend/app/brokers/models.py`
+- `backend/app/brokers/sync.py`
+- `backend/tests/unit/brokers/test_broker_sync_reconciliation.py`
+- `docs/system_rebuild_outputs/IMPLEMENTATION_LOG.md`
+
+Scope implemented:
+
+- Added `AlpacaAccountStreamAdapter` to subscribe to Alpaca account stream channels and normalize order, fill, position, and account payloads into internal broker sync events.
+- Added broker stream event models for order and fill updates.
+- Extended `BrokerSyncState` with `last_event_at`, `last_poll_sync_at`, `last_successful_sync_at`, explicit `is_stale`, and `stale_reason`.
+- Extended `BrokerSyncService` with streaming ingestion methods for order, fill, position, and account updates.
+- Routed streaming order updates through `BrokerSync.apply_result`.
+- Added service-held latest account and position snapshots, fill capture, deterministic current freshness state, and stream-disconnect fallback polling.
+- Marked sync state stale when stream disconnect fallback polling fails.
+- Preserved the existing PortfolioGovernor stale broker sync gate and protective-exit allowance without changing governor decision logic.
+
+Tests run:
+
+- `python -m pytest backend/tests/unit/brokers -q`
+- `python -m pytest backend/tests/unit/governor -q`
+- `python -m pytest backend/tests/unit/pipeline -q`
+- `python -m pytest backend/tests -q`
+
+Test results:
+
+- Broker tests: `51 passed`
+- Governor tests: `14 passed`
+- Pipeline tests: `10 passed`
+- Full backend suite: `294 passed`
+
+Issues fixed:
+
+- Preserved stale broker snapshot detection during reconciliation so a poll call cannot make an old broker timestamp look fresh.
+- Broke a package import cycle by importing `InternalOrder` directly from `backend.app.orders.models` inside broker boundary modules.
+
+Architecture confirmations:
+
+- No core engines modified.
+- FeatureEngine, SignalEngine, StrategyControls, Risk logic, ExecutionStyle, OrderManager behavior, and execution pipeline behavior were not modified.
+- PortfolioGovernor decision logic was not changed; it only continues reading broker sync freshness.
+- BrokerAdapter remains policy-free and emits normalized events only.
+- BrokerSync remains sole writer for broker-derived order truth.
+- No BrokerSync bypass was introduced.
+- No duplicate responsibility was introduced.

@@ -10,7 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from backend.app.domain import CandidateSide, OrderType
 from backend.app.domain._base import utc_now
-from backend.app.orders import InternalOrder
+from backend.app.orders.models import InternalOrder
 
 from .models import (
     BrokerAccountMode,
@@ -79,7 +79,7 @@ class AlpacaBrokerCapabilities(BaseModel):
     supports_brackets: bool = False
     supports_fractional: bool = False
     supports_shorting: bool = False
-    supports_streaming_trade_updates: bool = False
+    supports_streaming_trade_updates: bool = True
     supports_paper: bool = True
     supports_live: bool = False
 

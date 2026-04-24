@@ -4,7 +4,7 @@ from collections import deque
 from collections.abc import Iterable, Mapping
 from uuid import UUID
 
-from backend.app.orders import InternalOrder
+from backend.app.orders.models import InternalOrder
 
 from .models import (
     BrokerAccountMode,

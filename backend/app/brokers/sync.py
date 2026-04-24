@@ -3,13 +3,16 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
-from backend.app.orders import InternalOrder, InternalOrderStatus, OrderLedger, OrderManagerError
+from backend.app.orders.ledger import OrderLedger
+from backend.app.orders.models import InternalOrder, InternalOrderStatus, OrderManagerError
 
 from .adapter import BrokerAdapter
 from .models import (
     BrokerAccountSnapshot,
     BrokerAdapterError,
+    BrokerFillUpdateEvent,
     BrokerOpenOrderSnapshot,
+    BrokerOrderUpdateEvent,
     BrokerOrderResult,
     BrokerOrderStatus,
     BrokerPositionDelta,
@@ -180,20 +183,77 @@ class BrokerSyncService:
         self._order_ledger = order_ledger
         self._trade_ledger = trade_ledger
         self._max_stale_seconds = max_stale_seconds
+        self._last_event_at_by_account: dict[UUID, datetime] = {}
+        self._last_poll_sync_at_by_account: dict[UUID, datetime] = {}
+        self._last_successful_sync_at_by_account: dict[UUID, datetime] = {}
+        self._stale_reason_by_account: dict[UUID, str] = {}
+        self._account_snapshots_by_account: dict[UUID, BrokerAccountSnapshot] = {}
+        self._positions_by_account: dict[UUID, dict[str, BrokerPositionSnapshot]] = {}
+        self._fills: list[BrokerFillUpdateEvent] = []
 
     def sync_state(self, account_snapshot: BrokerAccountSnapshot) -> BrokerSyncState:
         checked_at = datetime.now(timezone.utc)
         snapshot_timestamp = _aware(account_snapshot.timestamp)
-        age = checked_at - snapshot_timestamp
+        account_id = account_snapshot.account_id
+        last_event_at = self._last_event_at_by_account.get(account_id)
+        last_poll_sync_at = self._last_poll_sync_at_by_account.get(account_id)
+        last_successful_sync_at = self._last_successful_sync_at_by_account.get(account_id, snapshot_timestamp)
+        latest_truth_at = max(
+            (timestamp for timestamp in (last_event_at, last_poll_sync_at, snapshot_timestamp) if timestamp is not None),
+            default=snapshot_timestamp,
+        )
+        age = checked_at - _aware(latest_truth_at)
         is_stale = age > timedelta(seconds=self._max_stale_seconds)
+        stale_reason = None
+        if is_stale:
+            if self._stale_reason_by_account.get(account_id):
+                stale_reason = self._stale_reason_by_account[account_id]
+            elif latest_truth_at == snapshot_timestamp:
+                stale_reason = f"broker_snapshot_age_exceeded_{self._max_stale_seconds}s"
+            else:
+                stale_reason = f"broker_truth_age_exceeded_{self._max_stale_seconds}s"
         return BrokerSyncState(
-            account_id=account_snapshot.account_id,
+            account_id=account_id,
             last_sync_at=checked_at,
-            last_successful_sync_at=snapshot_timestamp,
+            last_event_at=last_event_at,
+            last_poll_sync_at=last_poll_sync_at,
+            last_successful_sync_at=last_successful_sync_at,
             is_stale=is_stale,
-            stale_reason=(
-                f"broker_snapshot_age_exceeded_{self._max_stale_seconds}s" if is_stale else None
-            ),
+            stale_reason=stale_reason,
+        )
+
+    def current_sync_state(self, account_id: UUID) -> BrokerSyncState:
+        checked_at = datetime.now(timezone.utc)
+        last_event_at = self._last_event_at_by_account.get(account_id)
+        last_poll_sync_at = self._last_poll_sync_at_by_account.get(account_id)
+        last_successful_sync_at = self._last_successful_sync_at_by_account.get(account_id)
+        latest_truth_at = max(
+            (timestamp for timestamp in (last_event_at, last_poll_sync_at) if timestamp is not None),
+            default=None,
+        )
+        if latest_truth_at is None:
+            return BrokerSyncState(
+                account_id=account_id,
+                last_sync_at=checked_at,
+                last_event_at=last_event_at,
+                last_poll_sync_at=last_poll_sync_at,
+                last_successful_sync_at=last_successful_sync_at,
+                is_stale=True,
+                stale_reason=self._stale_reason_by_account.get(account_id) or "broker_truth_never_synced",
+            )
+        age = checked_at - _aware(latest_truth_at)
+        is_stale = age > timedelta(seconds=self._max_stale_seconds)
+        stale_reason = None
+        if is_stale:
+            stale_reason = self._stale_reason_by_account.get(account_id) or f"broker_truth_age_exceeded_{self._max_stale_seconds}s"
+        return BrokerSyncState(
+            account_id=account_id,
+            last_sync_at=checked_at,
+            last_event_at=last_event_at,
+            last_poll_sync_at=last_poll_sync_at,
+            last_successful_sync_at=last_successful_sync_at,
+            is_stale=is_stale,
+            stale_reason=stale_reason,
         )
 
     def fetch_account_snapshot(self, account_id: UUID) -> BrokerAccountSnapshot:
@@ -205,16 +265,85 @@ class BrokerSyncService:
     def fetch_open_orders(self, account_id: UUID) -> tuple[BrokerOpenOrderSnapshot, ...]:
         return self._adapter.list_open_orders(account_id)
 
+    def latest_account_snapshot(self, account_id: UUID) -> BrokerAccountSnapshot | None:
+        return self._account_snapshots_by_account.get(account_id)
+
+    def latest_positions(self, account_id: UUID) -> tuple[BrokerPositionSnapshot, ...]:
+        return tuple(self._positions_by_account.get(account_id, {}).values())
+
+    def fills(self) -> tuple[BrokerFillUpdateEvent, ...]:
+        return tuple(self._fills)
+
+    def handle_order_update(self, event: BrokerOrderUpdateEvent) -> InternalOrder:
+        order = self._order_by_client_order_id(event.account_id, event.client_order_id)
+        result = BrokerOrderResult(
+            order_id=order.order_id,
+            client_order_id=event.client_order_id,
+            status=event.status,
+            broker_order_id=event.broker_order_id,
+            broker_status=event.broker_status,
+            filled_quantity=event.filled_quantity,
+            filled_avg_price=event.filled_avg_price,
+            remaining_quantity=event.remaining_quantity,
+            reason=event.reason,
+            received_at=event.event_at,
+            submitted_at=event.submitted_at,
+            updated_at=event.updated_at,
+            filled_at=event.filled_at,
+            canceled_at=event.canceled_at,
+            reject_code=event.reject_code,
+            raw_status=event.raw_status,
+            broker_reference=event.broker_reference,
+        )
+        updated = self._broker_sync.apply_result(result)
+        self._record_stream_event(event.account_id, event.event_at)
+        return updated
+
+    def handle_fill_update(self, event: BrokerFillUpdateEvent) -> BrokerFillUpdateEvent:
+        self._fills.append(event)
+        if self._trade_ledger is not None:
+            if hasattr(self._trade_ledger, "record_fill"):
+                self._trade_ledger.record_fill(event)
+            elif hasattr(self._trade_ledger, "add"):
+                self._trade_ledger.add(event)
+        self._record_stream_event(event.account_id, event.event_at)
+        return event
+
+    def handle_position_update(self, event: BrokerPositionSnapshot) -> BrokerPositionSnapshot:
+        positions = self._positions_by_account.setdefault(event.account_id, {})
+        positions[event.symbol.upper()] = event
+        self._record_stream_event(event.account_id, event.timestamp)
+        return event
+
+    def handle_account_update(self, event: BrokerAccountSnapshot) -> BrokerAccountSnapshot:
+        self._account_snapshots_by_account[event.account_id] = event
+        self._record_stream_event(event.account_id, event.timestamp)
+        return event
+
+    def handle_stream_disconnect(self, account_id: UUID) -> BrokerReconciliationReport | None:
+        try:
+            return self.reconcile(account_id)
+        except Exception:
+            self._stale_reason_by_account[account_id] = "stream_disconnect_poll_failed"
+            return None
+
     def reconcile(
         self,
         account_id: UUID,
         *,
         expected_positions_by_symbol: dict[str, float] | None = None,
     ) -> BrokerReconciliationReport:
+        checked_at = datetime.now(timezone.utc)
         account_snapshot = self.fetch_account_snapshot(account_id)
         positions = self.fetch_positions(account_id)
         open_orders = self.fetch_open_orders(account_id)
+        self._account_snapshots_by_account[account_id] = account_snapshot
+        self._positions_by_account[account_id] = {position.symbol.upper(): position for position in positions}
         sync_status = self.sync_state(account_snapshot)
+        self._last_poll_sync_at_by_account[account_id] = checked_at
+        if not sync_status.is_stale:
+            self._last_successful_sync_at_by_account[account_id] = checked_at
+            self._stale_reason_by_account.pop(account_id, None)
         issues: list[BrokerReconciliationIssue] = []
         matched_orders: list[str] = []
         unmatched_internal_orders: list[str] = []
@@ -338,6 +467,18 @@ class BrokerSyncService:
             position_deltas=tuple(position_deltas),
             sync_status=sync_status,
         )
+
+    def _record_stream_event(self, account_id: UUID, event_at: datetime) -> None:
+        aware_event_at = _aware(event_at)
+        self._last_event_at_by_account[account_id] = aware_event_at
+        self._last_successful_sync_at_by_account[account_id] = aware_event_at
+        self._stale_reason_by_account.pop(account_id, None)
+
+    def _order_by_client_order_id(self, account_id: UUID, client_order_id: str) -> InternalOrder:
+        for order in self._order_ledger.by_account(account_id):
+            if order.client_order_id == client_order_id:
+                return order
+        raise OrderManagerError(f"unknown internal order client_order_id: {client_order_id}")
 
     def _position_deltas(
         self,
