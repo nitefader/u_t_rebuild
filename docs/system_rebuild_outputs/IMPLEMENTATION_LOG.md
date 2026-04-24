@@ -2475,3 +2475,61 @@ Architecture confirmations:
 - OrderManager remains the only creator of InternalOrder.
 - PortfolioGovernor approval remains required before runtime open submission.
 - No duplicate Alpaca submission occurs when the deterministic client order id already exists at the broker.
+
+## 2026-04-24 16:06 ET - Operations Center Backend Runtime Visibility and Control Contract
+
+Files created:
+
+- `backend/app/operations/__init__.py`
+- `backend/app/operations/models.py`
+- `backend/app/operations/service.py`
+- `backend/tests/unit/operations/test_operations_center_service.py`
+
+Implementation:
+
+- Added `OperationsCenterService` as the backend-only Operations Center contract for Broker Runtime - Paper visibility and control.
+- Runtime overview surfaces system recovery, global kill state, broker account summaries, deployment summaries, stale sync accounts, blocked recovery deployments, open internal order count, open broker position count, latest governor decisions, latest broker sync timestamp, and latest runtime event timestamp.
+- Account operations surfaces BrokerSync-owned account snapshot, sync freshness, open broker order snapshots, internal order ledger summary, BrokerSync positions, account deployments, and account pause/kill state.
+- Deployment operations surfaces runtime status, program id/version, broker account id, governor id/state, market-data/sync/decision timestamps, open internal orders, trades/fills, latest pipeline events, and latest governor decisions.
+- Pause/resume and global kill/resume methods delegate only to `ControlPlane`.
+- Flatten request methods expose a backend contract and return explicit `unsupported_not_ready` when `ControlPlane` has no flatten implementation.
+
+State surfaced:
+
+- ControlPlane snapshot
+- Broker account snapshots
+- Broker sync freshness
+- Broker open order snapshots
+- BrokerSync read-only positions/fills
+- Internal order ledger summaries
+- Deployment runtime states, including `blocked_recovery` and `recovered_ready`
+- Runtime/pipeline event timestamps
+- PortfolioGovernor policy and latest decisions
+
+Control delegation model:
+
+- `OperationsCenterService` does not implement policy.
+- `ControlPlane` remains the only authority for kill, pause, resume, and future flatten behavior.
+- Flatten is delegated if the control-plane contract exists; otherwise it returns not-ready without broker calls.
+
+Scope kept out:
+
+- No frontend.
+- No new trading logic.
+- No FeatureEngine or SignalEngine changes.
+- No Sim Lab or Chart Lab changes.
+- No direct Alpaca or broker adapter calls from Operations Center.
+- No order creation from Operations Center.
+- No mutation of broker truth from Operations Center.
+
+Tests run:
+
+- `python -m compileall -q backend/app backend/tests`
+- `python -m pytest backend/tests/unit/operations -q`
+- `python -m pytest backend/tests -q`
+
+Test results:
+
+- Compile: passed
+- Operations Center tests: `8 passed`
+- Full backend suite: `359 passed`
