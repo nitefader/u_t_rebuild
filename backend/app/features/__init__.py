@@ -1,0 +1,41 @@
+"""Canonical feature identity and registry contracts."""
+
+from .batch import BatchFeatureEngine, BatchFeatureEngineError, UnsupportedBatchFeatureError
+from .frames import FeatureAvailability, FeatureFrame, FeatureFrameSet, FeatureSnapshot, FeatureValue, NormalizedBar
+from .key import canonical_params_json, canonicalize_params, make_feature_key
+from .parser import FeatureParseError, parse_feature_expression, parse_params
+from .planner import FeaturePlan, FeaturePlanError, ResolvedProgramComponents, build_feature_plan, collect_feature_refs
+from .registry import FEATURE_REGISTRY, FeatureRegistry, FeatureRegistryEntry, registry
+from .spec import CANONICAL_TIMEFRAMES, FeatureNamespace, FeatureScope, FeatureSpec, FeatureValidationError
+
+__all__ = [
+    "CANONICAL_TIMEFRAMES",
+    "FEATURE_REGISTRY",
+    "BatchFeatureEngine",
+    "BatchFeatureEngineError",
+    "FeatureAvailability",
+    "FeatureFrame",
+    "FeatureFrameSet",
+    "FeatureNamespace",
+    "FeatureParseError",
+    "FeaturePlan",
+    "FeaturePlanError",
+    "FeatureRegistry",
+    "FeatureRegistryEntry",
+    "FeatureScope",
+    "FeatureSnapshot",
+    "FeatureSpec",
+    "FeatureValidationError",
+    "FeatureValue",
+    "NormalizedBar",
+    "ResolvedProgramComponents",
+    "UnsupportedBatchFeatureError",
+    "build_feature_plan",
+    "canonical_params_json",
+    "canonicalize_params",
+    "collect_feature_refs",
+    "make_feature_key",
+    "parse_feature_expression",
+    "parse_params",
+    "registry",
+]

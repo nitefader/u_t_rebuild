@@ -39,3 +39,371 @@ Blocked validation:
 
 - `python -m pytest backend\tests\unit\domain\test_domain_boundaries.py` could not run in the current environment because `pytest` is not installed.
 - A direct dependency check also showed `pydantic` is not installed in the current Python environment.
+
+## 2026-04-24 - Task 2 FeatureSpec / FeatureKey / FeatureRegistry v1
+
+Implemented the feature identity and initial registry foundation from `docs/system_rebuild_outputs/09_engineering_task_breakdown.md`, including the user-requested registry v1 scope.
+
+Created:
+
+- `backend/app/features/__init__.py`
+- `backend/app/features/spec.py`
+- `backend/app/features/key.py`
+- `backend/app/features/registry.py`
+- `backend/tests/unit/features/test_feature_spec.py`
+- `backend/tests/unit/features/test_feature_key.py`
+- `backend/tests/unit/features/test_feature_registry.py`
+
+Implemented:
+
+- Immutable `FeatureSpec`
+- Canonical timeframe validation
+- Rejection of aliases such as `60m`
+- Deterministic `FeatureKey`
+- Canonical parameter ordering
+- Integer/float equivalence for params such as `14` and `14.0`
+- `FeatureRegistry` v1 with only approved initial features
+- Unsupported feature rejection
+- Unsupported parameter rejection
+- Registry metadata catalog export
+
+Scope kept out:
+
+- No FeaturePlanner
+- No FeatureEngine
+- No API routes
+- No frontend
+- No Alpaca
+- No database models or migrations
+
+Validation performed:
+
+- `python -m compileall backend\app\features backend\tests\unit\features`
+- `python -m pytest backend\tests\unit\features`
+
+Result:
+
+- `50 passed`
+
+## 2026-04-24 - Feature Identity Regression Tests
+
+Added focused unit tests for the required feature identity contracts.
+
+Created:
+
+- `backend/tests/unit/features/test_feature_identity_contract.py`
+
+Coverage added:
+
+- FeatureKey determinism
+- Invalid feature rejection
+- Timeframe alias rejection for values like `60m`, `5min`, `day`, and `1D`
+
+Validation performed:
+
+- `python -m compileall backend\app\features backend\tests\unit\features`
+- `python -m pytest backend\tests\unit\features`
+
+Result:
+
+- `56 passed`
+
+## 2026-04-24 - Feature Expression Parser
+
+Implemented canonical feature expression parsing into registry-validated `FeatureSpec` objects.
+
+Created:
+
+- `backend/app/features/parser.py`
+- `backend/tests/unit/features/test_feature_parser.py`
+
+Updated:
+
+- `backend/app/features/__init__.py`
+
+Implemented:
+
+- Parsing for `5m.close[0]`
+- Parsing for `5m.close[1]`
+- Parsing for `1d.high[0]`
+- Parsing for `5m.close` as equivalent to `5m.close[0]`
+- Parsing for `5m.ema:length=20[0]`
+- Parsing for `15m.opening_range_high:session=regular,window_minutes=15`
+- Param parsing for strings, ints, floats, and booleans
+- Strict canonical syntax rejection
+- Unsupported feature rejection through the registry
+- Invalid param rejection through the registry
+- Invalid timeframe and alias rejection
+
+Scope kept out:
+
+- No FeaturePlanner
+- No FeatureEngine
+- No API routes
+- No frontend
+- No Alpaca
+- No computation
+
+Validation performed:
+
+- `python -m compileall backend\app\features backend\tests\unit\features`
+- `python -m pytest backend\tests\unit\features`
+
+Result:
+
+- `82 passed`
+
+## 2026-04-24 - FeaturePlanner Contract
+
+Implemented backend-only FeaturePlanner contract for resolved `ProgramVersion` components.
+
+Created:
+
+- `backend/app/features/planner.py`
+- `backend/tests/unit/features/test_feature_planner.py`
+
+Updated:
+
+- `backend/app/features/__init__.py`
+- `backend/app/domain/strategy_controls.py`
+- `backend/app/domain/risk_profile.py`
+- `backend/app/domain/execution_style.py`
+
+Implemented:
+
+- `ResolvedProgramComponents` wrapper around reference-only `ProgramVersion`
+- Component reference validation against `ProgramVersion`
+- Feature collection from Strategy, Strategy Controls, Risk Profile, and Execution Style
+- Condition tree feature extraction from Strategy rules
+- Feature parsing into `FeatureSpec`
+- Registry validation for all feature refs
+- Consumer support validation
+- Deduplication by `FeatureKey`
+- Symbol extraction from `UniverseSnapshot`
+- Multi-timeframe extraction
+- Warmup bars by timeframe
+- All-or-nothing failure via `FeaturePlanError`
+
+Scope kept out:
+
+- No FeatureEngine
+- No computation
+- No API routes
+- No frontend
+- No Alpaca
+- No database models or migrations
+
+Validation performed:
+
+- `python -m compileall backend\app\domain backend\app\features backend\tests\unit\features`
+- `python -m pytest backend\tests\unit\features backend\tests\unit\domain`
+
+Result:
+
+- `119 passed`
+
+## 2026-04-24 - Batch Feature Engine Skeleton
+
+Implemented backend-only batch/replay Feature Engine skeleton.
+
+Created:
+
+- `backend/app/features/frames.py`
+- `backend/app/features/batch.py`
+- `backend/tests/unit/features/test_batch_feature_engine.py`
+
+Updated:
+
+- `backend/app/features/__init__.py`
+
+Implemented:
+
+- `NormalizedBar`
+- `FeatureValue`
+- `FeatureSnapshot`
+- `FeatureFrame`
+- `FeatureFrameSet`
+- `BatchFeatureEngine`
+- Batch passthrough computation for `open`, `high`, `low`, `close`, `volume`
+- Batch `sma`
+- Batch deterministic recursive `ema`
+- Batch `highest`
+- Batch `lowest`
+- Warmup availability marking
+- Lookback-safe indexing
+- Unsupported batch feature failure for registry features not implemented in this skeleton
+
+Scope kept out:
+
+- No streaming
+- No Alpaca
+- No API routes
+- No frontend
+- No unsupported indicators
+- No planner changes
+- No database models or migrations
+
+Validation performed:
+
+- `python -m compileall backend\app\features backend\tests\unit\features`
+- `python -m pytest backend\tests\unit\features`
+
+Result:
+
+- `94 passed`
+
+## 2026-04-24 - Signal Engine Skeleton
+
+Implemented deterministic Signal Engine skeleton.
+
+Created:
+
+- `backend/app/decision/__init__.py`
+- `backend/app/decision/signal_engine.py`
+- `backend/tests/unit/decision/test_signal_engine.py`
+
+Updated:
+
+- `backend/app/domain/strategy.py`
+- `backend/app/domain/__init__.py`
+
+Implemented:
+
+- `SignalEngine`
+- `SignalEvaluation`
+- `SignalEvaluationError`
+- Snapshot-only condition evaluation
+- `greater_than`
+- `less_than`
+- `crosses_above`
+- `crosses_below`
+- `and` / `or` condition groups
+- Candidate intent emission
+- No-intent false-condition result
+- Diagnostics with feature values
+- Missing/unavailable feature rejection
+
+Scope kept out:
+
+- No feature computation
+- No risk sizing
+- No execution style handling
+- No broker integration
+- No API routes
+- No frontend
+- No Alpaca
+
+Validation performed:
+
+- `python -m compileall backend\app\decision backend\app\domain backend\tests\unit\decision`
+- `python -m pytest backend\tests\unit\decision backend\tests\unit\features backend\tests\unit\domain`
+
+Result:
+
+- `132 passed`
+
+## 2026-04-24 - Chart Lab Backend Preview Contract
+
+Implemented backend-only Chart Lab preview service contract.
+
+Created:
+
+- `backend/app/chart_lab/__init__.py`
+- `backend/app/chart_lab/preview_service.py`
+- `backend/tests/unit/chart_lab/test_chart_lab_preview_service.py`
+
+Implemented:
+
+- `ChartLabPreviewService`
+- `ChartLabPreviewResponse`
+- `ChartLabBarPreview`
+- `ChartLabFeatureValue`
+- `ChartLabSignalMarker`
+- Program preview flow using `FeaturePlanner`
+- Batch Feature Engine invocation for feature snapshots
+- Higher-timeframe snapshot alignment into base timeframe previews
+- Signal Engine evaluation from aligned `FeatureSnapshot`
+- Condition truth diagnostics passthrough
+- Non-fire reasons
+- Signal markers
+- Feature value exposure with source timeframe and source timestamp
+
+Scope kept out:
+
+- No API routes
+- No frontend
+- No fills
+- No orders
+- No positions
+- No PnL
+- No broker integration
+- No Alpaca
+- No feature computation outside `BatchFeatureEngine`
+
+Validation performed:
+
+- `python -m compileall backend\app\chart_lab backend\tests\unit\chart_lab`
+- `python -m pytest backend\tests\unit\chart_lab backend\tests\unit\decision backend\tests\unit\features backend\tests\unit\domain`
+
+Result:
+
+- `138 passed`
+
+## 2026-04-24 - Sim Lab Historical Replay Engine
+
+Implemented backend-only deterministic Sim Lab historical replay.
+
+Created:
+
+- `backend/app/simulation/__init__.py`
+- `backend/app/simulation/models.py`
+- `backend/app/simulation/historical_replay.py`
+- `backend/tests/unit/simulation/test_historical_replay_engine.py`
+
+Updated:
+
+- `backend/app/simulation/engine.py`
+
+Implemented:
+
+- `SimulationReplayResult`
+- simulated order lifecycle models
+- simulated fills
+- simulated position ledger
+- simulated trade ledger
+- simulated event log
+- deterministic `HistoricalReplayEngine`
+- integration with `FeaturePlanner`
+- integration with `BatchFeatureEngine`
+- integration with `SignalEngine`
+- fixed-share, fixed-dollar, and risk-percent sizing paths
+- market open order creation
+- deterministic fill handling
+- deterministic partial-fill handling
+- protective stop orders
+- protective target orders
+- trailing stop updates
+- realized PnL
+- unrealized PnL
+- equity curve
+- max drawdown
+- gross exposure
+
+Scope kept out:
+
+- No Alpaca
+- No streaming
+- No external services
+- No API routes
+- No frontend
+- No database models or migrations
+- No feature computation outside `BatchFeatureEngine`
+
+Validation performed:
+
+- `python -m compileall -q backend\app\simulation backend\tests\unit\simulation`
+- `python -m pytest backend\tests\unit\simulation backend\tests\unit\chart_lab backend\tests\unit\decision backend\tests\unit\features backend\tests\unit\domain -q`
+
+Result:
+
+- `146 passed`
