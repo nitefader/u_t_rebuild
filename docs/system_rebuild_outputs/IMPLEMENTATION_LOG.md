@@ -572,3 +572,55 @@ Result:
 
 - Order tests: `8 passed`
 - Targeted backend unit slice: `166 passed`
+
+## 2026-04-24 - Broker Adapter Boundary
+
+Implemented broker adapter boundary and fake broker adapter foundation.
+
+Created:
+
+- `backend/app/brokers/__init__.py`
+- `backend/app/brokers/adapter.py`
+- `backend/app/brokers/models.py`
+- `backend/app/brokers/fake.py`
+- `backend/app/brokers/sync.py`
+- `backend/tests/unit/brokers/test_broker_adapter_boundary.py`
+
+Updated:
+
+- `backend/app/orders/models.py`
+
+Implemented:
+
+- `BrokerAdapter` protocol
+- `BrokerOrderResult`
+- `BrokerOrderStatus`
+- `BrokerAdapterError`
+- `FakeBrokerAdapter`
+- `BrokerSync`
+- adapter boundary that receives already-created `InternalOrder` objects only
+- fake accepted/rejected/partial-fill/filled outcomes
+- ledger status updates from broker results
+- internal filled quantity updates
+- broker result client-order-id validation
+- attribution preservation through broker sync
+
+Scope kept out:
+
+- No real Alpaca calls
+- No broker API client
+- No API routes
+- No frontend
+- No database models or migrations
+- No order creation inside broker adapter
+
+Validation performed:
+
+- `python -m pytest backend\tests\unit\brokers -q`
+- `python -m pytest backend\tests\unit\brokers backend\tests\unit\orders backend\tests\unit\runtime backend\tests\unit\simulation backend\tests\unit\chart_lab backend\tests\unit\decision backend\tests\unit\features backend\tests\unit\domain -q`
+- `python -m compileall -q backend\app\brokers backend\tests\unit\brokers backend\app\orders backend\tests\unit\orders`
+
+Result:
+
+- Broker tests: `8 passed`
+- Targeted backend unit slice: `174 passed`

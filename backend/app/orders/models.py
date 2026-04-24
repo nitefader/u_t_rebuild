@@ -45,6 +45,7 @@ class InternalOrder(BaseModel):
     symbol: str
     side: CandidateSide
     quantity: float = Field(gt=0)
+    filled_quantity: float = Field(default=0, ge=0)
     order_type: OrderType
     time_in_force: TimeInForce
     intent: InternalOrderIntent
@@ -53,6 +54,12 @@ class InternalOrder(BaseModel):
     updated_at: datetime
     signal_name: str | None = None
     reason: str | None = None
+
+    @model_validator(mode="after")
+    def validate_filled_quantity(self) -> "InternalOrder":
+        if self.filled_quantity > self.quantity:
+            raise ValueError("filled_quantity cannot exceed quantity")
+        return self
 
     @model_validator(mode="before")
     @classmethod
