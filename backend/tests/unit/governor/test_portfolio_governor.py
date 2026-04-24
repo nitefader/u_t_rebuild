@@ -10,6 +10,7 @@ from backend.app.governor import (
     BrokerSyncFreshness,
     GovernorPolicy,
     GovernorRequest,
+    PendingOpenSummary,
     PortfolioGovernor,
     PortfolioSnapshot,
     PositionSummary,
@@ -55,6 +56,8 @@ def _request(
     broker_sync: BrokerSyncFreshness | None = None,
     portfolio: PortfolioSnapshot | None = None,
     order_intent: InternalOrderIntent | None = None,
+    candidate_market_value: float = 0,
+    candidate_open_risk: float = 0,
 ) -> GovernorRequest:
     execution_intent = intent or _intent()
     return GovernorRequest(
@@ -64,6 +67,8 @@ def _request(
         broker_sync=broker_sync or BrokerSyncFreshness(),
         portfolio=portfolio or PortfolioSnapshot(),
         order_intent=order_intent,
+        candidate_market_value=candidate_market_value,
+        candidate_open_risk=candidate_open_risk,
     )
 
 
@@ -159,6 +164,82 @@ def test_max_positions_rejects() -> None:
     assert decision.rule_id == "max_open_positions"
 
 
+def test_projected_exposure_rejection() -> None:
+    portfolio = PortfolioSnapshot(equity=10_000)
+    governor = PortfolioGovernor(GovernorPolicy(max_gross_exposure_pct=50))
+
+    decision = governor.evaluate(_request(portfolio=portfolio, candidate_market_value=6_000))
+
+    assert decision.approved is False
+    assert decision.reason == "projected_gross_exposure_exceeded"
+    assert decision.rule_id == "max_gross_exposure_pct"
+    assert decision.projected_state is not None
+    assert decision.projected_state["gross_exposure_pct"] == 60
+
+
+def test_symbol_concentration_rejection() -> None:
+    portfolio = PortfolioSnapshot(
+        equity=10_000,
+        positions=(
+            PositionSummary(
+                account_id=ACCOUNT_ID,
+                deployment_id=DEPLOYMENT_ID,
+                program_id=PROGRAM_ID,
+                symbol="QQQ",
+                quantity=10,
+                market_value=4_000,
+            ),
+        ),
+    )
+    governor = PortfolioGovernor(GovernorPolicy(max_symbol_concentration_pct=40))
+
+    decision = governor.evaluate(_request(portfolio=portfolio, candidate_market_value=6_000))
+
+    assert decision.approved is False
+    assert decision.reason == "symbol_concentration_exceeded"
+    assert decision.rule_id == "max_symbol_concentration_pct"
+    assert decision.projected_state is not None
+    assert decision.projected_state["symbol_concentration_pct"] == 60
+
+
+def test_open_risk_rejection() -> None:
+    portfolio = PortfolioSnapshot(
+        equity=10_000,
+        positions=(
+            PositionSummary(
+                account_id=ACCOUNT_ID,
+                deployment_id=DEPLOYMENT_ID,
+                program_id=PROGRAM_ID,
+                symbol="QQQ",
+                quantity=10,
+                market_value=2_000,
+                open_risk=200,
+            ),
+        ),
+        pending_opens=(
+            PendingOpenSummary(
+                account_id=ACCOUNT_ID,
+                deployment_id=DEPLOYMENT_ID,
+                program_id=PROGRAM_ID,
+                symbol="IWM",
+                quantity=10,
+                market_value=1_000,
+                open_risk=100,
+            ),
+        ),
+    )
+    governor = PortfolioGovernor(GovernorPolicy(max_open_risk_pct=4))
+
+    decision = governor.evaluate(_request(portfolio=portfolio, candidate_open_risk=200))
+
+    assert decision.approved is False
+    assert decision.reason == "open_risk_exceeded"
+    assert decision.rule_id == "max_open_risk_pct"
+    assert decision.projected_state is not None
+    assert decision.projected_state["open_risk_pct"] == 5
+    assert decision.projected_state["pending_open_risk_pct"] == 3
+
+
 def test_rejected_intent_never_creates_order() -> None:
     manager = OrderManager()
     decision = PortfolioGovernor(GovernorPolicy(global_kill_active=True)).evaluate(_request())
@@ -170,8 +251,9 @@ def test_rejected_intent_never_creates_order() -> None:
     assert manager.ledger.all() == ()
 
 
-def test_symbol_concentration_placeholder_returns_projected_state() -> None:
+def test_symbol_concentration_projected_state() -> None:
     portfolio = PortfolioSnapshot(
+        equity=10_000,
         positions=(
             PositionSummary(
                 account_id=ACCOUNT_ID,
@@ -183,10 +265,50 @@ def test_symbol_concentration_placeholder_returns_projected_state() -> None:
             ),
         )
     )
-    governor = PortfolioGovernor(GovernorPolicy(max_symbol_concentration_pct=50))
+    governor = PortfolioGovernor(GovernorPolicy(max_symbol_concentration_pct=100))
 
-    decision = governor.evaluate(_request(portfolio=portfolio))
+    decision = governor.evaluate(_request(portfolio=portfolio, candidate_market_value=1_000))
 
     assert decision.approved is True
     assert decision.projected_state is not None
-    assert decision.projected_state["symbol_concentration_rule"] == "placeholder_only_v1"
+    assert decision.projected_state["symbol_concentration_pct"] == 100
+
+
+def test_protective_exit_allowed_under_all_conditions() -> None:
+    portfolio = PortfolioSnapshot(equity=10_000)
+    governor = PortfolioGovernor(
+        GovernorPolicy(
+            global_kill_active=True,
+            paused_account_ids=frozenset({ACCOUNT_ID}),
+            paused_deployment_ids=frozenset({DEPLOYMENT_ID}),
+            max_gross_exposure_pct=1,
+            max_net_exposure_pct=1,
+            max_symbol_concentration_pct=1,
+            max_open_risk_pct=1,
+        )
+    )
+
+    decision = governor.evaluate(
+        _request(
+            intent=_intent(intent_type=IntentType.EXIT),
+            broker_sync=BrokerSyncFreshness(is_stale=True, reason="timeout"),
+            portfolio=portfolio,
+            order_intent=InternalOrderIntent.STOP_LOSS,
+            candidate_market_value=100_000,
+            candidate_open_risk=100_000,
+        )
+    )
+
+    assert decision.approved is True
+    assert decision.reason == "protective_exit_allowed"
+    assert decision.projected_state is not None
+    assert decision.projected_state["broker_sync_stale"] is True
+
+
+def test_governor_has_no_feature_engine_or_broker_adapter_dependency() -> None:
+    import backend.app.governor.service as governor_service
+
+    source_names = governor_service.PortfolioGovernor.evaluate.__globals__
+
+    assert "FeatureEngine" not in source_names
+    assert "BrokerAdapter" not in source_names

@@ -1694,3 +1694,50 @@ Architecture confirmations:
 - BrokerSyncService writes broker-derived order truth through BrokerSync.
 - No execution behavior was changed.
 - No duplicate responsibility was introduced.
+
+## 2026-04-24 - Portfolio Governor Feature Admissibility
+
+Implemented projected-state portfolio admissibility inside `PortfolioGovernor` using broker-truth portfolio snapshots and explicit candidate impact inputs.
+
+Files created:
+
+- None.
+
+Files modified:
+
+- `backend/app/governor/models.py`
+- `backend/app/governor/service.py`
+- `backend/app/governor/__init__.py`
+- `backend/tests/unit/governor/test_portfolio_governor.py`
+- `docs/system_rebuild_outputs/IMPLEMENTATION_LOG.md`
+
+Scope implemented:
+
+- Added read-only portfolio state inputs for equity, current positions, pending opens, current open risk, and pending open risk.
+- Added projected portfolio feature outputs: `gross_exposure_pct`, `net_exposure_pct`, `open_risk_pct`, `pending_open_risk_pct`, `symbol_concentration_pct`, `new_open_slots_remaining`, and `broker_sync_stale`.
+- Added deterministic projected-state gates for gross exposure, net exposure, symbol concentration, open risk, max open slots, and stale broker sync.
+- Preserved protective exit approval ahead of kill, pause, stale-sync, exposure, concentration, and open-risk blocks.
+- Kept broker truth as a read-only governor input; no broker mutation or order mutation was introduced.
+
+Tests run:
+
+- `python -m pytest backend/tests/unit/governor -q`
+- `python -m pytest backend/tests -q`
+
+Test results:
+
+- Governor tests: `14 passed`
+- Full backend suite: `275 passed`
+
+Issues fixed:
+
+- Replaced the prior symbol-concentration placeholder with deterministic projected concentration enforcement.
+- Added focused coverage for projected exposure rejection, symbol concentration rejection, open risk rejection, stale broker sync rejection, protective exit allowance, and boundary dependency checks.
+
+Architecture confirmations:
+
+- No core engines were modified.
+- FeatureEngine, SignalEngine, StrategyControls, Risk logic, ExecutionStyle, OrderManager behavior, and execution pipeline behavior were not changed.
+- PortfolioGovernor remains the final approval authority before order creation.
+- BrokerAdapter remains policy-free and is not read by PortfolioGovernor.
+- No duplicate responsibility was introduced.

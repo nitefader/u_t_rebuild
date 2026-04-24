@@ -5,6 +5,7 @@ from .models import (
     GovernorDecision,
     GovernorPolicy,
     GovernorRequest,
+    PendingOpenSummary,
     PortfolioSnapshot,
     PositionSummary,
 )
@@ -15,6 +16,7 @@ __all__ = [
     "GovernorDecision",
     "GovernorPolicy",
     "GovernorRequest",
+    "PendingOpenSummary",
     "PortfolioGovernor",
     "PortfolioSnapshot",
     "PositionSummary",
