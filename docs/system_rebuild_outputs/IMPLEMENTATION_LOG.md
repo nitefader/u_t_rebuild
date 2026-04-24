@@ -2603,3 +2603,71 @@ Test results:
 - Compile: passed
 - Operations API route tests: `10 passed`
 - Full backend suite: `369 passed`
+
+## 2026-04-24 16:20 ET - Operations Center UI
+
+Files created:
+
+- `package.json`
+- `frontend/index.html`
+- `frontend/src/api/operations.js`
+- `frontend/src/operationsCenter.js`
+- `frontend/src/main.js`
+- `frontend/src/styles.css`
+- `frontend/scripts/check-frontend.mjs`
+- `frontend/tests/operationsCenter.test.mjs`
+
+Implementation:
+
+- Added a dependency-free frontend Operations Center page and menu entry for runtime visibility and operator controls.
+- Added Operations API client functions for overview, account detail, deployment detail, account pause/resume, deployment pause/resume, global kill/resume, and account/deployment flatten requests.
+- Added overview UI for global recovery state, global kill state, broker account summaries, stale broker sync warnings, active deployments, blocked recovery deployments, recovered-ready deployments, open orders, open positions, latest broker sync timestamp, latest runtime event timestamp, and latest governor decisions.
+- Added account and deployment detail panels sourced only from Operations API detail routes.
+- Added destructive-control confirmation for global kill and flatten requests.
+- Added operator-readable API error rendering that does not imply safety while state is unavailable.
+- Added loading and empty states that keep controls unavailable or clearly state when no runtime objects are reported.
+
+API routes consumed:
+
+- `GET /api/v1/operations/overview`
+- `GET /api/v1/operations/accounts/{account_id}`
+- `GET /api/v1/operations/deployments/{deployment_id}`
+- `POST /api/v1/operations/deployments/{deployment_id}/pause`
+- `POST /api/v1/operations/deployments/{deployment_id}/resume`
+- `POST /api/v1/operations/accounts/{account_id}/pause`
+- `POST /api/v1/operations/accounts/{account_id}/resume`
+- `POST /api/v1/operations/global/kill`
+- `POST /api/v1/operations/global/resume`
+- `POST /api/v1/operations/accounts/{account_id}/flatten`
+- `POST /api/v1/operations/deployments/{deployment_id}/flatten`
+
+Safety states displayed:
+
+- `system_recovery_active`
+- `global_kill_active`
+- stale broker sync state and stale reason
+- `blocked_recovery` as blocked and visually urgent
+- `recovered_ready` as ready but explicitly not running
+- flatten `unsupported_not_ready` responses as warning/not-ready operator feedback
+
+Controls implemented:
+
+- Pause deployment
+- Resume deployment
+- Pause account
+- Resume account
+- Global kill
+- Global resume
+- Flatten account/deployment request buttons with confirmation and safe unsupported/not-ready display
+
+Tests run:
+
+- `npm.cmd test`
+- `python -m pytest backend/tests -q`
+- `python -m compileall -q backend/app backend/tests`
+
+Test results:
+
+- Frontend tests/build: `10 passed`; architecture check passed
+- Full backend suite: `369 passed`
+- Compile: passed

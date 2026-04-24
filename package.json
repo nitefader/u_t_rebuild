@@ -1,0 +1,10 @@
+{
+  "name": "ultimate-trading-os-rebuild",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node frontend/scripts/check-frontend.mjs",
+    "test": "node --test frontend/tests/*.test.mjs && npm run build"
+  }
+}
