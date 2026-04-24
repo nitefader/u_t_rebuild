@@ -1386,3 +1386,199 @@ Result:
 
 - Operator tool tests: `18 passed`
 - Targeted backend unit slice: `246 passed`
+
+## 2026-04-24 - Persistence Layer for Orders, Trades, Broker Mappings, Governor State, and Deployment State
+
+Added local SQLite persistence adapters for durable runtime state while preserving existing Pydantic domain models and execution behavior.
+
+Created:
+
+- `backend/app/persistence/__init__.py`
+- `backend/app/persistence/sqlite.py`
+- `backend/tests/unit/persistence/test_sqlite_persistence.py`
+
+Implemented:
+
+- `SQLiteOrderLedger`
+- `SQLiteTradeLedger`
+- `SQLiteBrokerOrderMappingStore`
+- `SQLiteGovernorStateStore`
+- `SQLiteDeploymentStateStore`
+- SQLite schema initialization
+- persistent order add/get/replace/update/status lookup behavior
+- account/deployment/program order lookup behavior
+- simulated trade persistence
+- broker order mapping persistence
+- Governor policy persistence
+- deployment runtime state persistence
+- restart-style tests using a fresh store instance over the same SQLite file
+
+Notes:
+
+- SQLModel and SQLAlchemy are not present in the repository or current environment.
+- This implementation uses Python's standard `sqlite3` module to keep the local persistence layer dependency-free.
+
+Scope kept out:
+
+- No execution pipeline changes
+- No Feature Engine changes
+- No Signal Engine changes
+- No API routes
+- No frontend
+- No database migrations
+
+Validation performed:
+
+- `python -m pytest backend\tests\unit\persistence -q`
+- `python -m pytest backend\tests\unit\persistence backend\tests\unit\market_data backend\tests\unit\tools backend\tests\unit\brokers backend\tests\unit\pipeline backend\tests\unit\governor backend\tests\unit\orders backend\tests\unit\runtime backend\tests\unit\simulation backend\tests\unit\chart_lab backend\tests\unit\decision backend\tests\unit\features backend\tests\unit\domain -q`
+- `python -m compileall -q backend\app\persistence backend\tests\unit\persistence`
+
+Result:
+
+- Persistence tests: `5 passed`
+- Targeted backend unit slice: `251 passed`
+
+## 2026-04-24 - Control Plane Hardening for Paper Runtime Safety
+
+Added a hardened runtime control plane for kill, pause, deployment pause, and intent-aware cancellation safety before portfolio feature adapters are introduced.
+
+Created:
+
+- `backend/app/control_plane/__init__.py`
+- `backend/app/control_plane/client_order_id.py`
+- `backend/app/control_plane/service.py`
+- `backend/tests/unit/control_plane/test_control_plane.py`
+
+Updated:
+
+- `backend/app/orders/manager.py`
+- `backend/app/pipeline/orchestrator.py`
+- `backend/app/brokers/fake.py`
+- `backend/tests/unit/orders/test_order_manager.py`
+- `backend/tests/unit/pipeline/test_runtime_orchestrator.py`
+- `backend/tests/unit/tools/test_paper_operator_tools.py`
+
+Implemented:
+
+- `build_program_client_order_id(program_name, deployment_id, intent="open")`
+- `parse_order_intent(client_order_id)`
+- `parse_order_deployment_id(client_order_id)`
+- new client order id format: `{program_abbrev}-{deployment8}-{intent}-{rand8}`
+- legacy/unparseable client order ids return intent `unknown`
+- `ControlPlane`
+- startup hydration from:
+  - latest `KillSwitchEvent`
+  - `AccountControlState.is_killed`
+  - `DeploymentControlState.status == "paused"`
+- unified `can_open_new_position(account_id, deployment_id, symbol, side)` gate
+- deprecated-compatible `can_trade(...)` alias
+- global kill, account pause, and deployment pause precedence
+- deployment-scoped pause/resume
+- deployment pause does not use strategy id as scope
+- intent-aware cancellation sweep
+- structured `CancellationSweepResult`
+- dry-run cancellation support
+- unknown order intent skip-and-flag behavior
+- protective `sl`, `tp`, `close`, and `scale` cancellation preservation
+- open-intent cancellation only when no broker position exists
+- deployment-scoped cancellation by deployment prefix parsed from client order id
+- `RuntimeOrchestrator` final open gate through `ControlPlane.can_open_new_position`
+- protective exits continue through existing Governor/OrderManager/BrokerSync path during kill/pause
+
+Scope kept out:
+
+- No Feature Engine changes
+- No Signal Engine changes
+- No Strategy Controls behavior changes
+- No Risk behavior changes
+- No portfolio feature adapters
+- No live-trading behavior
+- No flatten-on-pause/kill behavior
+- No BrokerAdapter policy decisions
+- No OrderManager bypass
+- No PortfolioGovernor bypass
+
+Validation performed:
+
+- `python -m pytest backend\tests\unit\control_plane -q`
+- `python -m pytest backend\tests\unit\orders backend\tests\unit\pipeline -q`
+- `python -m pytest backend\tests\unit\control_plane backend\tests\unit\orders backend\tests\unit\pipeline -q`
+- `python -m pytest backend\tests\unit\control_plane backend\tests\unit\persistence backend\tests\unit\market_data backend\tests\unit\tools backend\tests\unit\brokers backend\tests\unit\pipeline backend\tests\unit\governor backend\tests\unit\orders backend\tests\unit\runtime backend\tests\unit\simulation backend\tests\unit\chart_lab backend\tests\unit\decision backend\tests\unit\features backend\tests\unit\domain -q`
+- `python -m compileall -q backend\app\control_plane backend\app\orders backend\app\pipeline backend\app\brokers backend\tests\unit\control_plane backend\tests\unit\orders backend\tests\unit\pipeline`
+
+Result:
+
+- Control-plane tests: `13 passed`
+- Control/order/pipeline slice: `31 passed`
+- Targeted backend unit slice: `266 passed`
+
+## 2026-04-24 - Control Plane Hardening for Paper Runtime Safety
+
+Closeout verification completed for the paper runtime control-plane hardening milestone.
+
+Files created:
+
+- `backend/app/control_plane/__init__.py`
+- `backend/app/control_plane/client_order_id.py`
+- `backend/app/control_plane/service.py`
+- `backend/tests/unit/control_plane/test_control_plane.py`
+
+Files modified:
+
+- `backend/app/brokers/fake.py`
+- `backend/app/orders/manager.py`
+- `backend/app/pipeline/orchestrator.py`
+- `backend/tests/unit/orders/test_order_manager.py`
+- `backend/tests/unit/pipeline/test_runtime_orchestrator.py`
+- `backend/tests/unit/tools/test_paper_operator_tools.py`
+- `docs/system_rebuild_outputs/IMPLEMENTATION_LOG.md`
+
+Exact scope verified:
+
+- `client_order_id` intent encoding is present.
+- `parse_order_intent()` is present and returns `unknown` for malformed or legacy ids.
+- `parse_order_deployment_id()` is present.
+- startup hydration covers global kill, killed accounts, and paused deployments.
+- `can_open_new_position()` gates new opening orders.
+- deployment-scoped pause/resume is implemented by deployment id, not strategy id.
+- cancellation sweep is intent-aware.
+- cancellation sweep returns structured `CancellationSweepResult`.
+- runtime control action wiring calls the control-plane gate after PortfolioGovernor approval and before order creation.
+- flatten remains separate from pause/kill.
+- protective exits survive pause/kill.
+- unknown intent orders are preserved and flagged.
+
+Tests run:
+
+- `python -m pytest backend/tests/unit/control_plane -q`
+- `python -m pytest backend/tests/unit/governor -q`
+- `python -m pytest backend/tests/unit/orders -q`
+- `python -m pytest backend/tests/unit/brokers -q`
+- `python -m pytest backend/tests/unit/pipeline -q`
+- `python -m pytest backend/tests -q`
+
+Test results:
+
+- Control-plane tests: `13 passed`
+- Governor tests: `9 passed`
+- Orders tests: `8 passed`
+- Brokers tests: `36 passed`
+- Pipeline tests: `10 passed`
+- Full backend suite: `266 passed`
+
+Issues fixed during closeout:
+
+- None. No task-related test failures were found during closeout.
+
+Architecture confirmations:
+
+- No core engines were modified: FeatureEngine, SignalEngine, StrategyControls logic, and Risk logic were untouched.
+- No duplicate responsibility was introduced.
+- BrokerAdapter still does not make policy decisions.
+- OrderManager remains the creator of internal orders.
+- PortfolioGovernor remains the final authority before order creation, with ControlPlane enforcing the existing runtime open gate after Governor approval and before OrderManager creation.
+- No opening order can bypass `can_open_new_position()` through `RuntimeOrchestrator`.
+- Pause/kill never flatten positions.
+- Protective exits are not canceled by the control-plane cancellation sweep.
+- Unknown broker orders are preserved and flagged, not canceled blindly.
+- Docs were updated with this verification entry.

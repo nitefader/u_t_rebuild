@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 from uuid import UUID, uuid4
 
 from backend.app.brokers import BrokerOrderStatus, FakeBrokerAdapter
+from backend.app.control_plane import ControlPlane
 from backend.app.domain import (
     CandidateSide,
     ConditionNode,
@@ -134,6 +135,7 @@ def _orchestrator(
     governor: PortfolioGovernor | None = None,
     broker_adapter: FakeBrokerAdapter | None = None,
     order_manager: OrderManager | None = None,
+    control_plane: ControlPlane | None = None,
 ) -> RuntimeOrchestrator:
     resolved = components or _components()
     return RuntimeOrchestrator(
@@ -143,6 +145,7 @@ def _orchestrator(
         governor=governor,
         broker_adapter=broker_adapter,
         order_manager=order_manager,
+        control_plane=control_plane,
     )
 
 
@@ -226,7 +229,7 @@ def test_attribution_preserved_account_deployment_program() -> None:
     assert ledger_update.account_id == ACCOUNT_ID
     assert ledger_update.deployment_id == DEPLOYMENT_ID
     assert ledger_update.program_id == components.program.id
-    assert ledger_update.client_order_id.startswith("utos-11111111-aaaaaaaa-")
+    assert ledger_update.client_order_id.startswith("utos-aaaaaaaa-open-")
 
 
 def test_fake_broker_responses_update_ledger() -> None:
@@ -257,8 +260,37 @@ def test_no_component_bypass() -> None:
     assert "BatchFeatureEngine" not in source
     assert ".compute(" not in source
     assert "InternalOrder(" not in source
+    assert ".can_open_new_position(" in source
     assert ".create_order(" in source
     assert ".submit_order(" in source
+
+
+def test_control_plane_blocks_new_open_before_order_creation() -> None:
+    broker = FakeBrokerAdapter([BrokerOrderStatus.ACCEPTED])
+    control_plane = ControlPlane(global_kill_active=True)
+
+    result = _orchestrator(broker_adapter=broker, control_plane=control_plane).process_bar(_bar())
+
+    assert len(result.candidate_intents) == 1
+    assert result.orders == ()
+    assert broker.submitted_orders == []
+
+
+def test_protective_exits_survive_control_plane_kill() -> None:
+    components = _components()
+    pipeline = _orchestrator(
+        components=components,
+        control_plane=ControlPlane(global_kill_active=True),
+        broker_adapter=FakeBrokerAdapter([BrokerOrderStatus.FILLED]),
+    )
+
+    result = pipeline.process_protective_intent(
+        execution_intent=_exit_intent(components),
+        order_intent=InternalOrderIntent.STOP_LOSS,
+    )
+
+    assert len(result.orders) == 1
+    assert result.orders[0].intent == InternalOrderIntent.STOP_LOSS
 
 
 def test_pipeline_matches_batch_signal_expectation() -> None:

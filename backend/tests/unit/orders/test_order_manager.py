@@ -60,8 +60,7 @@ def test_client_order_id_format_is_correct() -> None:
 
     order = manager.create_order(account_id=ACCOUNT_ID, execution_intent=_execution_intent())
 
-    assert order.client_order_id == "utos-11111111-aaaaaaaa-99999999-open-000001"
-    assert re.fullmatch(r"utos-[0-9a-f]{8}-[0-9a-f]{8}-[0-9a-f]{8}-(open|close|tp|sl|scale)-\d{6}", order.client_order_id)
+    assert re.fullmatch(r"utos-[0-9a-f]{8}-(open|close|tp|sl|scale)-[0-9a-f]{8}", order.client_order_id)
 
 
 def test_rejects_invalid_intent() -> None:
@@ -150,9 +149,9 @@ def test_creates_close_tp_sl_and_scale_intents() -> None:
     assert tp_order.intent == InternalOrderIntent.TAKE_PROFIT
     assert sl_order.intent == InternalOrderIntent.STOP_LOSS
     assert scale_order.intent == InternalOrderIntent.SCALE
-    assert tp_order.client_order_id.endswith("-tp-000001")
-    assert sl_order.client_order_id.endswith("-sl-000001")
-    assert scale_order.client_order_id.endswith("-scale-000001")
+    assert "-tp-" in tp_order.client_order_id
+    assert "-sl-" in sl_order.client_order_id
+    assert "-scale-" in scale_order.client_order_id
 
 
 def test_no_external_calls() -> None:

@@ -5,6 +5,7 @@ from uuid import UUID, uuid4
 
 from backend.app.domain import IntentType
 from backend.app.domain._base import utc_now
+from backend.app.control_plane.client_order_id import build_program_client_order_id
 
 from .ledger import OrderLedger
 from .models import InternalOrder, InternalOrderIntent, InternalOrderStatus, OrderManagerError
@@ -38,12 +39,10 @@ class OrderManager:
         now = utc_now()
         order = InternalOrder(
             order_id=uuid4(),
-            client_order_id=self._client_order_id(
-                account_id=account_id,
-                deployment_id=execution_intent.deployment_id,
-                program_id=execution_intent.program_version_id,
+            client_order_id=build_program_client_order_id(
+                getattr(execution_intent, "program_name", "utos"),
+                execution_intent.deployment_id,
                 intent=intent,
-                sequence=sequence,
             ),
             account_id=account_id,
             deployment_id=execution_intent.deployment_id,
@@ -110,20 +109,6 @@ class OrderManager:
         key = (account_id, deployment_id, program_id, intent)
         self._sequence_by_attribution[key] += 1
         return self._sequence_by_attribution[key]
-
-    def _client_order_id(
-        self,
-        *,
-        account_id: UUID,
-        deployment_id: UUID,
-        program_id: UUID,
-        intent: InternalOrderIntent,
-        sequence: int,
-    ) -> str:
-        return (
-            f"utos-{self._short(account_id)}-{self._short(deployment_id)}-"
-            f"{self._short(program_id)}-{intent.value}-{sequence:06d}"
-        )
 
     def _short(self, value: UUID) -> str:
         return value.hex[:8]

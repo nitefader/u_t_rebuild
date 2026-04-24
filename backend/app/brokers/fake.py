@@ -33,6 +33,7 @@ class FakeBrokerAdapter:
         self._open_orders_by_account = open_orders_by_account or {}
         self._results_by_order_id: dict[UUID, BrokerOrderResult] = {}
         self.submitted_orders: list[InternalOrder] = []
+        self.canceled_client_order_ids: list[str] = []
 
     def submit_order(self, order: InternalOrder) -> BrokerOrderResult:
         if not isinstance(order, InternalOrder):
@@ -84,6 +85,9 @@ class FakeBrokerAdapter:
 
     def get_positions(self, account_id: UUID) -> tuple[BrokerPositionSnapshot, ...]:
         return self._positions_by_account.get(account_id, ())
+
+    def cancel_order(self, client_order_id: str) -> None:
+        self.canceled_client_order_ids.append(client_order_id)
 
     def _result_for_status(self, order: InternalOrder, status: BrokerOrderStatus) -> BrokerOrderResult:
         if status == BrokerOrderStatus.ACCEPTED:

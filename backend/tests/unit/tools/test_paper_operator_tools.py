@@ -261,7 +261,7 @@ def test_successful_market_open_path_calls_order_manager_adapter_broker_sync(mon
     assert code == 0
     assert len(FakeSmokeAdapter.submitted_orders) == 1
     order = FakeSmokeAdapter.submitted_orders[0]
-    assert order.client_order_id.startswith("utos-00000000-00000000-00000000-open-")
+    assert order.client_order_id.startswith("utos-00000000-open-")
     assert order.symbol == "SPY"
     assert order.quantity == 1
     assert '"status": "accepted"' in output

@@ -4,6 +4,7 @@ from datetime import datetime
 from uuid import UUID
 
 from backend.app.brokers import BrokerAdapter, BrokerOrderResult, BrokerSync, FakeBrokerAdapter
+from backend.app.control_plane.service import ControlPlane
 from backend.app.decision import SignalEngine, SignalEvaluationError
 from backend.app.domain import CandidateTradeIntent
 from backend.app.features import (
@@ -89,6 +90,7 @@ class RuntimeOrchestrator:
         broker_freshness: BrokerSyncFreshness | None = None,
         portfolio_snapshot: PortfolioSnapshot | None = None,
         feature_cache: FeatureCache | None = None,
+        control_plane: ControlPlane | None = None,
     ) -> None:
         self._account_id = account_id
         self._deployment = deployment
@@ -105,6 +107,7 @@ class RuntimeOrchestrator:
         self._broker_freshness = broker_freshness or BrokerSyncFreshness()
         self._portfolio_snapshot = portfolio_snapshot or PortfolioSnapshot()
         self._feature_cache = feature_cache or FeatureCache()
+        self._control_plane = control_plane or ControlPlane()
         self._feature_plan = build_feature_plan(components, consumer="runtime")
         self._runtime_state = RuntimeState(deployment_id=deployment.deployment_id)
         self._event_log = RuntimePipelineEventLog(deployment_id=deployment.deployment_id)
@@ -193,6 +196,25 @@ class RuntimeOrchestrator:
             governor_decisions.append(decision)
             self._emit_governor_decision(timestamp=intent.timestamp, symbol=intent.symbol, decision=decision)
             if not decision.approved:
+                continue
+            control_decision = self._control_plane.can_open_new_position(
+                account_id=self._account_id,
+                deployment_id=intent.deployment_id,
+                symbol=intent.symbol,
+                side=intent.side.value,
+            )
+            if not control_decision.allowed:
+                self._event_log.append(
+                    timestamp=intent.timestamp,
+                    event_type=PipelineEventType.GOVERNOR_DECISION,
+                    symbol=intent.symbol,
+                    message="control plane blocked opening order",
+                    details={
+                        "approved": False,
+                        "reason": control_decision.reason,
+                        "rule_id": control_decision.rule_id,
+                    },
+                )
                 continue
             approved_intent = intent.model_copy(update={"governor_approved": True, "governor_reason": decision.reason})
             order, result, ledger_update = self._create_submit_sync(
