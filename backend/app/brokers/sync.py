@@ -12,6 +12,7 @@ from .models import (
     BrokerAdapterError,
     BrokerFillUpdateEvent,
     BrokerOpenOrderSnapshot,
+    BrokerOrderMapping,
     BrokerOrderUpdateEvent,
     BrokerOrderResult,
     BrokerOrderStatus,
@@ -27,9 +28,20 @@ from .models import (
 class BrokerSync:
     """Apply broker boundary results to the internal OrderLedger."""
 
-    def __init__(self, *, ledger: OrderLedger, adapter: BrokerAdapter | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        ledger: OrderLedger,
+        adapter: BrokerAdapter | None = None,
+        runtime_store: object | None = None,
+        mapping_store: object | None = None,
+        provider: str = "broker",
+    ) -> None:
         self._ledger = ledger
         self._adapter = adapter
+        self._runtime_store = runtime_store
+        self._mapping_store = mapping_store
+        self._provider = provider
 
     def apply_result(self, result: BrokerOrderResult) -> InternalOrder:
         order = self._ledger.get(result.order_id)
@@ -50,7 +62,9 @@ class BrokerSync:
                 "reason": result.reason if result.reason is not None else order.reason,
             }
         )
-        return self._ledger.replace(updated)
+        persisted = self._ledger.replace(updated)
+        self._persist_mapping(result=result, order=persisted)
+        return persisted
 
     def sync_open_orders(self, account_id: UUID) -> tuple[InternalOrder, ...]:
         adapter = self._require_adapter()
@@ -68,7 +82,9 @@ class BrokerSync:
         return self._require_adapter().get_positions(account_id)
 
     def sync_account(self, account_id: UUID) -> BrokerAccountSnapshot:
-        return self._require_adapter().get_account_snapshot(account_id)
+        snapshot = self._require_adapter().get_account_snapshot(account_id)
+        self._persist_account_snapshot(snapshot)
+        return snapshot
 
     def reconcile(
         self,
@@ -112,6 +128,31 @@ class BrokerSync:
         if self._adapter is None:
             raise OrderManagerError("broker sync read operation requires a broker adapter")
         return self._adapter
+
+    def _persist_mapping(self, *, result: BrokerOrderResult, order: InternalOrder) -> None:
+        if result.broker_order_id is None:
+            return
+        target = self._mapping_store or self._runtime_store
+        if target is None:
+            return
+        mapping = BrokerOrderMapping(
+            order_id=order.order_id,
+            client_order_id=order.client_order_id,
+            broker_order_id=result.broker_order_id,
+            provider=self._provider,
+            account_id=order.account_id,
+            last_synced_at=result.received_at,
+        )
+        if hasattr(target, "save_broker_order_mapping"):
+            target.save_broker_order_mapping(mapping)
+            return
+        if hasattr(target, "save"):
+            target.save(mapping)
+
+    def _persist_account_snapshot(self, snapshot: BrokerAccountSnapshot) -> None:
+        if self._runtime_store is None or not hasattr(self._runtime_store, "save_broker_account_snapshot"):
+            return
+        self._runtime_store.save_broker_account_snapshot(snapshot)
 
     def _flag_stale_sync(
         self,
@@ -177,12 +218,14 @@ class BrokerSyncService:
         order_ledger: OrderLedger,
         trade_ledger: object | None = None,
         max_stale_seconds: int = 30,
+        runtime_store: object | None = None,
     ) -> None:
         self._adapter = adapter
         self._broker_sync = broker_sync
         self._order_ledger = order_ledger
         self._trade_ledger = trade_ledger
         self._max_stale_seconds = max_stale_seconds
+        self._runtime_store = runtime_store
         self._last_event_at_by_account: dict[UUID, datetime] = {}
         self._last_poll_sync_at_by_account: dict[UUID, datetime] = {}
         self._last_successful_sync_at_by_account: dict[UUID, datetime] = {}
@@ -212,7 +255,7 @@ class BrokerSyncService:
                 stale_reason = f"broker_snapshot_age_exceeded_{self._max_stale_seconds}s"
             else:
                 stale_reason = f"broker_truth_age_exceeded_{self._max_stale_seconds}s"
-        return BrokerSyncState(
+        state = BrokerSyncState(
             account_id=account_id,
             last_sync_at=checked_at,
             last_event_at=last_event_at,
@@ -221,6 +264,8 @@ class BrokerSyncService:
             is_stale=is_stale,
             stale_reason=stale_reason,
         )
+        self._persist_sync_state(state)
+        return state
 
     def current_sync_state(self, account_id: UUID) -> BrokerSyncState:
         checked_at = datetime.now(timezone.utc)
@@ -232,7 +277,7 @@ class BrokerSyncService:
             default=None,
         )
         if latest_truth_at is None:
-            return BrokerSyncState(
+            state = BrokerSyncState(
                 account_id=account_id,
                 last_sync_at=checked_at,
                 last_event_at=last_event_at,
@@ -241,12 +286,14 @@ class BrokerSyncService:
                 is_stale=True,
                 stale_reason=self._stale_reason_by_account.get(account_id) or "broker_truth_never_synced",
             )
+            self._persist_sync_state(state)
+            return state
         age = checked_at - _aware(latest_truth_at)
         is_stale = age > timedelta(seconds=self._max_stale_seconds)
         stale_reason = None
         if is_stale:
             stale_reason = self._stale_reason_by_account.get(account_id) or f"broker_truth_age_exceeded_{self._max_stale_seconds}s"
-        return BrokerSyncState(
+        state = BrokerSyncState(
             account_id=account_id,
             last_sync_at=checked_at,
             last_event_at=last_event_at,
@@ -255,6 +302,8 @@ class BrokerSyncService:
             is_stale=is_stale,
             stale_reason=stale_reason,
         )
+        self._persist_sync_state(state)
+        return state
 
     def fetch_account_snapshot(self, account_id: UUID) -> BrokerAccountSnapshot:
         return self._adapter.get_account_snapshot(account_id)
@@ -317,6 +366,7 @@ class BrokerSyncService:
 
     def handle_account_update(self, event: BrokerAccountSnapshot) -> BrokerAccountSnapshot:
         self._account_snapshots_by_account[event.account_id] = event
+        self._persist_account_snapshot(event)
         self._record_stream_event(event.account_id, event.timestamp)
         return event
 
@@ -338,6 +388,7 @@ class BrokerSyncService:
         positions = self.fetch_positions(account_id)
         open_orders = self.fetch_open_orders(account_id)
         self._account_snapshots_by_account[account_id] = account_snapshot
+        self._persist_account_snapshot(account_snapshot)
         self._positions_by_account[account_id] = {position.symbol.upper(): position for position in positions}
         sync_status = self.sync_state(account_snapshot)
         self._last_poll_sync_at_by_account[account_id] = checked_at
@@ -473,6 +524,17 @@ class BrokerSyncService:
         self._last_event_at_by_account[account_id] = aware_event_at
         self._last_successful_sync_at_by_account[account_id] = aware_event_at
         self._stale_reason_by_account.pop(account_id, None)
+        self.current_sync_state(account_id)
+
+    def _persist_account_snapshot(self, snapshot: BrokerAccountSnapshot) -> None:
+        if self._runtime_store is None or not hasattr(self._runtime_store, "save_broker_account_snapshot"):
+            return
+        self._runtime_store.save_broker_account_snapshot(snapshot)
+
+    def _persist_sync_state(self, state: BrokerSyncState) -> None:
+        if self._runtime_store is None or not hasattr(self._runtime_store, "save_broker_sync_freshness"):
+            return
+        self._runtime_store.save_broker_sync_freshness(state)
 
     def _order_by_client_order_id(self, account_id: UUID, client_order_id: str) -> InternalOrder:
         for order in self._order_ledger.by_account(account_id):

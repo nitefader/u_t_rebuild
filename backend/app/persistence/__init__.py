@@ -5,6 +5,7 @@ from .sqlite import (
     SQLiteDeploymentStateStore,
     SQLiteGovernorStateStore,
     SQLiteOrderLedger,
+    SQLiteRuntimeStore,
     SQLiteTradeLedger,
 )
 
@@ -13,5 +14,6 @@ __all__ = [
     "SQLiteDeploymentStateStore",
     "SQLiteGovernorStateStore",
     "SQLiteOrderLedger",
+    "SQLiteRuntimeStore",
     "SQLiteTradeLedger",
 ]

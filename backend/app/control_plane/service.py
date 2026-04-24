@@ -61,6 +61,14 @@ class DeploymentControlState(BaseModel):
     status: str = "ready"
 
 
+class ControlPlaneState(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    global_kill_active: bool = False
+    paused_account_ids: frozenset[UUID] = Field(default_factory=frozenset)
+    paused_deployment_ids: frozenset[UUID] = Field(default_factory=frozenset)
+
+
 class ControlPlane:
     def __init__(
         self,
@@ -68,10 +76,18 @@ class ControlPlane:
         global_kill_active: bool = False,
         paused_account_ids: set[UUID] | frozenset[UUID] | None = None,
         paused_deployment_ids: set[UUID] | frozenset[UUID] | None = None,
+        state_store: object | None = None,
+        control_plane_id: str = "default",
     ) -> None:
-        self._global_kill_active = global_kill_active
-        self._paused_account_ids = set(paused_account_ids or set())
-        self._paused_deployment_ids = set(paused_deployment_ids or set())
+        self._state_store = state_store
+        self._control_plane_id = control_plane_id
+        loaded_state = self._load_state()
+        self._global_kill_active = loaded_state.global_kill_active if loaded_state is not None else global_kill_active
+        self._paused_account_ids = set(loaded_state.paused_account_ids if loaded_state is not None else paused_account_ids or set())
+        self._paused_deployment_ids = set(
+            loaded_state.paused_deployment_ids if loaded_state is not None else paused_deployment_ids or set()
+        )
+        self._persist_state()
 
     @property
     def global_kill_active(self) -> bool:
@@ -79,24 +95,30 @@ class ControlPlane:
 
     def activate_global_kill(self) -> None:
         self._global_kill_active = True
+        self._persist_state()
 
     def clear_global_kill(self) -> None:
         self._global_kill_active = False
+        self._persist_state()
 
     def pause_account(self, account_id: UUID) -> None:
         self._paused_account_ids.add(account_id)
+        self._persist_state()
 
     def resume_account(self, account_id: UUID) -> None:
         self._paused_account_ids.discard(account_id)
+        self._persist_state()
 
     def is_account_paused(self, account_id: UUID) -> bool:
         return account_id in self._paused_account_ids
 
     def pause_deployment(self, deployment_id: UUID) -> None:
         self._paused_deployment_ids.add(deployment_id)
+        self._persist_state()
 
     def resume_deployment(self, deployment_id: UUID) -> None:
         self._paused_deployment_ids.discard(deployment_id)
+        self._persist_state()
 
     def is_deployment_paused(self, deployment_id: UUID) -> bool:
         return deployment_id in self._paused_deployment_ids
@@ -196,6 +218,26 @@ class ControlPlane:
             broker_adapter.cancel_order(local_order.client_order_id)
             return
         broker_adapter.cancel_order(local_order)
+
+    def snapshot(self) -> ControlPlaneState:
+        return ControlPlaneState(
+            global_kill_active=self._global_kill_active,
+            paused_account_ids=frozenset(self._paused_account_ids),
+            paused_deployment_ids=frozenset(self._paused_deployment_ids),
+        )
+
+    def _load_state(self) -> ControlPlaneState | None:
+        if self._state_store is None or not hasattr(self._state_store, "load_control_plane_state"):
+            return None
+        try:
+            return self._state_store.load_control_plane_state(self._control_plane_id)
+        except KeyError:
+            return None
+
+    def _persist_state(self) -> None:
+        if self._state_store is None or not hasattr(self._state_store, "save_control_plane_state"):
+            return
+        self._state_store.save_control_plane_state(self._control_plane_id, self.snapshot())
 
 
 def hydrate_control_plane(

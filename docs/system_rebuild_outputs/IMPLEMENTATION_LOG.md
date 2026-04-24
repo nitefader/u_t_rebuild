@@ -2281,3 +2281,69 @@ Architecture confirmations:
 - Warnings do not block promotion by default.
 - No runtime behavior changes were made.
 - No deployment orchestration or lifecycle wiring was added.
+
+## 2026-04-24 15:12 ET - Persistent Runtime Store
+
+Files created:
+
+- `backend/app/persistence/models.py`
+- `backend/app/persistence/session.py`
+- `backend/app/persistence/runtime_store.py`
+
+Files updated:
+
+- `backend/app/persistence/__init__.py`
+- `backend/app/persistence/sqlite.py`
+- `backend/app/brokers/sync.py`
+- `backend/app/control_plane/__init__.py`
+- `backend/app/control_plane/service.py`
+- `backend/app/governor/service.py`
+- `backend/app/runtime/engine.py`
+- `backend/app/pipeline/orchestrator.py`
+- `backend/tests/unit/persistence/test_sqlite_persistence.py`
+- `docs/system_rebuild_outputs/IMPLEMENTATION_LOG.md`
+
+What was implemented:
+
+- Added a durable SQLite runtime store boundary for internal orders, trades/fills, broker order mappings, broker account snapshots, broker sync freshness, deployment runtime state, portfolio governor state, and control-plane effective state.
+- Kept compatibility wrappers for `SQLiteOrderLedger`, `SQLiteTradeLedger`, `SQLiteBrokerOrderMappingStore`, `SQLiteGovernorStateStore`, and `SQLiteDeploymentStateStore`.
+- Added repository APIs for save/load/list order, save/load trades and fills by deployment, broker mapping lookup by internal and broker IDs, broker freshness save/load, account snapshot save/load, deployment runtime state save/load, governor policy save/load, and control-plane state save/load.
+- Wired optional persistence hooks into BrokerSync/BrokerSyncService, PortfolioGovernor, RuntimeEngine, RuntimeOrchestrator, and ControlPlane while preserving in-memory defaults.
+- Added restart and boundary tests covering order, fill, broker mapping, broker freshness including stale freshness, governor state, deployment runtime state, control-plane state, OrderManager order creation authority, BrokerSync broker truth persistence authority, BrokerAdapter limits, Sim Lab isolation, and Chart Lab isolation.
+
+Scope kept out:
+
+- No FeatureEngine changes.
+- No SignalEngine changes.
+- No frontend work.
+- No real Alpaca calls.
+- No API route expansion.
+- No policy decisions moved into persistence.
+- No BrokerAdapter direct writes to broker-derived truth or internal orders.
+- No Sim Lab broker adapter or runtime persistence wiring.
+- No Chart Lab order, trade, fill, or broker-state creation.
+
+Validation commands run:
+
+- `python -m compileall -q backend/app backend/tests`
+- `python -m pytest backend/tests/unit/persistence -q`
+- `python -m pytest backend/tests/unit/orders backend/tests/unit/brokers backend/tests/unit/governor backend/tests/unit/pipeline -q`
+- `python -m pytest backend/tests -q`
+
+Test results:
+
+- Compile: passed
+- Persistence tests: `15 passed`
+- Orders/brokers/governor/pipeline tests: `91 passed`
+- Full backend suite: `329 passed`
+
+Architecture confirmations:
+
+- OrderManager remains the only creator of internal orders.
+- BrokerSync and BrokerSyncService remain the only writers of broker-derived runtime truth.
+- PortfolioGovernor still owns approval logic; persistence only stores/loads policy state.
+- ControlPlane remains the authority for kill/pause state; persistence only stores/loads the effective state.
+- BrokerAdapter cannot create or persist InternalOrder.
+- Sim Lab does not use BrokerAdapter or runtime persistence.
+- Chart Lab does not create orders, trades, fills, or broker state.
+- No duplicate runtime authority or pipeline bypasses were introduced.

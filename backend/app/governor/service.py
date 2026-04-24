@@ -9,11 +9,19 @@ from .models import GovernorDecision, GovernorPolicy, GovernorRequest
 class PortfolioGovernor:
     """Final internal policy gate before internal orders reach a broker adapter."""
 
-    def __init__(self, policy: GovernorPolicy | None = None) -> None:
-        self._policy = policy or GovernorPolicy()
+    def __init__(self, policy: GovernorPolicy | None = None, *, state_store: object | None = None, governor_id: str = "portfolio-governor") -> None:
+        self._state_store = state_store
+        self._governor_id = governor_id
+        loaded_policy = self._load_policy()
+        self._policy = loaded_policy or policy or GovernorPolicy()
+        self._persist_policy()
 
     @property
     def policy(self) -> GovernorPolicy:
+        return self._policy
+
+    def save_state(self) -> GovernorPolicy:
+        self._persist_policy()
         return self._policy
 
     def evaluate(self, request: GovernorRequest) -> GovernorDecision:
@@ -145,3 +153,24 @@ class PortfolioGovernor:
 
     def _pct(self, value: float, equity: float | None) -> float:
         return (value / equity * 100) if equity else 0
+
+    def _load_policy(self) -> GovernorPolicy | None:
+        if self._state_store is None:
+            return None
+        try:
+            if hasattr(self._state_store, "load_portfolio_governor_state"):
+                return self._state_store.load_portfolio_governor_state(self._governor_id)
+            if hasattr(self._state_store, "load_policy"):
+                return self._state_store.load_policy(self._governor_id)
+        except KeyError:
+            return None
+        return None
+
+    def _persist_policy(self) -> None:
+        if self._state_store is None:
+            return
+        if hasattr(self._state_store, "save_portfolio_governor_state"):
+            self._state_store.save_portfolio_governor_state(self._governor_id, self._policy)
+            return
+        if hasattr(self._state_store, "save_policy"):
+            self._state_store.save_policy(self._governor_id, self._policy)

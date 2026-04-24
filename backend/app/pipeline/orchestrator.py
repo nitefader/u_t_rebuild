@@ -91,6 +91,7 @@ class RuntimeOrchestrator:
         portfolio_snapshot: PortfolioSnapshot | None = None,
         feature_cache: FeatureCache | None = None,
         control_plane: ControlPlane | None = None,
+        runtime_store: object | None = None,
     ) -> None:
         self._account_id = account_id
         self._deployment = deployment
@@ -108,8 +109,10 @@ class RuntimeOrchestrator:
         self._portfolio_snapshot = portfolio_snapshot or PortfolioSnapshot()
         self._feature_cache = feature_cache or FeatureCache()
         self._control_plane = control_plane or ControlPlane()
+        self._runtime_store = runtime_store
         self._feature_plan = build_feature_plan(components, consumer="runtime")
-        self._runtime_state = RuntimeState(deployment_id=deployment.deployment_id)
+        self._runtime_state = self._load_runtime_state() or RuntimeState(deployment_id=deployment.deployment_id)
+        self._persist_runtime_state()
         self._event_log = RuntimePipelineEventLog(deployment_id=deployment.deployment_id)
 
     @property
@@ -232,6 +235,19 @@ class RuntimeOrchestrator:
             broker_results=broker_results,
             ledger_updates=ledger_updates,
         )
+
+    def _load_runtime_state(self) -> RuntimeState | None:
+        if self._runtime_store is None or not hasattr(self._runtime_store, "load_deployment_runtime_state"):
+            return None
+        try:
+            return self._runtime_store.load_deployment_runtime_state(self._deployment.deployment_id)
+        except KeyError:
+            return None
+
+    def _persist_runtime_state(self) -> None:
+        if self._runtime_store is None or not hasattr(self._runtime_store, "save_deployment_runtime_state"):
+            return
+        self._runtime_store.save_deployment_runtime_state(self._runtime_state)
 
     def process_protective_intent(
         self,

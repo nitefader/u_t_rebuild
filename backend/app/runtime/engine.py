@@ -66,8 +66,10 @@ class RuntimeEventLog:
 
 
 class RuntimeStateStore:
-    def __init__(self, state: RuntimeState) -> None:
-        self._state = state
+    def __init__(self, state: RuntimeState, durable_store: object | None = None) -> None:
+        self._durable_store = durable_store
+        self._state = self._load_state(state) or state
+        self._persist_state()
 
     @property
     def state(self) -> RuntimeState:
@@ -85,6 +87,7 @@ class RuntimeStateStore:
                 "last_error": None,
             }
         )
+        self._persist_state()
 
     def record_candidate(self, timestamp: datetime) -> None:
         self._state = self._state.model_copy(
@@ -93,6 +96,7 @@ class RuntimeStateStore:
                 "last_signal_timestamp": timestamp,
             }
         )
+        self._persist_state()
 
     def record_execution_intent(self, timestamp: datetime) -> None:
         self._state = self._state.model_copy(
@@ -101,9 +105,24 @@ class RuntimeStateStore:
                 "last_execution_intent_timestamp": timestamp,
             }
         )
+        self._persist_state()
 
     def record_error(self, message: str) -> None:
         self._state = self._state.model_copy(update={"status": RuntimeStatus.ERROR, "last_error": message})
+        self._persist_state()
+
+    def _load_state(self, fallback: RuntimeState) -> RuntimeState | None:
+        if self._durable_store is None or not hasattr(self._durable_store, "load_deployment_runtime_state"):
+            return None
+        try:
+            return self._durable_store.load_deployment_runtime_state(fallback.deployment_id)
+        except KeyError:
+            return None
+
+    def _persist_state(self) -> None:
+        if self._durable_store is None or not hasattr(self._durable_store, "save_deployment_runtime_state"):
+            return
+        self._durable_store.save_deployment_runtime_state(self._state)
 
 
 class ExecutionIntentBuilder:
@@ -178,6 +197,7 @@ class RuntimeEngine:
         account_id=None,  # type: ignore[no-untyped-def]
         broker_sync: BrokerSyncFreshness | None = None,
         portfolio_snapshot: PortfolioSnapshot | None = None,
+        runtime_store: object | None = None,
     ) -> None:
         self._deployment = deployment
         self._components = components
@@ -192,7 +212,8 @@ class RuntimeEngine:
         self._portfolio_snapshot = portfolio_snapshot or PortfolioSnapshot()
         self._feature_plan = build_feature_plan(components, consumer="runtime")
         self._state_store = RuntimeStateStore(
-            RuntimeState(deployment_id=deployment.deployment_id, status=deployment.status)
+            RuntimeState(deployment_id=deployment.deployment_id, status=deployment.status),
+            durable_store=runtime_store,
         )
         self._event_log = RuntimeEventLog(deployment_id=deployment.deployment_id)
 
