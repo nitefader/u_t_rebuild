@@ -4,7 +4,7 @@ from datetime import datetime
 from enum import StrEnum
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
 
 from backend.app.domain._base import utc_now
 
@@ -39,6 +39,7 @@ class BrokerPositionSide(StrEnum):
 class BrokerReconciliationIssueType(StrEnum):
     MISSING_LOCAL_ORDER = "missing_local_order"
     MISSING_BROKER_ORDER = "missing_broker_order"
+    MISMATCHED_FILL = "mismatched_fill"
     POSITION_MISMATCH = "position_mismatch"
     STALE_SYNC = "stale_sync"
 
@@ -75,39 +76,97 @@ class BrokerOrderResult(BaseModel):
 
 
 class BrokerAccountSnapshot(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="forbid", populate_by_name=True)
 
     account_id: UUID
-    provider: str
-    mode: BrokerAccountMode
-    buying_power: float = Field(ge=0)
-    cash: float
     equity: float = Field(ge=0)
+    cash: float
+    buying_power: float = Field(ge=0)
+    daytrading_buying_power: float = Field(default=0, ge=0)
+    is_pattern_day_trader: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("is_pattern_day_trader", "pattern_day_trader"),
+    )
     trading_blocked: bool = False
+    account_status: str = "unknown"
+    timestamp: datetime = Field(default_factory=utc_now, validation_alias=AliasChoices("timestamp", "last_synced_at"))
+    provider: str | None = None
+    mode: BrokerAccountMode | None = None
     account_blocked: bool = False
-    pattern_day_trader: bool = False
     shorting_enabled: bool = False
-    last_synced_at: datetime = Field(default_factory=utc_now)
+
+    @property
+    def pattern_day_trader(self) -> bool:
+        return self.is_pattern_day_trader
+
+    @property
+    def last_synced_at(self) -> datetime:
+        return self.timestamp
 
 
 class BrokerPositionSnapshot(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="forbid", populate_by_name=True)
 
     account_id: UUID
     symbol: str
-    quantity: float
-    market_value: float
-    avg_entry_price: float = Field(ge=0)
+    qty: float = Field(validation_alias=AliasChoices("qty", "quantity"))
     side: BrokerPositionSide
-    last_synced_at: datetime = Field(default_factory=utc_now)
+    avg_entry_price: float = Field(ge=0)
+    market_value: float
+    unrealized_pl: float = 0
+    timestamp: datetime = Field(default_factory=utc_now, validation_alias=AliasChoices("timestamp", "last_synced_at"))
+
+    @property
+    def quantity(self) -> float:
+        return self.qty
+
+    @property
+    def last_synced_at(self) -> datetime:
+        return self.timestamp
 
     @model_validator(mode="after")
     def normalize_position_side(self) -> "BrokerPositionSnapshot":
-        if self.quantity > 0 and self.side != BrokerPositionSide.LONG:
+        if self.qty > 0 and self.side != BrokerPositionSide.LONG:
             raise ValueError("positive quantity requires long side")
-        if self.quantity < 0 and self.side != BrokerPositionSide.SHORT:
+        if self.qty < 0 and self.side != BrokerPositionSide.SHORT:
             raise ValueError("negative quantity requires short side")
         return self
+
+
+class BrokerOpenOrderSnapshot(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    account_id: UUID
+    broker_order_id: str
+    client_order_id: str
+    symbol: str
+    side: str
+    qty: float = Field(gt=0)
+    filled_qty: float = Field(default=0, ge=0)
+    status: BrokerOrderStatus
+    order_type: str
+    limit_price: float | None = Field(default=None, gt=0)
+    stop_price: float | None = Field(default=None, gt=0)
+    timestamp: datetime = Field(default_factory=utc_now)
+
+
+class BrokerSyncState(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    account_id: UUID
+    last_sync_at: datetime
+    last_successful_sync_at: datetime | None = None
+    is_stale: bool
+    stale_reason: str | None = None
+
+
+class BrokerPositionDelta(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    symbol: str
+    expected_qty: float
+    broker_qty: float
+    delta_qty: float
 
 
 class BrokerOrderMapping(BaseModel):
@@ -146,6 +205,11 @@ class BrokerReconciliationReport(BaseModel):
     updated_order_count: int = 0
     broker_position_count: int = 0
     issues: tuple[BrokerReconciliationIssue, ...] = ()
+    matched_orders: tuple[str, ...] = ()
+    unmatched_broker_orders: tuple[BrokerOpenOrderSnapshot, ...] = ()
+    unmatched_internal_orders: tuple[str, ...] = ()
+    position_deltas: tuple[BrokerPositionDelta, ...] = ()
+    sync_status: BrokerSyncState | None = None
 
     @property
     def has_issues(self) -> bool:
@@ -153,4 +217,6 @@ class BrokerReconciliationReport(BaseModel):
 
     @property
     def is_stale(self) -> bool:
+        if self.sync_status is not None:
+            return self.sync_status.is_stale
         return any(issue.issue_type == BrokerReconciliationIssueType.STALE_SYNC for issue in self.issues)

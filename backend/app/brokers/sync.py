@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
 from backend.app.orders import InternalOrder, InternalOrderStatus, OrderLedger, OrderManagerError
@@ -9,12 +9,15 @@ from .adapter import BrokerAdapter
 from .models import (
     BrokerAccountSnapshot,
     BrokerAdapterError,
+    BrokerOpenOrderSnapshot,
     BrokerOrderResult,
     BrokerOrderStatus,
+    BrokerPositionDelta,
     BrokerPositionSnapshot,
     BrokerReconciliationIssue,
     BrokerReconciliationIssueType,
     BrokerReconciliationReport,
+    BrokerSyncState,
 )
 
 
@@ -47,8 +50,13 @@ class BrokerSync:
 
     def sync_open_orders(self, account_id: UUID) -> tuple[InternalOrder, ...]:
         adapter = self._require_adapter()
+        local_by_client_order_id = {order.client_order_id: order for order in self._ledger.by_account(account_id)}
         updates: list[InternalOrder] = []
-        for result in adapter.list_open_orders(account_id):
+        for snapshot in adapter.list_open_orders(account_id):
+            order = local_by_client_order_id.get(snapshot.client_order_id)
+            if order is None:
+                continue
+            result = adapter.get_order(order)
             updates.append(self.apply_result(result))
         return tuple(updates)
 
@@ -65,65 +73,14 @@ class BrokerSync:
         expected_positions_by_symbol: dict[str, float] | None = None,
         max_sync_age_seconds: int = 60,
     ) -> BrokerReconciliationReport:
-        adapter = self._require_adapter()
-        issues: list[BrokerReconciliationIssue] = []
-        updated_orders: list[InternalOrder] = []
-
-        account_snapshot = adapter.get_account_snapshot(account_id)
-        self._flag_stale_sync(
-            account_snapshot=account_snapshot,
-            max_sync_age_seconds=max_sync_age_seconds,
-            issues=issues,
-        )
-
-        local_orders = self._ledger.by_account(account_id)
-        local_by_client_order_id = {order.client_order_id: order for order in local_orders}
-        for order in local_orders:
-            try:
-                result = adapter.get_order(order)
-            except BrokerAdapterError:
-                issues.append(
-                    BrokerReconciliationIssue(
-                        issue_type=BrokerReconciliationIssueType.MISSING_BROKER_ORDER,
-                        account_id=account_id,
-                        symbol=order.symbol,
-                        order_id=order.order_id,
-                        client_order_id=order.client_order_id,
-                        message="local internal order was not found at broker",
-                    )
-                )
-                continue
-            updated_orders.append(self.apply_result(result))
-
-        for result in adapter.list_open_orders(account_id):
-            if result.client_order_id in local_by_client_order_id:
-                continue
-            issues.append(
-                BrokerReconciliationIssue(
-                    issue_type=BrokerReconciliationIssueType.MISSING_LOCAL_ORDER,
-                    account_id=account_id,
-                    order_id=result.order_id,
-                    client_order_id=result.client_order_id,
-                    broker_order_id=result.broker_order_id,
-                    message="broker order has no matching internal order; intent is unknown and order is preserved",
-                    actual="unknown_intent",
-                    action="preserve_external_order_and_flag",
-                )
-            )
-
-        positions = adapter.get_positions(account_id)
-        self._flag_position_mismatches(
-            account_id=account_id,
-            positions=positions,
-            expected_positions_by_symbol=expected_positions_by_symbol or {},
-            issues=issues,
-        )
-
-        return BrokerReconciliationReport(
-            account_id=account_id,
-            updated_order_count=len(updated_orders),
-            broker_position_count=len(positions),
-            issues=tuple(issues),
+        return BrokerSyncService(
+            adapter=self._require_adapter(),
+            broker_sync=self,
+            order_ledger=self._ledger,
+            max_stale_seconds=max_sync_age_seconds,
+        ).reconcile(
+            account_id,
+            expected_positions_by_symbol=expected_positions_by_symbol,
         )
 
     def _map_status(self, status: BrokerOrderStatus) -> InternalOrderStatus:
@@ -186,7 +143,7 @@ class BrokerSync:
     ) -> None:
         if not expected_positions_by_symbol:
             return
-        broker_qty_by_symbol = {position.symbol.upper(): position.quantity for position in positions}
+        broker_qty_by_symbol = {position.symbol.upper(): position.qty for position in positions}
         symbols = set(broker_qty_by_symbol) | {symbol.upper() for symbol in expected_positions_by_symbol}
         for symbol in sorted(symbols):
             expected = float(expected_positions_by_symbol.get(symbol, 0))
@@ -203,3 +160,212 @@ class BrokerSync:
                     actual=actual,
                 )
             )
+
+
+class BrokerSyncService:
+    """Read broker truth and reconcile it through BrokerSync only."""
+
+    def __init__(
+        self,
+        *,
+        adapter: BrokerAdapter,
+        broker_sync: BrokerSync,
+        order_ledger: OrderLedger,
+        trade_ledger: object | None = None,
+        max_stale_seconds: int = 30,
+    ) -> None:
+        self._adapter = adapter
+        self._broker_sync = broker_sync
+        self._order_ledger = order_ledger
+        self._trade_ledger = trade_ledger
+        self._max_stale_seconds = max_stale_seconds
+
+    def sync_state(self, account_snapshot: BrokerAccountSnapshot) -> BrokerSyncState:
+        checked_at = datetime.now(timezone.utc)
+        snapshot_timestamp = _aware(account_snapshot.timestamp)
+        age = checked_at - snapshot_timestamp
+        is_stale = age > timedelta(seconds=self._max_stale_seconds)
+        return BrokerSyncState(
+            account_id=account_snapshot.account_id,
+            last_sync_at=checked_at,
+            last_successful_sync_at=snapshot_timestamp,
+            is_stale=is_stale,
+            stale_reason=(
+                f"broker_snapshot_age_exceeded_{self._max_stale_seconds}s" if is_stale else None
+            ),
+        )
+
+    def fetch_account_snapshot(self, account_id: UUID) -> BrokerAccountSnapshot:
+        return self._adapter.get_account_snapshot(account_id)
+
+    def fetch_positions(self, account_id: UUID) -> tuple[BrokerPositionSnapshot, ...]:
+        return self._adapter.get_positions(account_id)
+
+    def fetch_open_orders(self, account_id: UUID) -> tuple[BrokerOpenOrderSnapshot, ...]:
+        return self._adapter.list_open_orders(account_id)
+
+    def reconcile(
+        self,
+        account_id: UUID,
+        *,
+        expected_positions_by_symbol: dict[str, float] | None = None,
+    ) -> BrokerReconciliationReport:
+        account_snapshot = self.fetch_account_snapshot(account_id)
+        positions = self.fetch_positions(account_id)
+        open_orders = self.fetch_open_orders(account_id)
+        sync_status = self.sync_state(account_snapshot)
+        issues: list[BrokerReconciliationIssue] = []
+        matched_orders: list[str] = []
+        unmatched_internal_orders: list[str] = []
+        unmatched_broker_orders: list[BrokerOpenOrderSnapshot] = []
+        updated_order_count = 0
+
+        if sync_status.is_stale:
+            issues.append(
+                BrokerReconciliationIssue(
+                    issue_type=BrokerReconciliationIssueType.STALE_SYNC,
+                    account_id=account_id,
+                    message="broker account snapshot is stale",
+                    expected=f"<= {self._max_stale_seconds}s",
+                    actual=sync_status.stale_reason,
+                )
+            )
+
+        local_orders = self._order_ledger.by_account(account_id)
+        local_by_client_order_id = {order.client_order_id: order for order in local_orders}
+        open_by_client_order_id = {order.client_order_id: order for order in open_orders}
+
+        for order in local_orders:
+            try:
+                broker_result = self._adapter.get_order(order)
+            except BrokerAdapterError:
+                unmatched_internal_orders.append(order.client_order_id)
+                issues.append(
+                    BrokerReconciliationIssue(
+                        issue_type=BrokerReconciliationIssueType.MISSING_BROKER_ORDER,
+                        account_id=account_id,
+                        symbol=order.symbol,
+                        order_id=order.order_id,
+                        client_order_id=order.client_order_id,
+                        message="local internal order was not found at broker",
+                    )
+                )
+                continue
+
+            matched_orders.append(order.client_order_id)
+            if broker_result.filled_quantity != order.filled_quantity:
+                issues.append(
+                    BrokerReconciliationIssue(
+                        issue_type=BrokerReconciliationIssueType.MISMATCHED_FILL,
+                        account_id=account_id,
+                        symbol=order.symbol,
+                        order_id=order.order_id,
+                        client_order_id=order.client_order_id,
+                        broker_order_id=broker_result.broker_order_id,
+                        message="broker filled quantity differs from internal order filled quantity",
+                        expected=order.filled_quantity,
+                        actual=broker_result.filled_quantity,
+                    )
+                )
+            self._broker_sync.apply_result(broker_result)
+            updated_order_count += 1
+
+        for broker_order in open_orders:
+            if broker_order.client_order_id in local_by_client_order_id:
+                continue
+            unmatched_broker_orders.append(broker_order)
+            issues.append(
+                BrokerReconciliationIssue(
+                    issue_type=BrokerReconciliationIssueType.MISSING_LOCAL_ORDER,
+                    account_id=account_id,
+                    client_order_id=broker_order.client_order_id,
+                    broker_order_id=broker_order.broker_order_id,
+                    symbol=broker_order.symbol,
+                    message="broker order has no matching internal order; intent is unknown and order is preserved",
+                    actual="unknown_intent",
+                    action="preserve_external_order_and_flag",
+                )
+            )
+
+        for client_order_id, broker_order in open_by_client_order_id.items():
+            local_order = local_by_client_order_id.get(client_order_id)
+            if local_order is None or broker_order.filled_qty == local_order.filled_quantity:
+                continue
+            if not any(
+                issue.issue_type == BrokerReconciliationIssueType.MISMATCHED_FILL
+                and issue.client_order_id == client_order_id
+                for issue in issues
+            ):
+                issues.append(
+                    BrokerReconciliationIssue(
+                        issue_type=BrokerReconciliationIssueType.MISMATCHED_FILL,
+                        account_id=account_id,
+                        symbol=broker_order.symbol,
+                        order_id=local_order.order_id,
+                        client_order_id=client_order_id,
+                        broker_order_id=broker_order.broker_order_id,
+                        message="broker open order filled quantity differs from internal order filled quantity",
+                        expected=local_order.filled_quantity,
+                        actual=broker_order.filled_qty,
+                    )
+                )
+
+        position_deltas = self._position_deltas(
+            positions=positions,
+            expected_positions_by_symbol=expected_positions_by_symbol or {},
+        )
+        for delta in position_deltas:
+            issues.append(
+                BrokerReconciliationIssue(
+                    issue_type=BrokerReconciliationIssueType.POSITION_MISMATCH,
+                    account_id=account_id,
+                    symbol=delta.symbol,
+                    message="broker position quantity does not match expected internal position quantity",
+                    expected=delta.expected_qty,
+                    actual=delta.broker_qty,
+                )
+            )
+
+        return BrokerReconciliationReport(
+            account_id=account_id,
+            updated_order_count=updated_order_count,
+            broker_position_count=len(positions),
+            issues=tuple(issues),
+            matched_orders=tuple(matched_orders),
+            unmatched_broker_orders=tuple(unmatched_broker_orders),
+            unmatched_internal_orders=tuple(unmatched_internal_orders),
+            position_deltas=tuple(position_deltas),
+            sync_status=sync_status,
+        )
+
+    def _position_deltas(
+        self,
+        *,
+        positions: tuple[BrokerPositionSnapshot, ...],
+        expected_positions_by_symbol: dict[str, float],
+    ) -> tuple[BrokerPositionDelta, ...]:
+        if not expected_positions_by_symbol:
+            return ()
+        broker_qty_by_symbol = {position.symbol.upper(): position.qty for position in positions}
+        symbols = set(broker_qty_by_symbol) | {symbol.upper() for symbol in expected_positions_by_symbol}
+        deltas: list[BrokerPositionDelta] = []
+        for symbol in sorted(symbols):
+            expected = float(expected_positions_by_symbol.get(symbol, 0))
+            actual = float(broker_qty_by_symbol.get(symbol, 0))
+            if expected == actual:
+                continue
+            deltas.append(
+                BrokerPositionDelta(
+                    symbol=symbol,
+                    expected_qty=expected,
+                    broker_qty=actual,
+                    delta_qty=actual - expected,
+                )
+            )
+        return tuple(deltas)
+
+
+def _aware(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value

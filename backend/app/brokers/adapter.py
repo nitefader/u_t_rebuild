@@ -5,7 +5,7 @@ from uuid import UUID
 
 from backend.app.orders import InternalOrder
 
-from .models import BrokerAccountSnapshot, BrokerOrderResult, BrokerPositionSnapshot
+from .models import BrokerAccountSnapshot, BrokerOpenOrderSnapshot, BrokerOrderResult, BrokerPositionSnapshot
 
 
 @runtime_checkable
@@ -23,7 +23,7 @@ class BrokerAdapter(Protocol):
     def get_order(self, order: InternalOrder) -> BrokerOrderResult:
         """Fetch broker truth for an already-created internal order."""
 
-    def list_open_orders(self, account_id: UUID) -> tuple[BrokerOrderResult, ...]:
+    def list_open_orders(self, account_id: UUID) -> tuple[BrokerOpenOrderSnapshot, ...]:
         """Fetch open broker orders for an account."""
 
     def get_account_snapshot(self, account_id: UUID) -> BrokerAccountSnapshot:

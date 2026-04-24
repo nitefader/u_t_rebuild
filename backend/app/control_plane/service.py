@@ -6,7 +6,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from backend.app.brokers.models import BrokerOrderResult, BrokerPositionSnapshot
+from backend.app.brokers.models import BrokerOpenOrderSnapshot
 from backend.app.domain._base import utc_now
 from backend.app.orders.ledger import OrderLedger
 
@@ -180,7 +180,7 @@ class ControlPlane:
             scope=scope,
         )
 
-    def _in_scope(self, broker_order: BrokerOrderResult, *, scope: str, deployment_id: UUID | None) -> bool:
+    def _in_scope(self, broker_order: BrokerOpenOrderSnapshot, *, scope: str, deployment_id: UUID | None) -> bool:
         if scope in {CancellationScope.GLOBAL.value, CancellationScope.ACCOUNT.value}:
             return True
         if scope != CancellationScope.DEPLOYMENT.value:

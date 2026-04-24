@@ -15,6 +15,7 @@ from .models import (
     BrokerAccountMode,
     BrokerAccountSnapshot,
     BrokerAdapterError,
+    BrokerOpenOrderSnapshot,
     BrokerOrderResult,
     BrokerOrderStatus,
     BrokerPositionSide,
@@ -126,19 +127,17 @@ class AlpacaBrokerAdapter:
             raise self._normalize_exception(exc) from exc
         return self.order_response_to_result(order=order, response=self._response_to_dict(response))
 
-    def list_open_orders(self, account_id: UUID) -> tuple[BrokerOrderResult, ...]:
-        _ = account_id
+    def list_open_orders(self, account_id: UUID) -> tuple[BrokerOpenOrderSnapshot, ...]:
         try:
             responses = self._client.get_orders()
         except Exception as exc:  # noqa: BLE001
             raise self._normalize_exception(exc) from exc
-        results: list[BrokerOrderResult] = []
+        results: list[BrokerOpenOrderSnapshot] = []
         for response in responses:
             payload = self._response_to_dict(response)
             if str(payload.get("status", "")).lower() not in {"new", "accepted", "pending_new", "partially_filled"}:
                 continue
-            order = self._synthetic_order_from_response(payload, account_id=account_id)
-            results.append(self.order_response_to_result(order=order, response=payload))
+            results.append(self.open_order_response_to_snapshot(account_id=account_id, response=payload))
         return tuple(results)
 
     def get_account_snapshot(self, account_id: UUID) -> BrokerAccountSnapshot:
@@ -289,13 +288,15 @@ class AlpacaBrokerAdapter:
             provider=self.provider,
             mode=self.mode,
             buying_power=self._float(response.get("buying_power"), default=0),
+            daytrading_buying_power=self._float(response.get("daytrading_buying_power"), default=0),
             cash=self._float(response.get("cash"), default=0),
             equity=self._float(response.get("equity"), default=0),
             trading_blocked=bool(response.get("trading_blocked", False)),
             account_blocked=bool(response.get("account_blocked", False)),
-            pattern_day_trader=bool(response.get("pattern_day_trader", False)),
+            is_pattern_day_trader=bool(response.get("pattern_day_trader", False)),
+            account_status=str(response.get("status", "unknown")),
             shorting_enabled=bool(response.get("shorting_enabled", False)),
-            last_synced_at=utc_now(),
+            timestamp=utc_now(),
         )
 
     def position_response_to_snapshot(self, *, account_id: UUID, response: dict[str, Any]) -> BrokerPositionSnapshot:
@@ -304,11 +305,28 @@ class AlpacaBrokerAdapter:
         return BrokerPositionSnapshot(
             account_id=account_id,
             symbol=str(response["symbol"]).upper(),
-            quantity=quantity,
+            qty=quantity,
             market_value=self._float(response.get("market_value"), default=0),
             avg_entry_price=self._float(response.get("avg_entry_price"), default=0),
             side=side,
-            last_synced_at=utc_now(),
+            unrealized_pl=self._float(response.get("unrealized_pl"), default=0),
+            timestamp=utc_now(),
+        )
+
+    def open_order_response_to_snapshot(self, *, account_id: UUID, response: dict[str, Any]) -> BrokerOpenOrderSnapshot:
+        return BrokerOpenOrderSnapshot(
+            account_id=account_id,
+            broker_order_id=str(response.get("id") or ""),
+            client_order_id=str(response.get("client_order_id") or ""),
+            symbol=str(response.get("symbol", "UNKNOWN")).upper(),
+            side=str(response.get("side", "unknown")).lower(),
+            qty=self._float(response.get("qty"), default=0),
+            filled_qty=self._float(response.get("filled_qty"), default=0),
+            status=self.normalize_status(response.get("status", "")),
+            order_type=str(response.get("type", "unknown")).lower(),
+            limit_price=self._optional_float(response.get("limit_price")),
+            stop_price=self._optional_float(response.get("stop_price")),
+            timestamp=self._optional_datetime(response.get("updated_at")) or utc_now(),
         )
 
     def _build_trading_client(self, *, load_env: bool) -> Any:
@@ -388,14 +406,21 @@ class AlpacaBrokerAdapter:
             "buying_power",
             "cash",
             "equity",
+            "daytrading_buying_power",
+            "status",
             "trading_blocked",
             "account_blocked",
             "pattern_day_trader",
             "shorting_enabled",
             "symbol",
+            "side",
             "qty",
+            "type",
+            "limit_price",
+            "stop_price",
             "market_value",
             "avg_entry_price",
+            "unrealized_pl",
             "is_open",
             "next_open",
             "next_close",

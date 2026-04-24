@@ -1582,3 +1582,70 @@ Architecture confirmations:
 - Protective exits are not canceled by the control-plane cancellation sweep.
 - Unknown broker orders are preserved and flagged, not canceled blindly.
 - Docs were updated with this verification entry.
+
+## 2026-04-24 - Broker Sync Truth Hardening
+
+Implemented read-only broker truth normalization and reconciliation hardening for account state, positions, and open orders.
+
+Files created:
+
+- None
+
+Files modified:
+
+- `backend/app/brokers/__init__.py`
+- `backend/app/brokers/adapter.py`
+- `backend/app/brokers/alpaca.py`
+- `backend/app/brokers/fake.py`
+- `backend/app/brokers/models.py`
+- `backend/app/brokers/sync.py`
+- `backend/app/control_plane/service.py`
+- `backend/tests/unit/brokers/test_alpaca_broker_adapter.py`
+- `backend/tests/unit/brokers/test_broker_interface_expansion.py`
+- `backend/tests/unit/brokers/test_broker_sync_reconciliation.py`
+- `docs/system_rebuild_outputs/IMPLEMENTATION_LOG.md`
+
+Scope implemented:
+
+- normalized `BrokerAccountSnapshot` with account equity, cash, buying power, daytrading buying power, PDT flag, trading block flag, status, and timestamp
+- normalized `BrokerPositionSnapshot` with account, symbol, quantity, side, average entry, market value, unrealized P/L, and timestamp
+- new normalized `BrokerOpenOrderSnapshot`
+- read-only BrokerAdapter contract for account snapshot, positions, and open orders
+- Alpaca paper adapter normalization for account, position, and open-order snapshots
+- fake broker read-only snapshot support for tests
+- explicit `BrokerSyncState` with configurable stale detection
+- `BrokerSyncService` for read/reconcile-only broker truth flow
+- reconciliation result fields for matched orders, unmatched broker orders, unmatched internal orders, position deltas, and sync status
+- detection for missing broker orders, orphan broker orders, mismatched fills, stale sync, and position deltas
+- broker-derived internal order updates still flow through `BrokerSync.apply_result`
+
+Tests run:
+
+- `python -m pytest backend/tests/unit/brokers -q`
+- `python -m pytest backend/tests/unit/orders -q`
+- `python -m pytest backend/tests/unit/governor -q`
+- `python -m pytest backend/tests/unit/pipeline -q`
+- `python -m pytest backend/tests -q`
+
+Test results:
+
+- Brokers tests: `40 passed`
+- Orders tests: `8 passed`
+- Governor tests: `9 passed`
+- Pipeline tests: `10 passed`
+- Full backend suite: `270 passed`
+
+Issues fixed:
+
+- Updated existing broker tests to assert normalized open-order snapshots instead of broker order results from `list_open_orders`.
+- Routed reconciliation through `BrokerSyncService` while preserving `BrokerSync` as the writer for broker-derived order status updates.
+
+Architecture confirmations:
+
+- No core engines were modified.
+- FeatureEngine, SignalEngine, StrategyControls, Risk, ExecutionStyle, PortfolioGovernor decision logic, and OrderManager behavior were not changed.
+- No duplicate responsibility was introduced.
+- BrokerAdapter remains policy-free and performs read/translation only.
+- BrokerSyncService performs reconciliation only and does not submit orders, cancel orders, create internal orders, or modify Governor decisions.
+- Execution pipeline behavior was not changed.
+- Docs were updated with this implementation entry.

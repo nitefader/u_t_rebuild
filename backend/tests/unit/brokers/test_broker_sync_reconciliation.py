@@ -7,12 +7,14 @@ from backend.app.brokers import (
     BrokerAccountMode,
     BrokerAccountSnapshot,
     BrokerAdapterError,
+    BrokerOpenOrderSnapshot,
     BrokerOrderResult,
     BrokerOrderStatus,
     BrokerPositionSide,
     BrokerPositionSnapshot,
     BrokerReconciliationIssueType,
     BrokerSync,
+    BrokerSyncService,
 )
 from backend.app.domain import CandidateSide, IntentType, OrderType, TimeInForce
 from backend.app.governor import BrokerSyncFreshness, GovernorRequest, PortfolioGovernor, PortfolioSnapshot
@@ -31,7 +33,7 @@ class ReconciliationAdapter:
         *,
         account_snapshot: BrokerAccountSnapshot | None = None,
         order_results_by_client_id: dict[str, BrokerOrderResult] | None = None,
-        open_orders: tuple[BrokerOrderResult, ...] = (),
+        open_orders: tuple[BrokerOpenOrderSnapshot, ...] = (),
         positions: tuple[BrokerPositionSnapshot, ...] = (),
         missing_client_order_ids: set[str] | None = None,
     ) -> None:
@@ -58,7 +60,7 @@ class ReconciliationAdapter:
             raise BrokerAdapterError("missing broker order")
         return self.order_results_by_client_id.get(order.client_order_id, _result(order, BrokerOrderStatus.ACCEPTED))
 
-    def list_open_orders(self, account_id: UUID) -> tuple[BrokerOrderResult, ...]:
+    def list_open_orders(self, account_id: UUID) -> tuple[BrokerOpenOrderSnapshot, ...]:
         assert account_id == ACCOUNT_ID
         return self.open_orders
 
@@ -111,20 +113,23 @@ def _result(order: InternalOrder, status: BrokerOrderStatus) -> BrokerOrderResul
     )
 
 
-def _external_result(*, client_order_id: str = "external-client-order") -> BrokerOrderResult:
-    return BrokerOrderResult(
-        order_id=uuid4(),
-        client_order_id=client_order_id,
-        status=BrokerOrderStatus.ACCEPTED,
+def _external_snapshot(*, client_order_id: str = "external-client-order") -> BrokerOpenOrderSnapshot:
+    return BrokerOpenOrderSnapshot(
+        account_id=ACCOUNT_ID,
         broker_order_id="external-broker-order",
-        broker_status="new",
-        raw_status="new",
+        client_order_id=client_order_id,
+        symbol="SPY",
+        side="buy",
+        qty=1,
+        filled_qty=0,
+        status=BrokerOrderStatus.ACCEPTED,
+        order_type="market",
     )
 
 
 def test_missing_local_order_flagged() -> None:
     manager = OrderManager()
-    adapter = ReconciliationAdapter(open_orders=(_external_result(),))
+    adapter = ReconciliationAdapter(open_orders=(_external_snapshot(),))
 
     report = BrokerSync(ledger=manager.ledger, adapter=adapter).reconcile(ACCOUNT_ID)
 
@@ -155,6 +160,28 @@ def test_filled_order_reconciles() -> None:
     assert report.updated_order_count == 1
     assert updated.status == InternalOrderStatus.FILLED
     assert updated.filled_quantity == order.quantity
+
+
+def test_reconciliation_reports_mismatched_fill_quantities() -> None:
+    manager, order = _manager_and_order()
+    broker_result = BrokerOrderResult(
+        order_id=order.order_id,
+        client_order_id=order.client_order_id,
+        status=BrokerOrderStatus.PARTIAL_FILL,
+        broker_order_id=f"broker-{order.client_order_id}",
+        broker_status="partially_filled",
+        filled_quantity=4,
+        remaining_quantity=6,
+        raw_status="partially_filled",
+    )
+    adapter = ReconciliationAdapter(order_results_by_client_id={order.client_order_id: broker_result})
+
+    report = BrokerSync(ledger=manager.ledger, adapter=adapter).reconcile(ACCOUNT_ID)
+
+    issue = next(issue for issue in report.issues if issue.issue_type == BrokerReconciliationIssueType.MISMATCHED_FILL)
+    assert issue.client_order_id == order.client_order_id
+    assert issue.expected == 0
+    assert issue.actual == 4
 
 
 def test_rejected_order_reconciles() -> None:
@@ -226,9 +253,57 @@ def test_stale_sync_blocks_opens() -> None:
     assert decision.reason == "broker_sync_stale"
 
 
+def test_broker_sync_state_marks_fresh_and_stale_explicitly() -> None:
+    manager = OrderManager()
+    fresh_snapshot = BrokerAccountSnapshot(
+        account_id=ACCOUNT_ID,
+        buying_power=100_000,
+        cash=100_000,
+        equity=100_000,
+        timestamp=datetime.now(timezone.utc),
+    )
+    stale_snapshot = fresh_snapshot.model_copy(update={"timestamp": datetime.now(timezone.utc) - timedelta(minutes=1)})
+    service = BrokerSyncService(
+        adapter=ReconciliationAdapter(account_snapshot=fresh_snapshot),
+        broker_sync=BrokerSync(ledger=manager.ledger),
+        order_ledger=manager.ledger,
+        max_stale_seconds=10,
+    )
+
+    assert service.sync_state(fresh_snapshot).is_stale is False
+    stale_state = service.sync_state(stale_snapshot)
+    assert stale_state.is_stale is True
+    assert stale_state.stale_reason == "broker_snapshot_age_exceeded_10s"
+
+
+def test_broker_sync_service_writes_order_updates_only_through_broker_sync() -> None:
+    class RecordingBrokerSync(BrokerSync):
+        def __init__(self, *, ledger):
+            super().__init__(ledger=ledger)
+            self.applied_client_order_ids: list[str] = []
+
+        def apply_result(self, result: BrokerOrderResult):
+            self.applied_client_order_ids.append(result.client_order_id)
+            return super().apply_result(result)
+
+    manager, order = _manager_and_order()
+    broker_result = _result(order, BrokerOrderStatus.ACCEPTED)
+    recording_sync = RecordingBrokerSync(ledger=manager.ledger)
+    service = BrokerSyncService(
+        adapter=ReconciliationAdapter(order_results_by_client_id={order.client_order_id: broker_result}),
+        broker_sync=recording_sync,
+        order_ledger=manager.ledger,
+    )
+
+    report = service.reconcile(ACCOUNT_ID)
+
+    assert report.matched_orders == (order.client_order_id,)
+    assert recording_sync.applied_client_order_ids == [order.client_order_id]
+
+
 def test_unknown_order_intent_preserved_and_flagged() -> None:
     manager = OrderManager()
-    external = _external_result(client_order_id="unknown-external-intent")
+    external = _external_snapshot(client_order_id="unknown-external-intent")
     adapter = ReconciliationAdapter(open_orders=(external,))
 
     report = BrokerSync(ledger=manager.ledger, adapter=adapter).reconcile(ACCOUNT_ID)

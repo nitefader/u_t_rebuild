@@ -13,6 +13,7 @@ from backend.app.brokers import (
     AlpacaBrokerError,
     BrokerAccountMode,
     BrokerAdapter,
+    BrokerOpenOrderSnapshot,
     BrokerOrderStatus,
     BrokerPositionSide,
 )
@@ -212,6 +213,36 @@ def test_position_snapshot_normalization_works() -> None:
     assert short_snapshot.symbol == "QQQ"
     assert short_snapshot.side == BrokerPositionSide.SHORT
     assert short_snapshot.quantity == -5
+
+
+def test_open_order_snapshot_normalization_works() -> None:
+    snapshot = _adapter().open_order_response_to_snapshot(
+        account_id=ACCOUNT_ID,
+        response={
+            "id": "alpaca-order-1",
+            "client_order_id": "client-1",
+            "symbol": "spy",
+            "side": "buy",
+            "qty": "10",
+            "filled_qty": "2",
+            "status": "partially_filled",
+            "type": "limit",
+            "limit_price": "101.25",
+            "stop_price": None,
+            "updated_at": "2026-01-02T14:31:00Z",
+        },
+    )
+
+    assert isinstance(snapshot, BrokerOpenOrderSnapshot)
+    assert snapshot.account_id == ACCOUNT_ID
+    assert snapshot.broker_order_id == "alpaca-order-1"
+    assert snapshot.client_order_id == "client-1"
+    assert snapshot.symbol == "SPY"
+    assert snapshot.status == BrokerOrderStatus.PARTIAL_FILL
+    assert snapshot.qty == 10
+    assert snapshot.filled_qty == 2
+    assert snapshot.order_type == "limit"
+    assert snapshot.limit_price == 101.25
 
 
 def test_adapter_cannot_create_internal_orders() -> None:

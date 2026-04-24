@@ -10,6 +10,7 @@ from backend.app.brokers import (
     BrokerAccountMode,
     BrokerAccountSnapshot,
     BrokerAdapterError,
+    BrokerOpenOrderSnapshot,
     BrokerOrderMapping,
     BrokerOrderResult,
     BrokerOrderStatus,
@@ -80,7 +81,12 @@ def test_fake_broker_adapter_supports_expanded_protocol() -> None:
     submitted = adapter.submit_order(order)
 
     assert adapter.get_order(order) == submitted
-    assert adapter.list_open_orders(ACCOUNT_ID) == (submitted,)
+    open_order = adapter.list_open_orders(ACCOUNT_ID)[0]
+    assert isinstance(open_order, BrokerOpenOrderSnapshot)
+    assert open_order.client_order_id == submitted.client_order_id
+    assert open_order.broker_order_id == submitted.broker_order_id
+    assert open_order.symbol == "SPY"
+    assert open_order.qty == order.quantity
     assert adapter.get_account_snapshot(ACCOUNT_ID) == account_snapshot
     assert adapter.get_positions(ACCOUNT_ID) == (position,)
     assert BrokerSync(ledger=manager.ledger, adapter=adapter).sync_open_orders(ACCOUNT_ID)[0].status == InternalOrderStatus.ACCEPTED
