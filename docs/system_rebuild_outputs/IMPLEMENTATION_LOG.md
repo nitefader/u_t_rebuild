@@ -2533,3 +2533,73 @@ Test results:
 - Compile: passed
 - Operations Center tests: `8 passed`
 - Full backend suite: `359 passed`
+
+## 2026-04-24 16:13 ET - Operations Center API Routes
+
+Files created:
+
+- `backend/app/api/__init__.py`
+- `backend/app/api/routes/__init__.py`
+- `backend/app/api/routes/operations.py`
+- `backend/tests/unit/api/test_operations_routes.py`
+
+Files updated:
+
+- `backend/app/control_plane/client_order_id.py`
+- `backend/app/operations/__init__.py`
+- `backend/app/operations/service.py`
+- `docs/system_rebuild_outputs/IMPLEMENTATION_LOG.md`
+
+Implementation:
+
+- Added backend API route contracts for Operations Center runtime visibility:
+  - `GET /api/v1/operations/overview`
+  - `GET /api/v1/operations/accounts/{account_id}`
+  - `GET /api/v1/operations/deployments/{deployment_id}`
+- Added backend API route contracts for Operations Center controls:
+  - `POST /api/v1/operations/deployments/{deployment_id}/pause`
+  - `POST /api/v1/operations/deployments/{deployment_id}/resume`
+  - `POST /api/v1/operations/accounts/{account_id}/pause`
+  - `POST /api/v1/operations/accounts/{account_id}/resume`
+  - `POST /api/v1/operations/global/kill`
+  - `POST /api/v1/operations/global/resume`
+- Added backend API flatten contract routes:
+  - `POST /api/v1/operations/accounts/{account_id}/flatten`
+  - `POST /api/v1/operations/deployments/{deployment_id}/flatten`
+- Added explicit response models for overview, account operations, deployment operations, control acknowledgements, operator-readable route errors, and flatten request responses.
+- Kept the route module import-safe without requiring a web framework dependency in the current unit environment; if FastAPI is installed, the same module exposes a normal `APIRouter`.
+- Made Operations package service export lazy and removed an eager enum import from `client_order_id` to prevent API route imports from triggering a control/order import cycle.
+
+Control delegation model:
+
+- API routes delegate read/control requests to `OperationsCenterService`.
+- `OperationsCenterService` remains the only route-facing orchestration layer.
+- `OperationsCenterService` delegates kill, pause, resume, and flatten readiness only to `ControlPlane`.
+- Routes do not implement policy, trading behavior, broker reconciliation, or order lifecycle behavior.
+
+Unsupported flatten behavior:
+
+- Flatten routes return the `FlattenRequestResponse` from `OperationsCenterService`.
+- With the current `ControlPlane` contract, flatten returns `accepted=false`, `status=unsupported_not_ready`, and `reason=flatten_not_implemented_in_control_plane`.
+- No broker calls are made by API routes for flatten requests.
+
+Scope kept out:
+
+- No frontend.
+- No new trading behavior.
+- No direct Alpaca or broker adapter calls from API routes.
+- No order creation from API routes.
+- No broker truth mutation from API routes.
+- No FeatureEngine or SignalEngine changes.
+
+Tests run:
+
+- `python -m compileall -q backend/app backend/tests`
+- `python -m pytest backend/tests/unit/api/test_operations_routes.py -q`
+- `python -m pytest backend/tests -q`
+
+Test results:
+
+- Compile: passed
+- Operations API route tests: `10 passed`
+- Full backend suite: `369 passed`

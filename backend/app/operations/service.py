@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from datetime import datetime
+from typing import TYPE_CHECKING
 from uuid import UUID
 
-from backend.app.control_plane.service import ControlPlane
 from backend.app.governor.models import GovernorDecision, GovernorPolicy
 from backend.app.orders.ledger import OrderLedger
 from backend.app.orders.models import InternalOrder
@@ -23,6 +23,9 @@ from .models import (
     TERMINAL_ORDER_STATUSES,
 )
 
+if TYPE_CHECKING:
+    from backend.app.control_plane.service import ControlPlane
+
 
 class OperationsCenterService:
     """Read/control orchestration for broker-paper operations.
@@ -35,7 +38,7 @@ class OperationsCenterService:
     def __init__(
         self,
         *,
-        control_plane: ControlPlane,
+        control_plane: "ControlPlane",
         runtime_store: object | None = None,
         order_ledger: OrderLedger | None = None,
         broker_sync_reader: object | None = None,

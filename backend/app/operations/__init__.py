@@ -9,7 +9,16 @@ from .models import (
     InternalOrderLedgerSummary,
     RuntimeOverview,
 )
-from .service import OperationsCenterService
+
+_SERVICE_EXPORTS = {"OperationsCenterService"}
+
+
+def __getattr__(name: str):
+    if name in _SERVICE_EXPORTS:
+        from . import service
+
+        return getattr(service, name)
+    raise AttributeError(name)
 
 __all__ = [
     "AccountOperations",
