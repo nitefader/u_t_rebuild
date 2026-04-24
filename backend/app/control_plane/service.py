@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 from datetime import datetime
 from enum import StrEnum
 from uuid import UUID
@@ -164,7 +165,7 @@ class ControlPlane:
                 continue
             if not dry_run:
                 try:
-                    broker_adapter.cancel_order(broker_order.client_order_id)
+                    self._cancel_broker_order(broker_adapter, local_order)
                 except Exception as exc:  # noqa: BLE001 - cancellation boundary should return errors, not explode.
                     errors.append(f"{broker_order.client_order_id}: {exc}")
                     continue
@@ -188,6 +189,13 @@ class ControlPlane:
         if deployment_id is None:
             raise ValueError("deployment scope requires deployment_id")
         return parse_order_deployment_id(broker_order.client_order_id) == deployment_id.hex[:8]
+
+    def _cancel_broker_order(self, broker_adapter, local_order) -> None:
+        parameter = next(iter(inspect.signature(broker_adapter.cancel_order).parameters.values()), None)
+        if parameter is not None and parameter.name == "client_order_id":
+            broker_adapter.cancel_order(local_order.client_order_id)
+            return
+        broker_adapter.cancel_order(local_order)
 
 
 def hydrate_control_plane(

@@ -91,6 +91,20 @@ def test_filled_result_closes_order_lifecycle() -> None:
     assert updated.filled_quantity == order.quantity
 
 
+def test_cancel_result_updates_ledger_cancel_state() -> None:
+    manager, order = _order_manager_and_order()
+    adapter = FakeBrokerAdapter([BrokerOrderStatus.ACCEPTED])
+    adapter.submit_order(order)
+    result = adapter.cancel_order(order)
+
+    updated = BrokerSync(ledger=manager.ledger).apply_result(result)
+
+    assert updated.status == InternalOrderStatus.CANCELED
+    assert updated.canceled_at is not None
+    assert updated.filled_quantity == 0
+    assert adapter.canceled_broker_order_ids == [f"fake-broker-{order.client_order_id}"]
+
+
 def test_attribution_remains_intact() -> None:
     manager, order = _order_manager_and_order()
     result = FakeBrokerAdapter([BrokerOrderStatus.FILLED]).submit_order(order)
@@ -123,3 +137,9 @@ def test_no_real_broker_calls() -> None:
 
     for forbidden in ["alpaca", "requests", "httpx", "websocket"]:
         assert forbidden not in source.lower()
+
+
+def test_fake_adapter_lifecycle_methods_do_not_create_internal_orders() -> None:
+    source = inspect.getsource(fake_module)
+
+    assert "InternalOrder(" not in source

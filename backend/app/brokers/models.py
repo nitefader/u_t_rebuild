@@ -60,6 +60,7 @@ class BrokerOrderResult(BaseModel):
     submitted_at: datetime | None = None
     updated_at: datetime | None = None
     filled_at: datetime | None = None
+    canceled_at: datetime | None = None
     reject_code: str | None = None
     raw_status: str | None = None
     broker_reference: str | None = None

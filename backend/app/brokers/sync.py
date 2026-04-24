@@ -42,6 +42,7 @@ class BrokerSync:
             update={
                 "status": status,
                 "filled_quantity": filled_quantity,
+                "canceled_at": result.canceled_at or (result.received_at if status == InternalOrderStatus.CANCELED else order.canceled_at),
                 "updated_at": result.received_at,
                 "reason": result.reason if result.reason is not None else order.reason,
             }

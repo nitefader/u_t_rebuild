@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Protocol, runtime_checkable
 from uuid import UUID
 
@@ -22,6 +23,15 @@ class BrokerAdapter(Protocol):
 
     def get_order(self, order: InternalOrder) -> BrokerOrderResult:
         """Fetch broker truth for an already-created internal order."""
+
+    def cancel_order(self, order: InternalOrder) -> BrokerOrderResult:
+        """Cancel an existing broker order by broker_order_id."""
+
+    def cancel_orders(self, account_id: UUID, scope: str) -> tuple[BrokerOrderResult, ...]:
+        """Cancel broker orders in the already selected broker-side scope."""
+
+    def replace_order(self, order: InternalOrder, new_params: Mapping[str, object]) -> BrokerOrderResult:
+        """Replace an existing broker order by broker_order_id."""
 
     def list_open_orders(self, account_id: UUID) -> tuple[BrokerOpenOrderSnapshot, ...]:
         """Fetch open broker orders for an account."""

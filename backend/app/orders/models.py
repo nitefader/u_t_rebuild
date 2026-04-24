@@ -57,6 +57,10 @@ class InternalOrder(BaseModel):
     status: InternalOrderStatus
     created_at: datetime
     updated_at: datetime
+    cancel_requested_at: datetime | None = None
+    canceled_at: datetime | None = None
+    replaced_by_order_id: UUID | None = None
+    replaces_order_id: UUID | None = None
     signal_name: str | None = None
     reason: str | None = None
 

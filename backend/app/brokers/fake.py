@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections import deque
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from uuid import UUID
 
 from backend.app.orders import InternalOrder
@@ -35,6 +35,8 @@ class FakeBrokerAdapter:
         self._results_by_order_id: dict[UUID, BrokerOrderResult] = {}
         self.submitted_orders: list[InternalOrder] = []
         self.canceled_client_order_ids: list[str] = []
+        self.canceled_broker_order_ids: list[str] = []
+        self.replaced_broker_order_ids: list[str] = []
 
     def submit_order(self, order: InternalOrder) -> BrokerOrderResult:
         if not isinstance(order, InternalOrder):
@@ -57,6 +59,56 @@ class FakeBrokerAdapter:
             return self._results_by_order_id[order.order_id]
         except KeyError as exc:
             raise BrokerAdapterError(f"fake broker has no order result for {order.order_id}") from exc
+
+    def cancel_order(self, order: InternalOrder) -> BrokerOrderResult:
+        if not isinstance(order, InternalOrder):
+            raise BrokerAdapterError("broker adapter requires an already-created InternalOrder")
+        current = self.get_order(order)
+        if not current.broker_order_id:
+            raise BrokerAdapterError("cancel requires broker_order_id")
+        self.canceled_broker_order_ids.append(current.broker_order_id)
+        self.canceled_client_order_ids.append(order.client_order_id)
+        result = current.model_copy(
+            update={
+                "status": BrokerOrderStatus.CANCELED,
+                "broker_status": BrokerOrderStatus.CANCELED.value,
+                "remaining_quantity": max(order.quantity - current.filled_quantity, 0),
+                "canceled_at": current.received_at,
+                "raw_status": BrokerOrderStatus.CANCELED.value,
+            }
+        )
+        self._results_by_order_id[order.order_id] = result
+        return result
+
+    def cancel_orders(self, account_id: UUID, scope: str) -> tuple[BrokerOrderResult, ...]:
+        _ = scope
+        results: list[BrokerOrderResult] = []
+        open_order_ids = {
+            snapshot.client_order_id
+            for snapshot in self.list_open_orders(account_id)
+        }
+        for order in self.submitted_orders:
+            if order.account_id == account_id and order.client_order_id in open_order_ids:
+                results.append(self.cancel_order(order))
+        return tuple(results)
+
+    def replace_order(self, order: InternalOrder, new_params: Mapping[str, object]) -> BrokerOrderResult:
+        if not isinstance(order, InternalOrder):
+            raise BrokerAdapterError("broker adapter requires an already-created InternalOrder")
+        _ = dict(new_params)
+        current = self.get_order(order)
+        if not current.broker_order_id:
+            raise BrokerAdapterError("replace requires broker_order_id")
+        self.replaced_broker_order_ids.append(current.broker_order_id)
+        result = current.model_copy(
+            update={
+                "status": BrokerOrderStatus.ACCEPTED,
+                "broker_status": BrokerOrderStatus.ACCEPTED.value,
+                "raw_status": BrokerOrderStatus.ACCEPTED.value,
+            }
+        )
+        self._results_by_order_id[order.order_id] = result
+        return result
 
     def list_open_orders(self, account_id: UUID) -> tuple[BrokerOpenOrderSnapshot, ...]:
         if account_id in self._open_orders_by_account:
@@ -89,7 +141,7 @@ class FakeBrokerAdapter:
     def get_positions(self, account_id: UUID) -> tuple[BrokerPositionSnapshot, ...]:
         return self._positions_by_account.get(account_id, ())
 
-    def cancel_order(self, client_order_id: str) -> None:
+    def cancel_client_order_id(self, client_order_id: str) -> None:
         self.canceled_client_order_ids.append(client_order_id)
 
     def _snapshot_from_result(self, result: BrokerOrderResult, *, account_id: UUID) -> BrokerOpenOrderSnapshot:

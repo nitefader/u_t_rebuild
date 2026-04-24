@@ -7,6 +7,7 @@ from uuid import UUID, uuid4
 
 import pytest
 
+from backend.app.brokers import BrokerPositionSide, BrokerPositionSnapshot
 from backend.app.domain import CandidateSide, IntentType, OrderType, TimeInForce
 from backend.app.orders import InternalOrderIntent, InternalOrderStatus, OrderLedger, OrderManager, OrderManagerError
 from backend.app.runtime import ExecutionIntent
@@ -159,3 +160,116 @@ def test_no_external_calls() -> None:
 
     for forbidden in ["alpaca", "requests", "httpx", "websocket", "submit_order"]:
         assert forbidden not in source.lower()
+
+
+def test_request_cancel_marks_open_order_without_position() -> None:
+    manager = OrderManager()
+    order = manager.create_order(account_id=ACCOUNT_ID, execution_intent=_execution_intent())
+
+    canceled = manager.request_cancel(order.order_id)
+
+    assert canceled.cancel_requested_at is not None
+    assert canceled.status == InternalOrderStatus.CREATED
+
+
+def test_request_cancel_preserves_protective_order() -> None:
+    manager = OrderManager()
+    order = manager.create_order(
+        account_id=ACCOUNT_ID,
+        execution_intent=_execution_intent(),
+        order_intent=InternalOrderIntent.STOP_LOSS,
+    )
+
+    skipped = manager.request_cancel(order.order_id)
+
+    assert skipped == order
+    assert manager.ledger.get(order.order_id).cancel_requested_at is None
+
+
+def test_request_cancel_preserves_open_order_with_backing_position() -> None:
+    class Adapter:
+        def get_positions(self, account_id):
+            return (
+                BrokerPositionSnapshot(
+                    account_id=account_id,
+                    symbol="SPY",
+                    quantity=10,
+                    market_value=1000,
+                    avg_entry_price=100,
+                    side=BrokerPositionSide.LONG,
+                ),
+            )
+
+    manager = OrderManager(broker_adapter=Adapter())
+    order = manager.create_order(account_id=ACCOUNT_ID, execution_intent=_execution_intent())
+
+    skipped = manager.request_cancel(order.order_id)
+
+    assert skipped == order
+
+
+def test_request_replace_updates_open_order_params() -> None:
+    manager = OrderManager()
+    order = manager.create_order(account_id=ACCOUNT_ID, execution_intent=_execution_intent())
+
+    replaced = manager.request_replace(order.order_id, {"limit_price": 101.25})
+
+    assert replaced.limit_price == 101.25
+    assert replaced.account_id == order.account_id
+    assert replaced.deployment_id == order.deployment_id
+    assert replaced.program_id == order.program_id
+    assert replaced.intent == InternalOrderIntent.OPEN
+
+
+def test_request_replace_rejects_filled_order() -> None:
+    manager = OrderManager()
+    order = manager.create_order(account_id=ACCOUNT_ID, execution_intent=_execution_intent())
+    manager.update_status(order_id=order.order_id, status=InternalOrderStatus.FILLED)
+
+    with pytest.raises(OrderManagerError):
+        manager.request_replace(order.order_id, {"limit_price": 101.25})
+
+
+def test_deployment_cancel_scope_does_not_affect_other_deployments() -> None:
+    manager = OrderManager()
+    other_deployment_id = uuid4()
+    target = manager.create_order(account_id=ACCOUNT_ID, execution_intent=_execution_intent(symbol="SPY"))
+    other = manager.create_order(
+        account_id=ACCOUNT_ID,
+        execution_intent=_execution_intent(deployment_id=other_deployment_id, symbol="QQQ"),
+    )
+
+    canceled = manager.request_cancel_scope(
+        account_id=ACCOUNT_ID,
+        deployment_id=DEPLOYMENT_ID,
+        scope="deployment",
+    )
+
+    assert canceled == (manager.ledger.get(target.order_id),)
+    assert manager.ledger.get(target.order_id).cancel_requested_at is not None
+    assert manager.ledger.get(other.order_id).cancel_requested_at is None
+
+
+def test_account_cancel_scope_affects_all_deployments_on_account() -> None:
+    manager = OrderManager()
+    other_deployment_id = uuid4()
+    first = manager.create_order(account_id=ACCOUNT_ID, execution_intent=_execution_intent(symbol="SPY"))
+    second = manager.create_order(
+        account_id=ACCOUNT_ID,
+        execution_intent=_execution_intent(deployment_id=other_deployment_id, symbol="QQQ"),
+    )
+
+    canceled = manager.request_cancel_scope(account_id=ACCOUNT_ID, scope="account")
+
+    assert {order.order_id for order in canceled} == {first.order_id, second.order_id}
+
+
+def test_global_cancel_scope_affects_all_accounts() -> None:
+    manager = OrderManager()
+    other_account_id = uuid4()
+    first = manager.create_order(account_id=ACCOUNT_ID, execution_intent=_execution_intent(symbol="SPY"))
+    second = manager.create_order(account_id=other_account_id, execution_intent=_execution_intent(symbol="QQQ"))
+
+    canceled = manager.request_cancel_scope(account_id=ACCOUNT_ID, scope="global")
+
+    assert {order.order_id for order in canceled} == {first.order_id, second.order_id}

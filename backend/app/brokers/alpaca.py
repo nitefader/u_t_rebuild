@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Mapping
 from datetime import datetime
 from typing import Any
 from uuid import UUID
@@ -123,6 +124,44 @@ class AlpacaBrokerAdapter:
         self._require_internal_order(order)
         try:
             response = self._client.get_order_by_client_id(order.client_order_id)
+        except Exception as exc:  # noqa: BLE001
+            raise self._normalize_exception(exc) from exc
+        return self.order_response_to_result(order=order, response=self._response_to_dict(response))
+
+    def cancel_order(self, order: InternalOrder) -> BrokerOrderResult:
+        self._require_internal_order(order)
+        current = self.get_order(order)
+        if not current.broker_order_id:
+            raise AlpacaBrokerError("missing_broker_order_id", "cancel requires broker_order_id")
+        try:
+            response = self._client.cancel_order_by_id(current.broker_order_id)
+        except Exception as exc:  # noqa: BLE001
+            raise self._normalize_exception(exc) from exc
+        payload = self._response_to_dict(response)
+        if not payload:
+            payload = {
+                "id": current.broker_order_id,
+                "client_order_id": order.client_order_id,
+                "status": "canceled",
+                "filled_qty": current.filled_quantity,
+                "canceled_at": utc_now(),
+            }
+        return self.order_response_to_result(order=order, response=payload)
+
+    def cancel_orders(self, account_id: UUID, scope: str) -> tuple[BrokerOrderResult, ...]:
+        _ = account_id, scope
+        raise AlpacaBrokerError(
+            "bulk_cancel_requires_internal_orders",
+            "Alpaca bulk cancellation is routed through OrderManager-selected InternalOrder objects",
+        )
+
+    def replace_order(self, order: InternalOrder, new_params: Mapping[str, object]) -> BrokerOrderResult:
+        self._require_internal_order(order)
+        current = self.get_order(order)
+        if not current.broker_order_id:
+            raise AlpacaBrokerError("missing_broker_order_id", "replace requires broker_order_id")
+        try:
+            response = self._client.replace_order_by_id(current.broker_order_id, **dict(new_params))
         except Exception as exc:  # noqa: BLE001
             raise self._normalize_exception(exc) from exc
         return self.order_response_to_result(order=order, response=self._response_to_dict(response))
@@ -277,6 +316,7 @@ class AlpacaBrokerAdapter:
             submitted_at=self._optional_datetime(response.get("submitted_at")),
             updated_at=self._optional_datetime(response.get("updated_at")),
             filled_at=self._optional_datetime(response.get("filled_at")),
+            canceled_at=self._optional_datetime(response.get("canceled_at")),
             reject_code=str(response["reject_code"]) if response.get("reject_code") is not None else None,
             raw_status=status_raw,
             broker_reference=str(response["id"]) if response.get("id") is not None else None,
@@ -400,6 +440,7 @@ class AlpacaBrokerAdapter:
             "submitted_at",
             "updated_at",
             "filled_at",
+            "canceled_at",
             "rejected_reason",
             "reject_reason",
             "reject_code",
@@ -427,25 +468,6 @@ class AlpacaBrokerAdapter:
             "timestamp",
         ]
         return {key: getattr(response, key) for key in keys if hasattr(response, key)}
-
-    def _synthetic_order_from_response(self, response: dict[str, Any], *, account_id: UUID) -> InternalOrder:
-        now = utc_now()
-        return InternalOrder(
-            order_id=UUID(int=0),
-            client_order_id=str(response["client_order_id"]),
-            account_id=account_id,
-            deployment_id=UUID(int=0),
-            program_id=UUID(int=0),
-            symbol=str(response.get("symbol", "UNKNOWN")).upper(),
-            side=CandidateSide.LONG,
-            quantity=self._float(response.get("qty"), default=self._float(response.get("filled_qty"), default=0) or 1),
-            order_type=OrderType.MARKET,
-            time_in_force="day",
-            intent="open",
-            status="created",
-            created_at=now,
-            updated_at=now,
-        )
 
     def _normalize_exception(self, exc: Exception) -> AlpacaBrokerError:
         message = str(exc)
