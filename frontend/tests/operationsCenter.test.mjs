@@ -8,6 +8,8 @@ import { createOperationsApi } from "../src/api/operations.js";
 import {
   executeOperationAction,
   renderAccountDetail,
+  renderDeploymentDetail,
+  renderDetailPanel,
   renderOperationsCenterOverview
 } from "../src/operationsCenter.js";
 
@@ -148,6 +150,63 @@ test("pause and resume deployment call correct API routes", async () => {
   assert.equal(calls[1][1], "POST");
 });
 
+test("account and deployment detail calls use Operations API routes", async () => {
+  const calls = [];
+  const api = createOperationsApi(async (url, options = {}) => {
+    calls.push([url, options.method || "GET"]);
+    return { ok: true, json: async () => ({}) };
+  });
+
+  await api.getAccount(accountId);
+  await api.getDeployment(deploymentId);
+
+  assert.deepEqual(calls, [
+    [`/api/v1/operations/accounts/${accountId}`, "GET"],
+    [`/api/v1/operations/deployments/${deploymentId}`, "GET"]
+  ]);
+});
+
+test("overview cards are clickable and selected account is highlighted", () => {
+  const html = renderOperationsCenterOverview(overview(), {
+    status: "loaded",
+    selection: { type: "account", id: accountId },
+    data: {
+      account_id: accountId,
+      is_paused: false,
+      is_killed: false,
+      broker_account_snapshot: null,
+      broker_sync_freshness: null,
+      open_broker_orders: [],
+      positions: [],
+      internal_order_ledger_summary: { open_count: 0 }
+    }
+  });
+
+  assert.match(html, new RegExp(`data-select-type="account" data-id="${accountId}"`));
+  assert.match(html, new RegExp(`data-select-type="deployment" data-id="${deploymentId}"`));
+  assert.match(html, /selected-card/);
+  assert.match(html, /Account Detail/);
+});
+
+test("detail panel never shows previous data while loading or erroring", () => {
+  const loading = renderDetailPanel({
+    status: "loading",
+    selection: { type: "deployment", id: deploymentId },
+    data: { deployment_id: deploymentId }
+  });
+  const failed = renderDetailPanel({
+    status: "error",
+    selection: { type: "account", id: accountId },
+    error: new Error("detail failed")
+  });
+
+  assert.match(loading, /Loading deployment detail/);
+  assert.doesNotMatch(loading, new RegExp(deploymentId));
+  assert.match(failed, /Detail unavailable/);
+  assert.match(failed, /No previous detail data is shown/);
+  assert.doesNotMatch(failed, /Account Detail/);
+});
+
 test("pause and resume account call correct API routes", async () => {
   const calls = [];
   const api = createOperationsApi(async (url, options = {}) => {
@@ -215,6 +274,69 @@ test("flatten unsupported/not_ready is displayed safely", () => {
   assert.match(html, /unsupported_not_ready/);
   assert.match(html, /flatten_not_implemented_in_control_plane/);
   assert.match(html, /warning/);
+});
+
+test("account detail renders snapshot, positions, open orders, freshness, and controls", () => {
+  const html = renderAccountDetail({
+    account_id: accountId,
+    is_paused: false,
+    is_killed: false,
+    broker_account_snapshot: {
+      account_id: accountId,
+      provider: "fake",
+      mode: "broker_paper",
+      equity: 100000,
+      cash: 40000,
+      buying_power: 80000,
+      timestamp: "2026-04-24T15:00:00Z"
+    },
+    broker_sync_freshness: {
+      account_id: accountId,
+      last_sync_at: "2026-04-24T15:00:00Z",
+      last_poll_sync_at: "2026-04-24T15:00:00Z",
+      last_successful_sync_at: "2026-04-24T15:00:00Z",
+      is_stale: false
+    },
+    open_broker_orders: [{ symbol: "SPY", side: "buy", qty: 10, status: "accepted" }],
+    positions: [{ symbol: "SPY", side: "long", qty: 10, market_value: 4000 }],
+    internal_order_ledger_summary: { open_count: 1 }
+  });
+
+  assert.match(html, /Provider/);
+  assert.match(html, /Positions/);
+  assert.match(html, /Open Orders/);
+  assert.match(html, /Last successful sync/);
+  assert.match(html, /data-action="pause-account"/);
+  assert.match(html, /data-action="resume-account"/);
+});
+
+test("deployment detail renders status, program, governor, orders, trades, fills, timestamps, and controls", () => {
+  const html = renderDeploymentDetail({
+    deployment_id: deploymentId,
+    runtime_status: "running",
+    program_id: "program-a",
+    program_version: 4,
+    broker_account_id: accountId,
+    governor_id: "portfolio-governor",
+    governor_state: { max_open_positions: 5 },
+    last_market_data_timestamp: "2026-04-24T15:00:00Z",
+    last_broker_sync_timestamp: "2026-04-24T15:01:00Z",
+    last_decision_timestamp: "2026-04-24T15:02:00Z",
+    open_orders: [{ symbol: "SPY", side: "long", quantity: 10, status: "accepted" }],
+    trades: [{ symbol: "SPY", side: "buy", qty: 1, price: 401 }],
+    fills: [{ symbol: "SPY", side: "buy", qty: 1, price: 401, broker_execution_id: "exec-1" }],
+    latest_governor_decisions: [{ approved: true, reason: "within limits", symbol: "SPY" }]
+  });
+
+  assert.match(html, /Runtime status/);
+  assert.match(html, /Program id/);
+  assert.match(html, /Governor state/);
+  assert.match(html, /Open Orders/);
+  assert.match(html, /Trades/);
+  assert.match(html, /Fills/);
+  assert.match(html, /Last market data/);
+  assert.match(html, /data-action="pause-deployment"/);
+  assert.match(html, /data-action="resume-deployment"/);
 });
 
 test("UI does not import broker, engine, or order internals", async () => {

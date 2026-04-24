@@ -2798,3 +2798,38 @@ Validation results:
 - Vite page probe: `GET /` returned `200`
 - Vite proxy probe: `GET /api/v1/operations/overview` returned `200` from the backend Operations API
 - Full backend suite: `375 passed, 1 skipped`
+
+## 2026-04-24 17:23 ET - Operations Center Detail View Navigation
+
+Files updated:
+
+- `frontend/src/operationsCenter.js`
+- `frontend/src/styles.css`
+- `frontend/tests/operationsCenter.test.mjs`
+- `docs/system_rebuild_outputs/IMPLEMENTATION_LOG.md`
+
+Implementation:
+
+- Added clickable Broker Account and Deployment cards with keyboard activation.
+- Added selected card highlighting and a clear detail option.
+- Added account/deployment detail panel state for empty, loading, loaded, and error views.
+- Cleared previous detail data before each detail fetch so stale or partial data is not shown silently.
+- Expanded Account Detail to show broker account snapshot, positions, open broker orders, sync freshness, and pause/resume controls.
+- Expanded Deployment Detail to show runtime status, program id/version, governor state, open orders, trades, fills, market/sync/decision timestamps, and pause/resume controls.
+
+Operations API usage:
+
+- Account selection calls `GET /api/v1/operations/accounts/{account_id}`.
+- Deployment selection calls `GET /api/v1/operations/deployments/{deployment_id}`.
+- Existing pause/resume and flatten controls continue to call only Operations API routes.
+
+Architecture preserved:
+
+- Frontend calls only Operations API routes.
+- No frontend imports or calls to BrokerAdapter, Alpaca, OrderManager, BrokerSync internals, FeatureEngine, or SignalEngine.
+
+Validation results:
+
+- `cd frontend; npm test`: `15 passed`; architecture check passed.
+- `cd frontend; npm run build`: Vite production build passed; architecture check passed.
+- `python -m pytest backend/tests/unit/api/test_operations_routes.py backend/tests/unit/operations/test_operations_center_service.py`: `18 passed`.

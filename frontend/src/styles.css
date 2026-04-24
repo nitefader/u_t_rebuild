@@ -33,6 +33,27 @@ button.danger {
   color: #8f2020;
 }
 
+.selectable-card {
+  cursor: pointer;
+}
+
+.selectable-card:hover,
+.selectable-card:focus {
+  border-color: #316b83;
+  box-shadow: 0 0 0 2px rgba(49, 107, 131, 0.16);
+  outline: none;
+}
+
+.selected-card {
+  border-color: #316b83;
+  border-left-color: #1d5d76;
+  background: #f1f9fc;
+}
+
+.selected-card.danger-card {
+  background: #fff4f2;
+}
+
 .top-nav {
   display: flex;
   align-items: center;
@@ -188,6 +209,53 @@ dd {
 
 .detail-grid {
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
+.detail-section {
+  margin-top: 18px;
+}
+
+.record-list {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+}
+
+.record-card {
+  border: 1px solid #e0e6e9;
+  border-radius: 8px;
+  padding: 12px;
+}
+
+pre {
+  margin: 0;
+  overflow: auto;
+  white-space: pre-wrap;
+}
+
+.detail-loading {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.detail-loading p {
+  margin: 0;
+}
+
+.spinner {
+  width: 20px;
+  height: 20px;
+  border: 3px solid #d6dee2;
+  border-top-color: #316b83;
+  border-radius: 50%;
+  animation: spin 0.9s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .status {
