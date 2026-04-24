@@ -1156,3 +1156,42 @@ Result:
 
 - Market-data tests: `7 passed`
 - Targeted backend unit slice: `232 passed`
+
+## 2026-04-24 - Stream Market Data Closed-Market Guard
+
+Fixed the market data stream check so a closed market is treated as an expected no-bar condition instead of a tool failure.
+
+Updated:
+
+- `tools/stream_market_data_check.py`
+- `backend/tests/unit/market_data/test_alpaca_market_data_adapter.py`
+
+Implemented:
+
+- stream check calls the existing `AlpacaBrokerAdapter.get_market_clock()` before subscribing
+- closed-market output: `Market closed. No bars expected.`
+- closed-market path exits `0`
+- closed-market path does not subscribe or collect bars
+- stream tool still submits no orders
+- stream tool still does not import or call `OrderManager`
+- runtime pipeline unchanged
+- broker adapter unchanged
+
+Scope kept out:
+
+- No order submission
+- No broker adapter changes
+- No runtime pipeline changes
+- No continuous unattended trading
+- No feature computation in market data
+
+Validation performed:
+
+- `python -m pytest backend\tests\unit\market_data -q`
+- `python -m pytest backend\tests\unit\market_data backend\tests\unit\tools backend\tests\unit\brokers backend\tests\unit\pipeline backend\tests\unit\governor backend\tests\unit\orders backend\tests\unit\runtime backend\tests\unit\simulation backend\tests\unit\chart_lab backend\tests\unit\decision backend\tests\unit\features backend\tests\unit\domain -q`
+- `python -m compileall -q tools backend\tests\unit\market_data`
+
+Result:
+
+- Market-data tests: `8 passed`
+- Targeted backend unit slice: `233 passed`

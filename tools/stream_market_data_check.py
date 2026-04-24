@@ -16,6 +16,7 @@ except ImportError:  # pragma: no cover
     def load_dotenv() -> bool:
         return False
 
+from backend.app.brokers import AlpacaBrokerAdapter
 from backend.app.market_data import AlpacaMarketDataAdapter, AlpacaMarketDataError, MarketDataSubscription
 
 
@@ -35,6 +36,10 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     try:
+        print("[stream_market_data_check] Checking Alpaca market clock", flush=True)
+        if not _market_is_open(AlpacaBrokerAdapter()):
+            print("Market closed. No bars expected.", flush=True)
+            return 0
         subscription = MarketDataSubscription(symbol=args.symbol, timeframe=args.timeframe, limit=args.limit)
         adapter = AlpacaMarketDataAdapter()
         print(
@@ -56,6 +61,11 @@ def _validate_environment() -> str | None:
     if not os.getenv("ALPACA_API_KEY") or not os.getenv("ALPACA_SECRET_KEY"):
         return "ALPACA_API_KEY and ALPACA_SECRET_KEY are required"
     return None
+
+
+def _market_is_open(adapter: AlpacaBrokerAdapter) -> bool:
+    clock = adapter.get_market_clock()
+    return bool(clock.get("is_open", False))
 
 
 def _bar_payload(bar) -> dict[str, object]:  # type: ignore[no-untyped-def]

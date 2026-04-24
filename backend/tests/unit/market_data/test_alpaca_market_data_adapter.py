@@ -93,9 +93,11 @@ def test_injected_bar_source_collects_normalized_bars_without_network() -> None:
 
 class FakeStreamToolAdapter:
     submit_count = 0
+    collect_count = 0
 
     def collect_bars_sync(self, *, subscription: MarketDataSubscription, timeout_seconds: float):
         _ = timeout_seconds
+        FakeStreamToolAdapter.collect_count += 1
         return (
             NormalizedBar(
                 symbol=subscription.symbol,
@@ -110,12 +112,24 @@ class FakeStreamToolAdapter:
         )
 
 
+class FakeClockAdapter:
+    market_is_open = True
+    submit_count = 0
+
+    def get_market_clock(self) -> dict[str, object]:
+        return {"is_open": FakeClockAdapter.market_is_open}
+
+
 def test_stream_tool_submits_no_orders(monkeypatch, capsys) -> None:  # type: ignore[no-untyped-def]
     monkeypatch.setenv("ALPACA_API_KEY", "key")
     monkeypatch.setenv("ALPACA_SECRET_KEY", "secret")
     monkeypatch.setattr(stream_check, "load_dotenv", lambda: False)
     monkeypatch.setattr(stream_check, "AlpacaMarketDataAdapter", FakeStreamToolAdapter)
+    monkeypatch.setattr(stream_check, "AlpacaBrokerAdapter", FakeClockAdapter)
     FakeStreamToolAdapter.submit_count = 0
+    FakeStreamToolAdapter.collect_count = 0
+    FakeClockAdapter.market_is_open = True
+    FakeClockAdapter.submit_count = 0
 
     code = stream_check.main(["--symbol", "SPY", "--limit", "1"])
 
@@ -123,7 +137,29 @@ def test_stream_tool_submits_no_orders(monkeypatch, capsys) -> None:  # type: ig
     assert code == 0
     assert '"orders_submitted": 0' in output
     assert FakeStreamToolAdapter.submit_count == 0
+    assert FakeStreamToolAdapter.collect_count == 1
+    assert FakeClockAdapter.submit_count == 0
     source = inspect.getsource(stream_check)
     assert "OrderManager" not in source
-    assert "AlpacaBrokerAdapter" not in source
     assert ".submit_order(" not in source
+
+
+def test_stream_tool_market_closed_exits_without_subscription(monkeypatch, capsys) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.setenv("ALPACA_API_KEY", "key")
+    monkeypatch.setenv("ALPACA_SECRET_KEY", "secret")
+    monkeypatch.setattr(stream_check, "load_dotenv", lambda: False)
+    monkeypatch.setattr(stream_check, "AlpacaMarketDataAdapter", FakeStreamToolAdapter)
+    monkeypatch.setattr(stream_check, "AlpacaBrokerAdapter", FakeClockAdapter)
+    FakeStreamToolAdapter.collect_count = 0
+    FakeStreamToolAdapter.submit_count = 0
+    FakeClockAdapter.market_is_open = False
+    FakeClockAdapter.submit_count = 0
+
+    code = stream_check.main(["--symbol", "SPY", "--limit", "1"])
+
+    output = capsys.readouterr().out
+    assert code == 0
+    assert "Market closed. No bars expected." in output
+    assert FakeStreamToolAdapter.collect_count == 0
+    assert FakeStreamToolAdapter.submit_count == 0
+    assert FakeClockAdapter.submit_count == 0
