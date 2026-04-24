@@ -86,10 +86,9 @@ class FallbackRouter:
 
 
 def get_operations_center_service() -> "OperationsCenterService":
-    from backend.app.control_plane.service import ControlPlane
-    from backend.app.operations import OperationsCenterService
+    from backend.app.operations.runtime_service import create_operations_center_service_from_environment
 
-    return OperationsCenterService(control_plane=ControlPlane())
+    return create_operations_center_service_from_environment()
 
 
 def _dependency(default: object) -> object:

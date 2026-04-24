@@ -2833,3 +2833,47 @@ Validation results:
 - `cd frontend; npm test`: `15 passed`; architecture check passed.
 - `cd frontend; npm run build`: Vite production build passed; architecture check passed.
 - `python -m pytest backend/tests/unit/api/test_operations_routes.py backend/tests/unit/operations/test_operations_center_service.py`: `18 passed`.
+
+## 2026-04-24 17:34 ET - Local Operations Center Demo Seed
+
+Files created:
+
+- `backend/app/operations/demo_seed.py`
+- `backend/app/operations/runtime_service.py`
+- `backend/scripts/__init__.py`
+- `backend/scripts/seed_operations_demo.py`
+- `backend/tests/unit/operations/test_operations_demo_seed.py`
+
+Files updated:
+
+- `backend/app/api/routes/operations.py`
+- `backend/app/operations/service.py`
+- `docs/system_rebuild_outputs/IMPLEMENTATION_LOG.md`
+
+Implementation:
+
+- Added explicit local/demo-only Operations Center seeding via `python -m backend.scripts.seed_operations_demo`.
+- Added `SEED_OPERATIONS_DEMO=1` support for the Operations API dependency to seed and read the local demo SQLite store.
+- Added optional `OPERATIONS_RUNTIME_DB_PATH` support for pointing the Operations API at an explicit local runtime store.
+- Seeded one demo broker account snapshot, one broker sync freshness record, one `recovered_ready` deployment runtime state, and one demo governor state.
+- Kept demo state at zero open orders and zero open positions.
+- Added a projection-only deployment-to-account mapping so the demo deployment is associated with the demo account without creating orders.
+
+Safety and architecture:
+
+- Demo seeding is not enabled by default.
+- The seed path writes only to a local SQLite runtime/demo store.
+- No Alpaca imports, calls, credentials, or network broker access are used.
+- No real or internal orders are created.
+- Broker truth outside the local persistence/demo store is not mutated.
+
+Validation results:
+
+- `python -m pytest backend/tests/unit/operations/test_operations_demo_seed.py backend/tests/unit/operations/test_operations_center_service.py backend/tests/unit/api/test_operations_routes.py`: `22 passed`.
+- `cd frontend; npm test`: `15 passed`; architecture check passed.
+- `python -m pytest backend/tests -q`: `379 passed, 1 skipped`.
+- `cd frontend; npm run build`: Vite production build passed; architecture check passed.
+- `python -m backend.scripts.seed_operations_demo`: seeded the local temp demo store.
+- In-process Operations API projection with `SEED_OPERATIONS_DEMO=1`: `1` account, `1` deployment, `0` open orders, `0` open positions; account and deployment detail projections loaded.
+- `cd frontend; npm run dev`: Vite started and `GET /` returned `200`.
+- Backend server start with `python -m uvicorn backend.app.api.server:app --host 127.0.0.1 --port 8000` could not be completed in this environment because `uvicorn` is not installed.
