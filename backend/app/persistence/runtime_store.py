@@ -185,11 +185,12 @@ class SQLiteRuntimeStore:
             connection.execute(
                 """
                 INSERT INTO broker_accounts
-                    (account_id, provider, mode, validation_status, created_at, payload)
-                VALUES (?, ?, ?, ?, ?, ?)
+                    (account_id, provider, mode, external_account_id, validation_status, created_at, payload)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(account_id) DO UPDATE SET
                     provider = excluded.provider,
                     mode = excluded.mode,
+                    external_account_id = excluded.external_account_id,
                     validation_status = excluded.validation_status,
                     created_at = excluded.created_at,
                     payload = excluded.payload
@@ -198,6 +199,7 @@ class SQLiteRuntimeStore:
                     str(account.id),
                     account.provider,
                     account.mode.value,
+                    account.external_account_id,
                     account.validation_status.value,
                     account.created_at.isoformat(),
                     _dump_model(account),
@@ -209,6 +211,18 @@ class SQLiteRuntimeStore:
         row = self._fetch_one("SELECT payload FROM broker_accounts WHERE account_id = ?", (str(account_id),))
         if row is None:
             raise KeyError(f"unknown broker account: {account_id}")
+        return _load_model(BrokerAccount, row["payload"])
+
+    def load_broker_account_by_external_identity(self, *, provider: str, mode: str, external_account_id: str) -> BrokerAccount:
+        row = self._fetch_one(
+            """
+            SELECT payload FROM broker_accounts
+            WHERE provider = ? AND mode = ? AND external_account_id = ?
+            """,
+            (provider, mode, external_account_id),
+        )
+        if row is None:
+            raise KeyError(f"unknown broker account external identity: {provider}:{mode}:{external_account_id}")
         return _load_model(BrokerAccount, row["payload"])
 
     def list_broker_accounts(self) -> tuple[BrokerAccount, ...]:
@@ -451,6 +465,19 @@ class SQLiteRuntimeStore:
                 SELECT deployment_id, 'ready', payload FROM deployment_states
                 """
             )
+        broker_account_columns = {
+            row["name"]
+            for row in connection.execute("PRAGMA table_info(broker_accounts)").fetchall()
+        }
+        if "external_account_id" not in broker_account_columns:
+            connection.execute("ALTER TABLE broker_accounts ADD COLUMN external_account_id TEXT")
+        connection.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS ux_broker_accounts_external_identity
+            ON broker_accounts(provider, mode, external_account_id)
+            WHERE external_account_id IS NOT NULL
+            """
+        )
 
 
 class SQLiteOrderLedger(OrderLedger):

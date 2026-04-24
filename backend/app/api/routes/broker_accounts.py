@@ -46,14 +46,14 @@ def create_alpaca_paper_broker_account(
     service: BrokerAccountServiceDependency,
 ) -> BrokerAccountResponse:
     try:
-        account = service.create_alpaca_paper_account(
+        result = service.create_alpaca_paper_account(
             display_name=request.display_name,
             api_key=request.api_key,
             api_secret=request.api_secret,
         )
     except BrokerAccountCreationError as exc:
         raise _operator_error(str(exc)) from exc
-    return BrokerAccountResponse(account=account)
+    return BrokerAccountResponse(account=result.account, already_exists=result.already_exists)
 
 
 def _operator_error(message: str) -> Exception:

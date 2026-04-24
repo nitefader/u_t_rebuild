@@ -2957,3 +2957,40 @@ Validation results:
 
 - `python -m pytest backend/tests/unit/config/test_runtime_paths.py backend/tests/unit/broker_accounts/test_alpaca_paper_account_service.py backend/tests/unit/operations/test_operations_center_service.py backend/tests/unit/runtime/test_recovery_orchestrator.py -q`: `28 passed`.
 - `.venv\Scripts\python.exe -m pytest backend/tests -q`: `390 passed, 1 skipped`, with one third-party `websockets.legacy` deprecation warning.
+
+## 2026-04-24 18:55 ET - Duplicate Alpaca Paper Broker Account Prevention
+
+Files changed:
+
+- `.gitignore`
+- `backend/app/broker_accounts/models.py`
+- `backend/app/broker_accounts/service.py`
+- `backend/app/brokers/alpaca.py`
+- `backend/app/brokers/models.py`
+- `backend/app/persistence/models.py`
+- `backend/app/persistence/runtime_store.py`
+- `frontend/src/operationsCenter.js`
+- `frontend/tests/operationsCenter.test.mjs`
+
+Implementation:
+
+- Preserved Alpaca's external account id from account responses on broker account snapshots.
+- Added `external_account_id` to canonical `BrokerAccount` records.
+- Added SQLite uniqueness on `provider + mode + external_account_id` and migrated existing runtime stores to add the new column before creating the unique index.
+- Made Alpaca paper account creation idempotent: credentials are validated read-only, the Alpaca account id is extracted, and an existing canonical account is returned instead of creating a duplicate.
+- Duplicate attempts refresh validation, broker snapshots, positions, open orders, and sync freshness for the existing account id.
+- Broker account API responses now include `already_exists`.
+- Operations Center shows `This Alpaca paper account is already registered.`, refreshes the overview, and selects/highlights the existing account.
+
+Safety:
+
+- Invalid credentials still fail without persisting a BrokerAccount.
+- Account validation remains read-only and does not submit orders.
+- Duplicate prevention is enforced both in service logic and at the SQLite persistence layer.
+
+Validation results:
+
+- `.venv\Scripts\python.exe -m compileall -q backend/app backend/tests`: passed.
+- `.venv\Scripts\python.exe -m pytest backend/tests -q`: `392 passed, 1 skipped`, with one third-party `websockets.legacy` deprecation warning.
+- `npm.cmd test --prefix frontend`: `18 passed`; frontend check passed.
+- `npm.cmd run build --prefix frontend`: Vite production build passed; frontend check passed.

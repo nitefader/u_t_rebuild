@@ -113,6 +113,7 @@ function renderAccountSetupPanel(detailState = {}) {
     ${status === "loading" ? `<p class="notice">Validating Alpaca paper credentials and syncing broker truth.</p>` : ""}
     ${status === "error" ? `<p class="warning" role="alert">${escapeHtml(detailState.accountSetupError || "Account setup failed.")}</p>` : ""}
     ${status === "success" ? `<p class="notice">Alpaca paper account added and synced.</p>` : ""}
+    ${status === "duplicate" ? `<p class="notice">This Alpaca paper account is already registered.</p>` : ""}
   </section>`;
 }
 
@@ -548,10 +549,13 @@ export async function mountOperationsCenter(root, client = createOperationsApi()
         apiSecret: data.get("api_secret")
       });
       const accountId = result?.account?.id;
-      state.detail = { status: "empty", accountSetup: "success" };
+      const accountSetup = result?.already_exists ? "duplicate" : "success";
+      state.detail = { status: "empty", accountSetup };
       await refreshOverview();
       if (accountId) {
         await loadSelectedDetail("account", accountId);
+        state.detail = { ...state.detail, accountSetup };
+        render();
       }
     } catch (error) {
       state.detail = {

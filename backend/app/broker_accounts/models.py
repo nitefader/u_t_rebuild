@@ -23,6 +23,7 @@ class BrokerAccount(BaseModel):
     display_name: str = Field(min_length=1)
     provider: str = "alpaca"
     mode: TradingMode = TradingMode.BROKER_PAPER
+    external_account_id: str | None = None
     credentials_ref: str
     validation_status: BrokerAccountValidationStatus
     last_account_snapshot: BrokerAccountSnapshot | None = None
@@ -42,3 +43,4 @@ class BrokerAccountResponse(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     account: BrokerAccount
+    already_exists: bool = False

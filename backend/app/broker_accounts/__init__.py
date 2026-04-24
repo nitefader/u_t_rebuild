@@ -7,7 +7,12 @@ from .models import (
     CreateAlpacaPaperBrokerAccountRequest,
 )
 
-_SERVICE_EXPORTS = {"BrokerAccountCreationError", "BrokerAccountService", "CredentialReferenceStore"}
+_SERVICE_EXPORTS = {
+    "BrokerAccountCreationError",
+    "BrokerAccountCreationResult",
+    "BrokerAccountService",
+    "CredentialReferenceStore",
+}
 
 
 def __getattr__(name: str):
@@ -21,6 +26,7 @@ def __getattr__(name: str):
 __all__ = [
     "BrokerAccount",
     "BrokerAccountCreationError",
+    "BrokerAccountCreationResult",
     "BrokerAccountResponse",
     "BrokerAccountService",
     "BrokerAccountValidationStatus",

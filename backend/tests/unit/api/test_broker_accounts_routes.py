@@ -4,6 +4,7 @@ from uuid import UUID
 
 from backend.app.api.routes import broker_accounts
 from backend.app.broker_accounts import BrokerAccount, BrokerAccountValidationStatus
+from backend.app.broker_accounts.service import BrokerAccountCreationResult
 from backend.app.domain import TradingMode
 
 
@@ -14,15 +15,19 @@ class RecordingBrokerAccountService:
     def __init__(self) -> None:
         self.calls = []
 
-    def create_alpaca_paper_account(self, *, display_name: str, api_key: str, api_secret: str) -> BrokerAccount:
+    def create_alpaca_paper_account(self, *, display_name: str, api_key: str, api_secret: str) -> BrokerAccountCreationResult:
         self.calls.append((display_name, api_key, api_secret))
-        return BrokerAccount(
-            id=ACCOUNT_ID,
-            display_name=display_name,
-            provider="alpaca",
-            mode=TradingMode.BROKER_PAPER,
-            credentials_ref=f"alpaca-paper:{ACCOUNT_ID}:abcdef",
-            validation_status=BrokerAccountValidationStatus.VALID,
+        return BrokerAccountCreationResult(
+            account=BrokerAccount(
+                id=ACCOUNT_ID,
+                display_name=display_name,
+                provider="alpaca",
+                mode=TradingMode.BROKER_PAPER,
+                external_account_id="alpaca-paper-account-1",
+                credentials_ref=f"alpaca-paper:{ACCOUNT_ID}:abcdef",
+                validation_status=BrokerAccountValidationStatus.VALID,
+            ),
+            already_exists=True,
         )
 
 
@@ -45,6 +50,8 @@ def test_create_alpaca_paper_route_delegates_without_url_input() -> None:
     assert response.account.id == ACCOUNT_ID
     assert response.account.provider == "alpaca"
     assert response.account.mode == TradingMode.BROKER_PAPER
+    assert response.account.external_account_id == "alpaca-paper-account-1"
+    assert response.already_exists is True
     assert service.calls == [("Paper", "key", "secret")]
 
 

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from hashlib import sha256
+from sqlite3 import IntegrityError
+from uuid import UUID
 from uuid import uuid4
 
 from backend.app.broker_accounts.models import BrokerAccount, BrokerAccountValidationStatus
@@ -14,6 +16,12 @@ from backend.app.persistence import SQLiteRuntimeStore
 
 class BrokerAccountCreationError(RuntimeError):
     """Operator-readable broker account setup failure."""
+
+
+@dataclass(frozen=True)
+class BrokerAccountCreationResult:
+    account: BrokerAccount
+    already_exists: bool = False
 
 
 @dataclass(frozen=True)
@@ -40,12 +48,16 @@ class BrokerAccountService:
         self._credential_store = credential_store or CredentialReferenceStore()
         self._order_ledger = order_ledger or OrderLedger()
 
-    def create_alpaca_paper_account(self, *, display_name: str, api_key: str, api_secret: str) -> BrokerAccount:
-        account_id = uuid4()
+    def create_alpaca_paper_account(self, *, display_name: str, api_key: str, api_secret: str) -> BrokerAccountCreationResult:
+        validation_account_id = uuid4()
         mode = TradingMode.BROKER_PAPER
         try:
             adapter = self._adapter_factory(mode=mode, api_key=api_key, secret_key=api_secret, load_env=False)
-            adapter.get_account_snapshot(account_id)
+            validation_snapshot = adapter.get_account_snapshot(validation_account_id)
+            external_account_id = _external_account_id_from_snapshot(validation_snapshot)
+            existing = self._load_existing_alpaca_paper_account(external_account_id)
+            account_id = existing.id if existing is not None else validation_account_id
+
             adapter.get_positions(account_id)
             adapter.list_open_orders(account_id)
             broker_sync = BrokerSync(
@@ -63,17 +75,60 @@ class BrokerAccountService:
                 api_key=api_key,
                 api_secret=api_secret,
             )
-            account = BrokerAccount(
-                id=account_id,
-                display_name=display_name,
-                provider="alpaca",
-                mode=mode,
-                credentials_ref=credentials_ref,
-                validation_status=BrokerAccountValidationStatus.VALID,
-                last_account_snapshot=snapshot,
-                broker_sync_freshness=freshness,
-                created_at=utc_now(),
+            if existing is not None:
+                account = existing.model_copy(
+                    update={
+                        "credentials_ref": credentials_ref,
+                        "validation_status": BrokerAccountValidationStatus.VALID,
+                        "last_account_snapshot": snapshot,
+                        "broker_sync_freshness": freshness,
+                    }
+                )
+                return BrokerAccountCreationResult(
+                    account=self._runtime_store.save_broker_account(account),
+                    already_exists=True,
+                )
+
+            account = self._runtime_store.save_broker_account(
+                BrokerAccount(
+                    id=account_id,
+                    display_name=display_name,
+                    provider="alpaca",
+                    mode=mode,
+                    external_account_id=external_account_id,
+                    credentials_ref=credentials_ref,
+                    validation_status=BrokerAccountValidationStatus.VALID,
+                    last_account_snapshot=snapshot,
+                    broker_sync_freshness=freshness,
+                    created_at=utc_now(),
+                )
             )
-            return self._runtime_store.save_broker_account(account)
+            return BrokerAccountCreationResult(account=account, already_exists=False)
+        except BrokerAccountCreationError:
+            raise
+        except IntegrityError as exc:
+            raise BrokerAccountCreationError("Alpaca paper account is already registered") from exc
         except Exception as exc:  # noqa: BLE001 - keep route errors operator-readable.
             raise BrokerAccountCreationError(f"Unable to validate Alpaca paper account: {exc}") from exc
+
+    def _load_existing_alpaca_paper_account(self, external_account_id: str) -> BrokerAccount | None:
+        try:
+            return self._runtime_store.load_broker_account_by_external_identity(
+                provider="alpaca",
+                mode=TradingMode.BROKER_PAPER.value,
+                external_account_id=external_account_id,
+            )
+        except KeyError:
+            return None
+
+
+def _external_account_id_from_snapshot(snapshot: object) -> str:
+    external_account_id = getattr(snapshot, "external_account_id", None)
+    if external_account_id:
+        return str(external_account_id)
+    raw_account_id = getattr(snapshot, "account_id", None)
+    if isinstance(raw_account_id, UUID):
+        raise BrokerAccountCreationError("Alpaca account response did not include a stable external account id")
+    if raw_account_id:
+        return str(raw_account_id)
+    raise BrokerAccountCreationError("Alpaca account response did not include an account id")

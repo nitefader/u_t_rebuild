@@ -199,6 +199,28 @@ test("account setup UI is paper only and does not ask for API URLs", () => {
   assert.doesNotMatch(html, /base_url|base url|endpoint|environment URL|api endpoint/i);
 });
 
+test("duplicate account setup message renders while existing account is selected", () => {
+  const html = renderOperationsCenterOverview(overview(), {
+    accountSetup: "duplicate",
+    status: "loaded",
+    selection: { type: "account", id: accountId },
+    data: {
+      account_id: accountId,
+      is_paused: false,
+      is_killed: false,
+      broker_account_snapshot: null,
+      broker_sync_freshness: null,
+      open_broker_orders: [],
+      positions: [],
+      internal_order_ledger_summary: { open_count: 0 }
+    }
+  });
+
+  assert.match(html, /This Alpaca paper account is already registered\./);
+  assert.match(html, /selected-card/);
+  assert.equal((html.match(/data-select-type="account"/g) || []).length, 1);
+});
+
 test("overview cards are clickable and selected account is highlighted", () => {
   const html = renderOperationsCenterOverview(overview(), {
     status: "loaded",

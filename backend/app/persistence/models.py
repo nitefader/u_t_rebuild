@@ -42,6 +42,7 @@ CREATE TABLE IF NOT EXISTS broker_accounts (
     account_id TEXT PRIMARY KEY,
     provider TEXT NOT NULL,
     mode TEXT NOT NULL,
+    external_account_id TEXT,
     validation_status TEXT NOT NULL,
     created_at TEXT NOT NULL,
     payload TEXT NOT NULL

@@ -323,6 +323,7 @@ class AlpacaBrokerAdapter:
             account_blocked=bool(response.get("account_blocked", False)),
             is_pattern_day_trader=bool(response.get("pattern_day_trader", False)),
             account_status=str(response.get("status", "unknown")),
+            external_account_id=str(response["id"]) if response.get("id") is not None else None,
             shorting_enabled=bool(response.get("shorting_enabled", False)),
             timestamp=utc_now(),
         )

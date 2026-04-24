@@ -5,7 +5,7 @@ from uuid import UUID
 
 import pytest
 
-from backend.app.broker_accounts import BrokerAccountCreationError, BrokerAccountValidationStatus
+from backend.app.broker_accounts import BrokerAccount, BrokerAccountCreationError, BrokerAccountValidationStatus
 from backend.app.broker_accounts.service import BrokerAccountService
 from backend.app.brokers import BrokerAccountSnapshot, BrokerOpenOrderSnapshot, BrokerOrderStatus, BrokerPositionSide, BrokerPositionSnapshot
 from backend.app.domain import TradingMode
@@ -17,6 +17,7 @@ from backend.app.control_plane import ControlPlane
 
 class RecordingAlpacaPaperAdapter:
     instances: list["RecordingAlpacaPaperAdapter"] = []
+    external_account_id = "alpaca-paper-account-1"
 
     def __init__(self, *, mode, api_key, secret_key, load_env) -> None:
         self.mode = mode
@@ -33,6 +34,7 @@ class RecordingAlpacaPaperAdapter:
             account_id=account_id,
             provider="alpaca",
             mode=TradingMode.BROKER_PAPER,
+            external_account_id=self.external_account_id,
             equity=100_000,
             cash=50_000,
             buying_power=75_000,
@@ -86,12 +88,14 @@ def test_create_alpaca_paper_account_persists_valid_account_and_syncs_broker_tru
     store = SQLiteRuntimeStore(tmp_path / "runtime.sqlite3")
     service = BrokerAccountService(runtime_store=store, adapter_factory=RecordingAlpacaPaperAdapter)
 
-    account = service.create_alpaca_paper_account(
+    result = service.create_alpaca_paper_account(
         display_name="Paper account",
         api_key="key",
         api_secret="secret",
     )
+    account = result.account
 
+    assert result.already_exists is False
     adapter = RecordingAlpacaPaperAdapter.instances[0]
     assert adapter.mode == TradingMode.BROKER_PAPER
     assert adapter.load_env is False
@@ -106,6 +110,7 @@ def test_create_alpaca_paper_account_persists_valid_account_and_syncs_broker_tru
     ]
     assert account.provider == "alpaca"
     assert account.mode == TradingMode.BROKER_PAPER
+    assert account.external_account_id == "alpaca-paper-account-1"
     assert account.validation_status == BrokerAccountValidationStatus.VALID
     assert account.credentials_ref.startswith(f"alpaca-paper:{account.id}:")
     assert "secret" not in account.model_dump_json()
@@ -115,6 +120,42 @@ def test_create_alpaca_paper_account_persists_valid_account_and_syncs_broker_tru
     assert len(store.list_broker_position_snapshots(account.id)) == 1
     assert len(store.list_broker_open_order_snapshots(account.id)) == 1
     assert store.list_orders() == ()
+
+
+def test_create_same_alpaca_paper_account_twice_returns_same_account_and_refreshes_sync(tmp_path) -> None:
+    RecordingAlpacaPaperAdapter.instances = []
+    store = SQLiteRuntimeStore(tmp_path / "runtime.sqlite3")
+    service = BrokerAccountService(runtime_store=store, adapter_factory=RecordingAlpacaPaperAdapter)
+
+    first = service.create_alpaca_paper_account(
+        display_name="Paper account",
+        api_key="key",
+        api_secret="secret",
+    )
+    second = service.create_alpaca_paper_account(
+        display_name="Duplicate paper account",
+        api_key="key",
+        api_secret="secret",
+    )
+
+    assert first.account.id == second.account.id
+    assert first.already_exists is False
+    assert second.already_exists is True
+    assert len(store.list_broker_accounts()) == 1
+    operations = OperationsCenterService(control_plane=ControlPlane(state_store=store), runtime_store=store)
+    assert len(operations.get_runtime_overview().broker_accounts) == 1
+    assert store.list_broker_accounts()[0].display_name == "Paper account"
+    assert store.list_broker_accounts()[0].validation_status == BrokerAccountValidationStatus.VALID
+    assert store.load_broker_sync_freshness(first.account.id).last_sync_at == second.account.broker_sync_freshness.last_sync_at
+    assert len(RecordingAlpacaPaperAdapter.instances) == 2
+    assert RecordingAlpacaPaperAdapter.instances[1].calls == [
+        "get_account_snapshot",
+        "get_positions",
+        "list_open_orders",
+        "get_account_snapshot",
+        "get_positions",
+        "list_open_orders",
+    ]
 
 
 def test_invalid_alpaca_credentials_fail_without_persisting_account(tmp_path) -> None:
@@ -131,11 +172,12 @@ def test_invalid_alpaca_credentials_fail_without_persisting_account(tmp_path) ->
 
 def test_created_account_appears_in_operations_overview_and_detail(tmp_path) -> None:
     store = SQLiteRuntimeStore(tmp_path / "runtime.sqlite3")
-    account = BrokerAccountService(runtime_store=store, adapter_factory=RecordingAlpacaPaperAdapter).create_alpaca_paper_account(
+    result = BrokerAccountService(runtime_store=store, adapter_factory=RecordingAlpacaPaperAdapter).create_alpaca_paper_account(
         display_name="Paper account",
         api_key="key",
         api_secret="secret",
     )
+    account = result.account
 
     operations = OperationsCenterService(control_plane=ControlPlane(state_store=store), runtime_store=store)
     overview = operations.get_runtime_overview()
@@ -165,9 +207,33 @@ def test_account_creation_does_not_use_internal_order_ledger(tmp_path) -> None:
         order_ledger=FailingLedger(),
     )
 
-    account = service.create_alpaca_paper_account(display_name="Paper account", api_key="key", api_secret="secret")
+    result = service.create_alpaca_paper_account(display_name="Paper account", api_key="key", api_secret="secret")
 
-    assert account.validation_status == BrokerAccountValidationStatus.VALID
+    assert result.account.validation_status == BrokerAccountValidationStatus.VALID
+
+
+def test_persistence_enforces_unique_broker_account_external_identity(tmp_path) -> None:
+    store = SQLiteRuntimeStore(tmp_path / "runtime.sqlite3")
+    account = BrokerAccount(
+        id=UUID("11111111-2222-3333-4444-555555555555"),
+        display_name="Paper account",
+        provider="alpaca",
+        mode=TradingMode.BROKER_PAPER,
+        external_account_id="alpaca-paper-account-1",
+        credentials_ref="alpaca-paper:one",
+        validation_status=BrokerAccountValidationStatus.VALID,
+    )
+    duplicate = account.model_copy(
+        update={
+            "id": UUID("22222222-3333-4444-5555-666666666666"),
+            "credentials_ref": "alpaca-paper:two",
+        }
+    )
+
+    store.save_broker_account(account)
+
+    with pytest.raises(Exception, match="UNIQUE|unique"):
+        store.save_broker_account(duplicate)
 
 
 def test_no_operations_demo_seed_paths_remain() -> None:

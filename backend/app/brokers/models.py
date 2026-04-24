@@ -86,6 +86,7 @@ class BrokerAccountSnapshot(BaseModel):
     )
     trading_blocked: bool = False
     account_status: str = "unknown"
+    external_account_id: str | None = None
     timestamp: datetime = Field(default_factory=utc_now, validation_alias=AliasChoices("timestamp", "last_synced_at"))
     provider: str | None = None
     mode: TradingMode | None = None
