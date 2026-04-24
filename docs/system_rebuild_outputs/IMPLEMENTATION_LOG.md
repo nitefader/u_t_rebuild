@@ -1649,3 +1649,48 @@ Architecture confirmations:
 - BrokerSyncService performs reconciliation only and does not submit orders, cancel orders, create internal orders, or modify Governor decisions.
 - Execution pipeline behavior was not changed.
 - Docs were updated with this implementation entry.
+
+## 2026-04-24 - Broker Sync Truth Hardening Closeout
+
+Closeout verification completed for the Broker Sync Truth Hardening milestone.
+
+Files created:
+
+- None during closeout.
+
+Files modified:
+
+- `docs/system_rebuild_outputs/IMPLEMENTATION_LOG.md`
+
+Tests run:
+
+- `python -m pytest backend/tests/unit/brokers -q`
+- `python -m pytest backend/tests/unit/orders -q`
+- `python -m pytest backend/tests/unit/governor -q`
+- `python -m pytest backend/tests/unit/pipeline -q`
+- `python -m pytest backend/tests -q`
+
+Test results:
+
+- Brokers tests: `40 passed`
+- Orders tests: `8 passed`
+- Governor tests: `9 passed`
+- Pipeline tests: `10 passed`
+- Full backend suite: `270 passed`
+
+Issues fixed:
+
+- None. No task-related failures were found during closeout.
+
+Architecture confirmations:
+
+- `BrokerAccountSnapshot`, `BrokerPositionSnapshot`, `BrokerOpenOrderSnapshot`, and `BrokerSyncState` are implemented.
+- BrokerAdapter exposes read-only broker truth methods for account snapshots, positions, and open orders.
+- `BrokerSyncService` performs reconciliation and returns structured results with matched orders, unmatched broker orders, unmatched internal orders, position deltas, and sync status.
+- stale sync detection is explicit.
+- Governor and OrderManager do not read directly from BrokerAdapter.
+- FeatureEngine, SignalEngine, StrategyControls, Risk, PortfolioGovernor decision logic, and OrderManager behavior were not modified.
+- BrokerAdapter remains policy-free.
+- BrokerSyncService writes broker-derived order truth through BrokerSync.
+- No execution behavior was changed.
+- No duplicate responsibility was introduced.
