@@ -7,7 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from backend.app.brokers import BrokerReconciliationReport, BrokerSyncState
 from backend.app.control_plane import ControlPlane
-from backend.app.domain import GovernorMode, ProgramVersion, TradingMode
+from backend.app.domain import GovernorMode, ProgramVersion, TradingMode, ValidationEvidence
 from backend.app.domain._base import utc_now
 
 
@@ -15,6 +15,7 @@ class PaperRunEvidence(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     deployment_id: UUID
+    broker_account_id: UUID
     mode: TradingMode = TradingMode.BROKER_PAPER
     succeeded: bool
     started_at: datetime
@@ -60,14 +61,17 @@ class PromotionEvaluationContext(BaseModel):
 
     program: ProgramVersion
     deployment_id: UUID | None = None
-    account_id: UUID
-    current_mode: TradingMode
+    source_broker_account_id: UUID
+    target_broker_account_id: UUID
+    source_mode: TradingMode
+    target_mode: TradingMode
     broker_sync_state: BrokerSyncState
     control_plane: ControlPlane
     governor: PortfolioGovernorReadiness
     reconciliation_report: BrokerReconciliationReport | None = None
     paper_runs: tuple[PaperRunEvidence, ...] = ()
     simulation_evidence: tuple[SimulationPromotionEvidence, ...] = ()
+    validation_evidence: tuple[ValidationEvidence, ...] = ()
 
 
 class PromotionResult(BaseModel):
@@ -75,7 +79,10 @@ class PromotionResult(BaseModel):
 
     program_id: UUID
     deployment_id: UUID | None = None
+    source_broker_account_id: UUID
+    target_broker_account_id: UUID
     eligible: bool
     blocking_reasons: list[str]
     warnings: list[str]
+    warning_severities: dict[str, str] = Field(default_factory=dict)
     evaluated_at: datetime = Field(default_factory=utc_now)

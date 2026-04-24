@@ -2247,3 +2247,37 @@ Architecture confirmations:
 - No code changes were made in this step.
 - No architecture changes were made.
 - No lifecycle order changes were made except clarifying canonical mode names.
+
+## 2026-04-24 14:59 ET - Promotion Gate Validation Warnings
+
+Files modified:
+
+- `backend/app/promotion/models.py`
+- `backend/app/promotion/service.py`
+- `backend/tests/unit/promotion/test_promotion_gate.py`
+- `docs/system_rebuild_outputs/IMPLEMENTATION_LOG.md`
+
+Scope:
+
+- Added non-blocking PromotionGate warnings for missing strongly recommended validation evidence.
+- Added `missing_optimization_evidence` warning with medium severity.
+- Added `missing_walk_forward_evidence` warning with high severity.
+- Added validation evidence inputs to promotion evaluation so existing Optimization and Walk-Forward evidence removes those warnings.
+- Preserved P0 blocking logic and eligibility behavior.
+
+Tests run:
+
+- `python -m pytest backend/tests/unit/promotion -q`
+- `python -m pytest backend/tests -q`
+
+Test results:
+
+- Promotion tests: `19 passed`
+- Full backend suite: `319 passed`
+
+Architecture confirmations:
+
+- Optimization and Walk-Forward remain strongly recommended, not required.
+- Warnings do not block promotion by default.
+- No runtime behavior changes were made.
+- No deployment orchestration or lifecycle wiring was added.
