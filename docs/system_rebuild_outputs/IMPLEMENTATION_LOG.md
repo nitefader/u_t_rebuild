@@ -2708,3 +2708,41 @@ Test results:
 - Compile: passed
 - Paper runtime smoke harness: `6 passed`
 - Full backend suite: `375 passed`
+
+## 2026-04-24 16:29 ET - Alpaca Paper Integration Opt-In Guard
+
+Files created:
+
+- `backend/tests/integration/test_alpaca_paper_integration.py`
+- `pytest.ini`
+
+Implementation:
+
+- Added an explicit opt-in Alpaca paper integration test marked `integration` and `alpaca_paper`.
+- Real Alpaca paper checks are skipped unless `RUN_ALPACA_PAPER_INTEGRATION=1` is present.
+- The integration test loads `.env` only after the opt-in flag passes.
+- The integration test validates paper environment guardrails before constructing `AlpacaBrokerAdapter`.
+- The integration test performs read-only polling only: market clock, account snapshot, positions, and open orders.
+- No real paper order submission is performed by the integration test.
+- Existing unit and smoke tests continue to use mocked Alpaca clients with `load_env=False` or injected trading clients.
+
+Safety scope:
+
+- Normal `pytest` runs do not submit real Alpaca paper orders.
+- Real Alpaca credentials in `.env` are not enough to run integration checks.
+- `ALPACA_BASE_URL` must be `https://paper-api.alpaca.markets` when the opt-in integration is enabled.
+- Order placement remains reserved for manual tools with their own confirmation/market-open guards.
+
+Tests run:
+
+- `python -m pytest backend/tests/integration/test_alpaca_paper_integration.py -q`
+- `python -m pytest backend/tests/smoke/test_paper_runtime_smoke.py -q`
+- `python -m compileall -q backend/app backend/tests`
+- `python -m pytest backend/tests -q`
+
+Test results:
+
+- Alpaca paper integration default behavior: `1 skipped`
+- Paper runtime smoke harness: `6 passed`
+- Compile: passed
+- Full backend suite: `375 passed, 1 skipped`
