@@ -2671,3 +2671,40 @@ Test results:
 - Frontend tests/build: `10 passed`; architecture check passed
 - Full backend suite: `369 passed`
 - Compile: passed
+
+## 2026-04-24 16:26 ET - Paper Runtime End-to-End Smoke Harness
+
+Files created:
+
+- `backend/tests/smoke/test_paper_runtime_smoke.py`
+
+Implementation:
+
+- Added a deterministic backend smoke harness for Broker Runtime - Paper using a mocked Alpaca trading client.
+- Exercised the runtime path from feature computation and signal evaluation through strategy controls, risk sizing, portfolio governor approval, internal order creation, Alpaca adapter submission, BrokerSync ledger update, SQLite order persistence, broker mapping persistence, and Operations Center overview projection.
+- Verified Alpaca adapter broker-side idempotency by submitting the same internal order twice and confirming the second call returns the existing `client_order_id` result without a duplicate submit.
+- Verified startup recovery after a submitted order does not create a duplicate internal order or submit a duplicate broker order.
+- Verified Operations overview reports recovered runtime state as `recovered_ready` and not running after recovery.
+- Verified stale broker sync blocks new opens through governor freshness input.
+- Verified global kill blocks new opens while preserving existing broker truth, broker mapping, and Operations visibility.
+
+Safety scope:
+
+- Backend smoke tests only.
+- No frontend changes.
+- No live trading.
+- No real Alpaca credentials.
+- No new trading logic.
+- Alpaca behavior is mocked at the trading-client boundary.
+
+Tests run:
+
+- `python -m compileall -q backend/app backend/tests`
+- `python -m pytest backend/tests/smoke/test_paper_runtime_smoke.py -q`
+- `python -m pytest backend/tests -q`
+
+Test results:
+
+- Compile: passed
+- Paper runtime smoke harness: `6 passed`
+- Full backend suite: `375 passed`
