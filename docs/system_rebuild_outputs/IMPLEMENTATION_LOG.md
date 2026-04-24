@@ -904,3 +904,255 @@ Result:
 
 - Broker tests: `29 passed`
 - Targeted backend unit slice: `213 passed`
+
+## 2026-04-24 - Paper Trading Operator Commands
+
+Replaced manual paper-trading smoke scripts with guarded operator CLI commands.
+
+Created:
+
+- `tools/paper_order_smoke.py`
+- `tools/check_alpaca_readiness.py`
+- `backend/tests/unit/tools/test_paper_operator_tools.py`
+
+Implemented:
+
+- paper-only order smoke command
+- readiness check command with no order submission
+- `.env` loading
+- `ALPACA_BASE_URL == https://paper-api.alpaca.markets` guard
+- `CONFIRM_PAPER_ORDER=yes` guard for order submission
+- default smoke symbol `SPY`
+- default smoke quantity `1`
+- hard block for smoke `qty > 1`
+- approved test `ExecutionIntent` creation through Portfolio Governor decision
+- order smoke path:
+  - `OrderManager`
+  - `AlpacaBrokerAdapter`
+  - `BrokerSync`
+  - `OrderLedger`
+- readiness path:
+  - account snapshot
+  - positions
+  - open orders
+  - no order submission
+- normalized JSON output for operator inspection
+
+Scope kept out:
+
+- No runtime loop
+- No API routes
+- No frontend
+- No streaming
+- No direct Alpaca calls outside `AlpacaBrokerAdapter`
+- No OrderManager bypass
+- No Governor approval bypass
+- No multi-order execution
+
+Validation performed:
+
+- `python -m pytest backend\tests\unit\tools -q`
+- `python -m pytest backend\tests\unit\tools backend\tests\unit\pipeline backend\tests\unit\governor backend\tests\unit\brokers backend\tests\unit\orders backend\tests\unit\runtime backend\tests\unit\simulation backend\tests\unit\chart_lab backend\tests\unit\decision backend\tests\unit\features backend\tests\unit\domain -q`
+- `python -m compileall -q tools backend\tests\unit\tools`
+
+Result:
+
+- Operator tool tests: `6 passed`
+- Targeted backend unit slice: `219 passed`
+
+## 2026-04-24 - Paper Smoke Market Clock Guard
+
+Added a market-clock guard to the paper order smoke command.
+
+Updated:
+
+- `tools/paper_order_smoke.py`
+- `backend/app/brokers/alpaca.py`
+- `backend/tests/unit/tools/test_paper_operator_tools.py`
+
+Implemented:
+
+- `AlpacaBrokerAdapter.get_market_clock()`
+- paper smoke command checks Alpaca market clock before order creation
+- closed-market output: `Market closed. No order submitted.`
+- closed-market path exits cleanly with no order submission
+- `CONFIRM_PAPER_ORDER=yes` remains required
+- market orders remain blocked outside regular market hours
+
+Scope kept out:
+
+- No runtime loop
+- No API routes
+- No frontend
+- No streaming
+- No direct Alpaca SDK imports in the smoke command
+- No OrderManager bypass
+- No Governor bypass
+
+Validation performed:
+
+- `python -m pytest backend\tests\unit\tools -q`
+- `python -m pytest backend\tests\unit\tools backend\tests\unit\brokers backend\tests\unit\pipeline backend\tests\unit\governor backend\tests\unit\orders backend\tests\unit\runtime backend\tests\unit\simulation backend\tests\unit\chart_lab backend\tests\unit\decision backend\tests\unit\features backend\tests\unit\domain -q`
+- `python -m compileall -q tools backend\app\brokers backend\tests\unit\tools`
+
+Result:
+
+- Operator tool tests: `7 passed`
+- Targeted backend unit slice: `220 passed`
+
+## 2026-04-24 - Paper Smoke Operator Output and Closed-Market Safety
+
+Tightened the paper order smoke command so operator-visible status is explicit and flushed, and closed-market behavior is tested as a no-submit path.
+
+Updated:
+
+- `tools/paper_order_smoke.py`
+- `backend/tests/unit/tools/test_paper_operator_tools.py`
+
+Implemented:
+
+- every smoke-command step prints with `flush=True`
+- environment guard failures print with `flush=True`
+- closed-market message prints with `flush=True`
+- closed-market path exits `0`
+- closed-market path does not create an internal order
+- closed-market path does not submit through `AlpacaBrokerAdapter`
+- closed-market path does not apply `BrokerSync`
+- successful market-open path is pinned to:
+  - `OrderManager.create_order`
+  - `AlpacaBrokerAdapter.submit_order`
+  - `BrokerSync.apply_result`
+- confirmation and paper-only URL failures are pinned as no-submit paths
+
+Scope kept out:
+
+- No runtime loop
+- No API routes
+- No frontend
+- No streaming
+- No extended-hours trading
+- No direct Alpaca calls outside `AlpacaBrokerAdapter`
+- No OrderManager bypass
+- No Governor bypass
+
+Validation performed:
+
+- `python -m pytest backend\tests\unit\tools -q`
+- `python -m pytest backend\tests\unit\tools backend\tests\unit\brokers backend\tests\unit\pipeline backend\tests\unit\governor backend\tests\unit\orders backend\tests\unit\runtime backend\tests\unit\simulation backend\tests\unit\chart_lab backend\tests\unit\decision backend\tests\unit\features backend\tests\unit\domain -q`
+- `python -m compileall -q tools backend\tests\unit\tools`
+
+Result:
+
+- Operator tool tests: `7 passed`
+- Targeted backend unit slice: `220 passed`
+
+## 2026-04-24 - Controlled Paper Runtime Execution
+
+Added a guarded paper-only runtime operator command that runs a bounded, non-continuous runtime pass through the existing execution pipeline.
+
+Created:
+
+- `tools/run_paper_runtime.py`
+
+Updated:
+
+- `backend/tests/unit/tools/test_paper_operator_tools.py`
+
+Implemented:
+
+- paper-only runtime command
+- `.env` loading
+- `ALPACA_BASE_URL == https://paper-api.alpaca.markets` guard
+- `CONFIRM_PAPER_RUNTIME=yes` guard
+- market-clock block before runtime execution
+- closed-market path exits cleanly with no broker submission
+- one-symbol runtime pass
+- configurable completed-bar count with default `5`
+- hard block for `bars > 20`
+- hard block for `qty > 1`
+- generated completed bars for a controlled non-streaming pass
+- paper Deployment context creation
+- runtime path through:
+  - `RuntimeOrchestrator`
+  - `PortfolioGovernor`
+  - `OrderManager`
+  - `AlpacaBrokerAdapter`
+  - `BrokerSync`
+  - `OrderLedger`
+- account and position sync through `BrokerSync`
+- max one order per run
+- JSON event output for operator inspection
+
+Scope kept out:
+
+- No continuous runtime loop
+- No websocket streaming
+- No API routes
+- No frontend
+- No extended-hours trading
+- No direct Alpaca calls outside `AlpacaBrokerAdapter`
+- No OrderManager bypass
+- No Governor bypass
+- No BrokerSync bypass
+
+Validation performed:
+
+- `python -m pytest backend\tests\unit\tools -q`
+- `python -m pytest backend\tests\unit\tools backend\tests\unit\brokers backend\tests\unit\pipeline backend\tests\unit\governor backend\tests\unit\orders backend\tests\unit\runtime backend\tests\unit\simulation backend\tests\unit\chart_lab backend\tests\unit\decision backend\tests\unit\features backend\tests\unit\domain -q`
+- `python -m compileall -q tools backend\tests\unit\tools`
+
+Result:
+
+- Operator tool tests: `12 passed`
+- Targeted backend unit slice: `225 passed`
+
+## 2026-04-24 - Alpaca Market Data Adapter + Streaming Skeleton
+
+Added a market-data-only Alpaca adapter that feeds normalized completed bars into the existing runtime/Feature Engine path without touching order execution.
+
+Created:
+
+- `backend/app/market_data/__init__.py`
+- `backend/app/market_data/alpaca.py`
+- `backend/tests/unit/market_data/test_alpaca_market_data_adapter.py`
+- `tools/stream_market_data_check.py`
+
+Implemented:
+
+- `AlpacaMarketDataAdapter`
+- `MarketDataSubscription`
+- `AlpacaMarketDataError`
+- Alpaca bar payload normalization into `NormalizedBar`
+- one-symbol / one-timeframe subscription contract
+- default timeframe `1m`
+- bounded bar collection with injected source support for tests
+- Alpaca `StockDataStream` skeleton behind the market-data adapter only
+- reconnect/error-handling placeholder through controlled stream stop and timeout failure
+- `tools/stream_market_data_check.py` to:
+  - load `.env`
+  - connect through `AlpacaMarketDataAdapter`
+  - subscribe to one symbol
+  - print the first normalized bars, default `5`
+  - exit cleanly
+  - submit no orders
+
+Scope kept out:
+
+- No automatic order execution
+- No continuous unattended trading
+- No OrderManager imports in market data
+- No BrokerAdapter imports in market data
+- No broker/order submission from the stream tool
+- No feature computation inside market data
+- No runtime pipeline mutation
+
+Validation performed:
+
+- `python -m pytest backend\tests\unit\market_data -q`
+- `python -m pytest backend\tests\unit\market_data backend\tests\unit\tools backend\tests\unit\brokers backend\tests\unit\pipeline backend\tests\unit\governor backend\tests\unit\orders backend\tests\unit\runtime backend\tests\unit\simulation backend\tests\unit\chart_lab backend\tests\unit\decision backend\tests\unit\features backend\tests\unit\domain -q`
+- `python -m compileall -q backend\app\market_data backend\tests\unit\market_data tools`
+
+Result:
+
+- Market-data tests: `7 passed`
+- Targeted backend unit slice: `232 passed`

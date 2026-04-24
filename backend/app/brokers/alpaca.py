@@ -158,6 +158,12 @@ class AlpacaBrokerAdapter:
             for response in responses
         )
 
+    def get_market_clock(self) -> dict[str, Any]:
+        try:
+            return self._response_to_dict(self._client.get_clock())
+        except Exception as exc:  # noqa: BLE001
+            raise self._normalize_exception(exc) from exc
+
     def translate_order_request(self, order: InternalOrder) -> dict[str, object]:
         self._require_internal_order(order)
         if order.order_type == OrderType.MARKET:
@@ -382,6 +388,10 @@ class AlpacaBrokerAdapter:
             "qty",
             "market_value",
             "avg_entry_price",
+            "is_open",
+            "next_open",
+            "next_close",
+            "timestamp",
         ]
         return {key: getattr(response, key) for key in keys if hasattr(response, key)}
 
