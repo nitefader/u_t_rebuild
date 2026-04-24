@@ -522,3 +522,53 @@ Result:
 
 - Runtime tests: `6 passed`
 - Targeted backend unit slice: `158 passed`
+
+## 2026-04-24 - Order Manager and Internal Order Ledger Foundation
+
+Implemented internal order lifecycle foundation before broker integration.
+
+Created:
+
+- `backend/app/orders/__init__.py`
+- `backend/app/orders/models.py`
+- `backend/app/orders/ledger.py`
+- `backend/app/orders/manager.py`
+- `backend/tests/unit/orders/test_order_manager.py`
+
+Implemented:
+
+- `InternalOrder`
+- `InternalOrderIntent`
+- `InternalOrderStatus`
+- `OrderManager`
+- `OrderLedger`
+- `OrderManagerError`
+- internal order creation from `ExecutionIntent`
+- required attribution fields: account, deployment, program, symbol, side, quantity, order type, intent, status, created timestamp
+- deterministic `client_order_id` format: `utos-{acct8}-{dep8}-{prog8}-{intent}-{seq}`
+- invalid order intent rejection
+- internal status updates
+- in-memory lookup by account
+- in-memory lookup by deployment
+- in-memory lookup by program
+
+Scope kept out:
+
+- No Alpaca
+- No broker adapter
+- No broker submission
+- No API routes
+- No frontend
+- No database models or migrations
+- No external calls
+
+Validation performed:
+
+- `python -m pytest backend\tests\unit\orders -q`
+- `python -m pytest backend\tests\unit\orders backend\tests\unit\runtime backend\tests\unit\simulation backend\tests\unit\chart_lab backend\tests\unit\decision backend\tests\unit\features backend\tests\unit\domain -q`
+- `python -m compileall -q backend\app\orders backend\tests\unit\orders`
+
+Result:
+
+- Order tests: `8 passed`
+- Targeted backend unit slice: `166 passed`
