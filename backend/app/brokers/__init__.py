@@ -4,6 +4,7 @@ No real broker implementation lives here yet.
 """
 
 from .adapter import BrokerAdapter
+from .alpaca import AlpacaBrokerAdapter, AlpacaBrokerCapabilities, AlpacaBrokerError, AlpacaBrokerErrorDetails
 from .fake import FakeBrokerAdapter
 from .models import (
     BrokerAccountMode,
@@ -18,6 +19,10 @@ from .models import (
 from .sync import BrokerSync
 
 __all__ = [
+    "AlpacaBrokerAdapter",
+    "AlpacaBrokerCapabilities",
+    "AlpacaBrokerError",
+    "AlpacaBrokerErrorDetails",
     "BrokerAccountMode",
     "BrokerAccountSnapshot",
     "BrokerAdapter",

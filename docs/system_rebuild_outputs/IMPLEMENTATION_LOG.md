@@ -793,3 +793,114 @@ Result:
 
 - Broker tests: `16 passed`
 - Targeted backend unit slice: `200 passed`
+
+## 2026-04-24 - Alpaca Broker Adapter Skeleton
+
+Implemented Alpaca broker adapter skeleton without Alpaca SDK, credentials, network calls, API routes, or frontend.
+
+Created:
+
+- `backend/app/brokers/alpaca.py`
+- `backend/tests/unit/brokers/test_alpaca_broker_adapter.py`
+
+Updated:
+
+- `backend/app/brokers/adapter.py`
+- `backend/app/brokers/__init__.py`
+- `backend/app/orders/models.py`
+
+Implemented:
+
+- `AlpacaBrokerAdapter`
+- `AlpacaBrokerCapabilities`
+- `AlpacaBrokerError`
+- `AlpacaBrokerErrorDetails`
+- runtime-checkable `BrokerAdapter` protocol
+- internal order to Alpaca request-shape translation
+- market order translation
+- limit order translation
+- unsupported order type controlled rejection
+- Alpaca status normalization
+- unknown status controlled failure
+- Alpaca order response shape to `BrokerOrderResult`
+- Alpaca account response shape to `BrokerAccountSnapshot`
+- Alpaca position response shape to `BrokerPositionSnapshot`
+- optional internal order price/linkage fields for future limit/protective order translation
+
+Scope kept out:
+
+- No Alpaca SDK
+- No credentials
+- No network calls
+- No real submit/cancel behavior
+- No API routes
+- No frontend
+- No OrderManager changes
+- No Governor changes
+- No Feature Engine changes
+- No Signal Engine changes
+
+Validation performed:
+
+- `python -m pytest backend\tests\unit\brokers -q`
+- `python -m pytest backend\tests\unit\pipeline backend\tests\unit\governor backend\tests\unit\brokers backend\tests\unit\orders backend\tests\unit\runtime backend\tests\unit\simulation backend\tests\unit\chart_lab backend\tests\unit\decision backend\tests\unit\features backend\tests\unit\domain -q`
+- `python -m compileall -q backend\app\brokers backend\tests\unit\brokers backend\app\orders`
+
+Result:
+
+- Broker tests: `28 passed`
+- Targeted backend unit slice: `212 passed`
+
+## 2026-04-24 - Real Alpaca Adapter Paper-Only Execution
+
+Wired `AlpacaBrokerAdapter` to the `alpaca-py` SDK boundary for paper-only market order execution while keeping tests mocked and network-free.
+
+Updated:
+
+- `backend/app/brokers/alpaca.py`
+- `backend/tests/unit/brokers/test_alpaca_broker_adapter.py`
+
+Implemented:
+
+- dotenv credential loading for:
+  - `ALPACA_API_KEY`
+  - `ALPACA_SECRET_KEY`
+  - `ALPACA_BASE_URL`
+- paper-only `TradingClient` construction
+- real `submit_order(order)` path using SDK request objects when a configured client exists
+- `get_order(order)` by `client_order_id`
+- `list_open_orders(account_id)`
+- `get_account_snapshot(account_id)`
+- `get_positions(account_id)`
+- internal order to Alpaca market request translation
+- internal order to Alpaca limit request translation helper
+- mocked SDK submission test path
+- Alpaca order response normalization to `BrokerOrderResult`
+- Alpaca account response normalization to `BrokerAccountSnapshot`
+- Alpaca position response normalization to `BrokerPositionSnapshot`
+- structured `AlpacaBrokerError` handling for auth, validation, insufficient buying power, and network-style failures
+
+Scope kept out:
+
+- No live trading
+- No streaming
+- No bracket/OCO/trailing orders
+- No replace/cancel
+- No API routes
+- No frontend
+- No OrderManager changes
+- No PortfolioGovernor changes
+- No Feature Engine changes
+- No Signal Engine changes
+- No internal order creation inside Alpaca adapter
+
+Validation performed:
+
+- `python -m pytest backend\tests\unit\brokers -q`
+- `python -m pytest backend\tests\unit\pipeline backend\tests\unit\governor backend\tests\unit\brokers backend\tests\unit\orders backend\tests\unit\runtime backend\tests\unit\simulation backend\tests\unit\chart_lab backend\tests\unit\decision backend\tests\unit\features backend\tests\unit\domain -q`
+- `python -m compileall -q backend\app\brokers backend\tests\unit\brokers backend\app\orders`
+
+Result:
+
+- Broker tests: `29 passed`
+- Targeted backend unit slice: `213 passed`

@@ -48,6 +48,11 @@ class InternalOrder(BaseModel):
     filled_quantity: float = Field(default=0, ge=0)
     order_type: OrderType
     time_in_force: TimeInForce
+    limit_price: float | None = Field(default=None, gt=0)
+    stop_price: float | None = Field(default=None, gt=0)
+    parent_order_id: UUID | None = None
+    order_class: str | None = None
+    extended_hours: bool = False
     intent: InternalOrderIntent
     status: InternalOrderStatus
     created_at: datetime

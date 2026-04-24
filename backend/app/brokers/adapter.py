@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Protocol
+from typing import Protocol, runtime_checkable
 from uuid import UUID
 
 from backend.app.orders import InternalOrder
@@ -8,6 +8,7 @@ from backend.app.orders import InternalOrder
 from .models import BrokerAccountSnapshot, BrokerOrderResult, BrokerPositionSnapshot
 
 
+@runtime_checkable
 class BrokerAdapter(Protocol):
     """Boundary for broker implementations.
 
