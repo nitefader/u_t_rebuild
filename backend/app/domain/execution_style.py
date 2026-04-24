@@ -48,4 +48,5 @@ class ExecutionStyleVersion(DomainSchema):
     bracket: BracketSpec = Field(default_factory=BracketSpec)
     trailing_stop_enabled: bool = False
     scale_out_enabled: bool = False
+    feature_refs: list[str] = Field(default_factory=list)
     created_at: datetime = Field(default_factory=utc_now)

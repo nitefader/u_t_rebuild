@@ -28,4 +28,5 @@ class RiskProfileVersion(DomainSchema):
     max_drawdown_pct: float | None = Field(default=None, gt=0, le=100)
     max_positions: int | None = Field(default=None, gt=0)
     max_symbol_exposure_pct: float | None = Field(default=None, gt=0, le=100)
+    feature_refs: list[str] = Field(default_factory=list)
     created_at: datetime = Field(default_factory=utc_now)

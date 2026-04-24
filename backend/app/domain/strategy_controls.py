@@ -39,6 +39,7 @@ class StrategyControlsVersion(DomainSchema):
     max_trades_per_session: int | None = Field(default=None, ge=1)
     max_trades_per_day: int | None = Field(default=None, ge=1)
     event_blackout_enabled: bool = False
+    feature_refs: list[str] = Field(default_factory=list)
     regime_filter_refs: list[str] = Field(default_factory=list)
     created_at: datetime = Field(default_factory=utc_now)
 

@@ -12,8 +12,10 @@ from ._base import DomainSchema, JsonDict, utc_now
 
 class ConditionOperator(StrEnum):
     GT = "gt"
+    GREATER_THAN = "greater_than"
     GTE = "gte"
     LT = "lt"
+    LESS_THAN = "less_than"
     LTE = "lte"
     EQ = "eq"
     CROSS_ABOVE = "cross_above"
@@ -49,7 +51,7 @@ class ConditionNode(DomainSchema):
 
 class ConditionGroup(DomainSchema):
     kind: Literal["group"] = "group"
-    operator: Literal["all", "any"]
+    operator: Literal["all", "any", "and", "or"]
     children: list[ConditionExpression] = Field(min_length=1)
     label: str | None = None
 
@@ -92,6 +94,7 @@ class CandidateTradeIntent(DomainSchema):
     side: CandidateSide
     intent_type: IntentType
     signal_name: str
+    reason: str = "signal_condition_true"
     feature_values_used: JsonDict = Field(default_factory=dict)
     stop_candidate: float | None = None
     target_candidate: float | None = None

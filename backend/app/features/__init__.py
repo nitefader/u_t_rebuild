@@ -2,6 +2,7 @@
 
 from .batch import BatchFeatureEngine, BatchFeatureEngineError, UnsupportedBatchFeatureError
 from .frames import FeatureAvailability, FeatureFrame, FeatureFrameSet, FeatureSnapshot, FeatureValue, NormalizedBar
+from .incremental import FeatureCache, IncrementalFeatureEngine, IncrementalFeatureEngineError, IncrementalFeatureUpdate
 from .key import canonical_params_json, canonicalize_params, make_feature_key
 from .parser import FeatureParseError, parse_feature_expression, parse_params
 from .planner import FeaturePlan, FeaturePlanError, ResolvedProgramComponents, build_feature_plan, collect_feature_refs
@@ -14,6 +15,7 @@ __all__ = [
     "BatchFeatureEngine",
     "BatchFeatureEngineError",
     "FeatureAvailability",
+    "FeatureCache",
     "FeatureFrame",
     "FeatureFrameSet",
     "FeatureNamespace",
@@ -27,6 +29,9 @@ __all__ = [
     "FeatureSpec",
     "FeatureValidationError",
     "FeatureValue",
+    "IncrementalFeatureEngine",
+    "IncrementalFeatureEngineError",
+    "IncrementalFeatureUpdate",
     "NormalizedBar",
     "ResolvedProgramComponents",
     "UnsupportedBatchFeatureError",

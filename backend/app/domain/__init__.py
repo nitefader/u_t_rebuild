@@ -16,6 +16,7 @@ from .strategy import (
     ConditionNode,
     ConditionOperator,
     IntentType,
+    SignalRule,
     StrategyVersion,
 )
 from .strategy_controls import StrategyControlsVersion
@@ -38,6 +39,7 @@ __all__ = [
     "ProgramStatus",
     "ProgramVersion",
     "RiskProfileVersion",
+    "SignalRule",
     "SimulationMode",
     "SimulationSession",
     "StrategyControlsVersion",

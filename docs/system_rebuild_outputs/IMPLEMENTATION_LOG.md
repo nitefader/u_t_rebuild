@@ -407,3 +407,118 @@ Validation performed:
 Result:
 
 - `146 passed`
+
+## 2026-04-24 - Incremental / Streaming Feature Engine
+
+Implemented backend-only incremental Feature Engine support for live-style completed bar updates.
+
+Created:
+
+- `backend/app/features/incremental.py`
+- `backend/tests/unit/features/test_incremental_feature_engine.py`
+
+Updated:
+
+- `backend/app/features/__init__.py`
+
+Implemented:
+
+- `FeatureCache`
+- `IncrementalFeatureEngine`
+- `IncrementalFeatureUpdate`
+- `IncrementalFeatureEngineError`
+- rolling per-symbol/per-timeframe state
+- strict increasing timestamp validation for completed bars
+- incremental passthrough updates for `open`, `high`, `low`, `close`, `volume`
+- incremental `sma`
+- incremental deterministic `ema`
+- incremental `highest`
+- incremental `lowest`
+- feature-key/state reuse from `FeatureSpec`, `FeatureKey`, and `FeatureRegistry`
+- warmup behavior matching batch mode
+- latest-snapshot lookup for multi-timeframe alignment
+- no-lookahead lookback handling
+
+Scope kept out:
+
+- No Alpaca
+- No websocket layer
+- No API routes
+- No frontend
+- No database models or migrations
+- No unsupported indicators
+- No full-history recomputation on incremental updates
+
+Validation performed:
+
+- `python -m pytest backend\tests\unit\features\test_incremental_feature_engine.py -q`
+- `python -m pytest backend\tests\unit\simulation backend\tests\unit\chart_lab backend\tests\unit\decision backend\tests\unit\features backend\tests\unit\domain -q`
+- `python -m compileall -q backend\app\features backend\tests\unit\features`
+
+Result:
+
+- Incremental feature tests: `6 passed`
+- Targeted backend unit slice: `152 passed`
+
+## 2026-04-24 - Internal Streaming Runtime Engine
+
+Implemented backend-only internal runtime decision loop with simulated bar input.
+
+Created:
+
+- `backend/app/runtime/__init__.py`
+- `backend/app/runtime/models.py`
+- `backend/app/runtime/engine.py`
+- `backend/tests/unit/runtime/test_runtime_engine.py`
+
+Updated:
+
+- `backend/app/features/registry.py`
+
+Implemented:
+
+- `DeploymentContext`
+- `RuntimeState`
+- `RuntimeStateStore`
+- `RuntimeEvent`
+- `RuntimeEventLog`
+- `ExecutionIntent`
+- `ExecutionIntentBuilder`
+- minimal `PortfolioGovernor`
+- `RuntimeEngine`
+- bar-by-bar runtime processing
+- per-symbol/per-timeframe incremental feature updates
+- multi-symbol runtime handling
+- runtime feature planning using the canonical registry
+- aligned runtime `FeatureSnapshot` construction from `FeatureCache`
+- Signal Engine evaluation in streaming mode
+- Strategy Controls session blocking
+- Risk Profile sizing for execution intents
+- Execution Style order-shape projection
+- Governor allow/block stamping on execution intents
+- runtime decision events for bars, features, signals, execution intents, and state updates
+
+Scope kept out:
+
+- No Alpaca
+- No websocket layer
+- No broker calls
+- No order submission
+- No fills
+- No position tracking
+- No Sim Lab fill simulation
+- No API routes
+- No frontend
+- No database models or migrations
+- No full-history recomputation
+
+Validation performed:
+
+- `python -m pytest backend\tests\unit\runtime -q`
+- `python -m pytest backend\tests\unit\runtime backend\tests\unit\simulation backend\tests\unit\chart_lab backend\tests\unit\decision backend\tests\unit\features backend\tests\unit\domain -q`
+- `python -m compileall -q backend\app\runtime backend\tests\unit\runtime backend\app\features`
+
+Result:
+
+- Runtime tests: `6 passed`
+- Targeted backend unit slice: `158 passed`

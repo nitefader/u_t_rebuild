@@ -35,7 +35,22 @@ class FeatureRegistryEntry:
     supported_timeframes: frozenset[str] = field(
         default_factory=lambda: frozenset({"1m", "5m", "15m", "30m", "1h", "4h", "1d", "1w", "1mo"})
     )
-    supported_consumers: frozenset[str] = field(default_factory=lambda: frozenset({"chart_lab", "sim_replay", "backtest"}))
+    supported_consumers: frozenset[str] = field(
+        default_factory=lambda: frozenset(
+            {
+                "backtest",
+                "chart_lab",
+                "live",
+                "optimization",
+                "paper",
+                "portfolio_governor",
+                "runtime",
+                "sim_replay",
+                "sim_stream",
+                "walk_forward",
+            }
+        )
+    )
     supported_modes: frozenset[str] = field(default_factory=lambda: frozenset({"batch_replay"}))
     warmup: WarmupFn = no_warmup
     version: str = "v1"
