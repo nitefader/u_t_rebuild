@@ -2927,3 +2927,33 @@ Validation results:
 - `python -m pytest backend/tests -q`: `385 passed, 1 skipped`.
 - `cd frontend; npm test`: `17 passed`; architecture check passed.
 - `cd frontend; npm run build`: Vite production build passed; architecture check passed.
+
+## 2026-04-24 17:56 ET - Runtime DB Path Dev Fallback and Production Guard
+
+Files changed:
+
+- `backend/app/config/runtime_paths.py`
+- `backend/app/api/routes/broker_accounts.py`
+- `backend/app/api/routes/operations.py`
+- `backend/app/broker_accounts/runtime_service.py`
+- `backend/app/operations/runtime_service.py`
+- `backend/tests/unit/config/test_runtime_paths.py`
+
+Implementation:
+
+- Added `get_runtime_db_path()` as the shared runtime database path source.
+- When `OPERATIONS_RUNTIME_DB_PATH` is set, the configured path is used and its parent directory is created.
+- When the variable is missing in local development, the backend falls back to `data/runtime.db`, creates `data/`, and logs `Using default runtime DB path for local development`.
+- Broker account creation and Operations runtime service construction now use the same runtime DB path helper, keeping broker account validation, persistence projections, and recovery-facing runtime state aligned on one SQLite store.
+- Preserved route-test compatibility under installed FastAPI by exposing the existing single-method route metadata and keeping direct operator route errors catchable.
+
+Production safety:
+
+- `ENV=production` or `ENV=prod` disables fallback and requires `OPERATIONS_RUNTIME_DB_PATH`.
+- `OPERATIONS_REQUIRE_RUNTIME_DB_PATH=true` also disables fallback for explicit fail-closed deployments.
+- Production mode without an explicit runtime DB path raises a clear `RuntimeError`.
+
+Validation results:
+
+- `python -m pytest backend/tests/unit/config/test_runtime_paths.py backend/tests/unit/broker_accounts/test_alpaca_paper_account_service.py backend/tests/unit/operations/test_operations_center_service.py backend/tests/unit/runtime/test_recovery_orchestrator.py -q`: `28 passed`.
+- `.venv\Scripts\python.exe -m pytest backend/tests -q`: `390 passed, 1 skipped`, with one third-party `websockets.legacy` deprecation warning.

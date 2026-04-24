@@ -48,8 +48,18 @@ class OperatorErrorResponse(BaseModel):
     detail: str
 
 
-class OperatorRouteError(RuntimeError):
-    """Raised by fallback route functions with operator-readable details."""
+if HTTPException is None:
+
+    class OperatorRouteError(RuntimeError):
+        """Raised by fallback route functions with operator-readable details."""
+
+else:
+
+    class OperatorRouteError(HTTPException):  # type: ignore[misc, valid-type]
+        """Raised by direct route calls with operator-readable FastAPI details."""
+
+        def __init__(self, detail: str) -> None:
+            super().__init__(status_code=503, detail=detail)
 
 
 @dataclass(frozen=True)
@@ -221,6 +231,16 @@ def _control_response(*, action: str, scope: str, target_id: UUID | None = None)
 
 def _operator_error(message: str, exc: Exception) -> Exception:
     detail = f"{message}: {exc}"
-    if HTTPException is None:
-        return OperatorRouteError(detail)
-    return HTTPException(status_code=503, detail=detail)
+    return OperatorRouteError(detail)
+
+
+def _annotate_route_methods() -> None:
+    for route in getattr(router, "routes", []):
+        if hasattr(route, "method"):
+            continue
+        methods = sorted(getattr(route, "methods", []))
+        if methods:
+            route.method = methods[0]
+
+
+_annotate_route_methods()

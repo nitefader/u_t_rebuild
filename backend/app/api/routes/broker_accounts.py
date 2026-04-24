@@ -60,3 +60,15 @@ def _operator_error(message: str) -> Exception:
     if HTTPException is None:
         return BrokerAccountCreationError(message)
     return HTTPException(status_code=400, detail=message)
+
+
+def _annotate_route_methods() -> None:
+    for route in getattr(router, "routes", []):
+        if hasattr(route, "method"):
+            continue
+        methods = sorted(getattr(route, "methods", []))
+        if methods:
+            route.method = methods[0]
+
+
+_annotate_route_methods()
