@@ -4,7 +4,6 @@ from collections import deque
 from collections.abc import Iterable, Mapping
 from uuid import UUID
 
-from backend.app.domain import TradingMode
 from backend.app.orders.models import InternalOrder
 
 from .models import (
@@ -123,20 +122,10 @@ class FakeBrokerAdapter:
         )
 
     def get_account_snapshot(self, account_id: UUID) -> BrokerAccountSnapshot:
-        return self._account_snapshots.get(
-            account_id,
-            BrokerAccountSnapshot(
-                account_id=account_id,
-                provider="fake",
-                mode=TradingMode.BROKER_PAPER,
-                buying_power=100_000,
-                cash=100_000,
-                equity=100_000,
-                daytrading_buying_power=100_000,
-                account_status="ACTIVE",
-                shorting_enabled=False,
-            ),
-        )
+        try:
+            return self._account_snapshots[account_id]
+        except KeyError as exc:
+            raise BrokerAdapterError(f"fake broker has no account snapshot for {account_id}") from exc
 
     def get_positions(self, account_id: UUID) -> tuple[BrokerPositionSnapshot, ...]:
         return self._positions_by_account.get(account_id, ())

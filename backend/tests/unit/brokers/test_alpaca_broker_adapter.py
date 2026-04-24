@@ -296,7 +296,7 @@ def test_adapter_instantiates_with_env(monkeypatch) -> None:
 
     monkeypatch.setenv("ALPACA_API_KEY", "key")
     monkeypatch.setenv("ALPACA_SECRET_KEY", "secret")
-    monkeypatch.setenv("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
+    monkeypatch.setenv("ALPACA_BASE_URL", "https://malicious.invalid")
     monkeypatch.setattr(alpaca_module, "TradingClient", FakeTradingClientClass)
 
     adapter = AlpacaBrokerAdapter(load_env=False)
@@ -304,7 +304,15 @@ def test_adapter_instantiates_with_env(monkeypatch) -> None:
     assert adapter._client.api_key == "key"
     assert adapter._client.secret_key == "secret"
     assert adapter._client.kwargs["paper"] is True
-    assert adapter._client.kwargs["url_override"] == "https://paper-api.alpaca.markets"
+    assert "url_override" not in adapter._client.kwargs
+    assert adapter.base_url == "https://paper-api.alpaca.markets"
+
+
+def test_adapter_rejects_external_base_url_override() -> None:
+    with pytest.raises(AlpacaBrokerError) as exc_info:
+        AlpacaBrokerAdapter(trading_client=FakeTradingClient(), load_env=False, base_url="https://example.invalid")
+
+    assert exc_info.value.details.code == "custom_base_url_rejected"
 
 
 def test_no_alpaca_sdk_or_network_imports_exist() -> None:

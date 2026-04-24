@@ -90,19 +90,35 @@ class AlpacaBrokerAdapter:
     """
 
     provider = "alpaca"
+    PAPER_BASE_URL = "https://paper-api.alpaca.markets"
+    LIVE_BASE_URL = "https://api.alpaca.markets"
 
     def __init__(
         self,
         *,
         mode: TradingMode = TradingMode.BROKER_PAPER,
+        api_key: str | None = None,
+        secret_key: str | None = None,
         trading_client: Any | None = None,
         load_env: bool = True,
+        base_url: str | None = None,
     ) -> None:
+        if base_url is not None:
+            raise AlpacaBrokerError("custom_base_url_rejected", "Alpaca endpoint is derived from broker account mode")
         if mode != TradingMode.BROKER_PAPER:
             raise AlpacaBrokerError("broker_live_disabled", "AlpacaBrokerAdapter currently supports BROKER_PAPER only")
         self.mode = mode
+        self.base_url = self.endpoint_for_mode(mode)
         self.capabilities = AlpacaBrokerCapabilities()
-        self._client = trading_client or self._build_trading_client(load_env=load_env)
+        self._client = trading_client or self._build_trading_client(api_key=api_key, secret_key=secret_key, load_env=load_env)
+
+    @classmethod
+    def endpoint_for_mode(cls, mode: TradingMode) -> str:
+        if mode == TradingMode.BROKER_PAPER:
+            return cls.PAPER_BASE_URL
+        if mode == TradingMode.BROKER_LIVE:
+            return cls.LIVE_BASE_URL
+        raise AlpacaBrokerError("unsupported_broker_mode", f"Unsupported Alpaca broker mode: {mode}")
 
     def submit_order(self, order: InternalOrder) -> BrokerOrderResult:
         self._require_internal_order(order)
@@ -341,19 +357,16 @@ class AlpacaBrokerAdapter:
             timestamp=self._optional_datetime(response.get("updated_at")) or utc_now(),
         )
 
-    def _build_trading_client(self, *, load_env: bool) -> Any:
+    def _build_trading_client(self, *, api_key: str | None = None, secret_key: str | None = None, load_env: bool) -> Any:
         if load_env:
             load_dotenv()
-        api_key = os.getenv("ALPACA_API_KEY")
-        secret_key = os.getenv("ALPACA_SECRET_KEY")
-        base_url = os.getenv("ALPACA_BASE_URL")
+        api_key = api_key or os.getenv("ALPACA_API_KEY")
+        secret_key = secret_key or os.getenv("ALPACA_SECRET_KEY")
         if not api_key or not secret_key:
             raise AlpacaBrokerError("missing_credentials", "ALPACA_API_KEY and ALPACA_SECRET_KEY are required")
         if TradingClient is None:
             raise AlpacaBrokerError("missing_sdk", "alpaca-py is required for Alpaca BROKER_PAPER execution")
-        kwargs: dict[str, object] = {"paper": True}
-        if base_url:
-            kwargs["url_override"] = base_url
+        kwargs: dict[str, object] = {"paper": self.mode == TradingMode.BROKER_PAPER}
         return TradingClient(api_key, secret_key, **kwargs)  # type: ignore[misc,operator]
 
     def _get_existing_order(self, order: InternalOrder) -> BrokerOrderResult | None:

@@ -38,11 +38,27 @@ CREATE UNIQUE INDEX IF NOT EXISTS ux_broker_order_mappings_broker_order_id
     ON broker_order_mappings(provider, broker_order_id);
 CREATE INDEX IF NOT EXISTS ix_broker_order_mappings_account_id ON broker_order_mappings(account_id);
 
+CREATE TABLE IF NOT EXISTS broker_accounts (
+    account_id TEXT PRIMARY KEY,
+    provider TEXT NOT NULL,
+    mode TEXT NOT NULL,
+    validation_status TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    payload TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS broker_account_snapshots (
     account_id TEXT PRIMARY KEY,
     provider TEXT,
     timestamp TEXT NOT NULL,
     payload TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS broker_position_snapshots (
+    account_id TEXT NOT NULL,
+    symbol TEXT NOT NULL,
+    payload TEXT NOT NULL,
+    PRIMARY KEY (account_id, symbol)
 );
 
 CREATE TABLE IF NOT EXISTS broker_open_order_snapshots (

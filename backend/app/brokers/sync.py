@@ -80,7 +80,10 @@ class BrokerSync:
         return tuple(updates)
 
     def sync_positions(self, account_id: UUID) -> tuple[BrokerPositionSnapshot, ...]:
-        return self._require_adapter().get_positions(account_id)
+        positions = self._require_adapter().get_positions(account_id)
+        for position in positions:
+            self.record_position_snapshot(position)
+        return positions
 
     def sync_account(self, account_id: UUID) -> BrokerAccountSnapshot:
         snapshot = self._require_adapter().get_account_snapshot(account_id)
@@ -167,6 +170,11 @@ class BrokerSync:
     def record_external_open_order(self, snapshot: BrokerOpenOrderSnapshot) -> BrokerOpenOrderSnapshot:
         if self._runtime_store is not None and hasattr(self._runtime_store, "save_broker_open_order_snapshot"):
             self._runtime_store.save_broker_open_order_snapshot(snapshot)
+        return snapshot
+
+    def record_position_snapshot(self, snapshot: BrokerPositionSnapshot) -> BrokerPositionSnapshot:
+        if self._runtime_store is not None and hasattr(self._runtime_store, "save_broker_position_snapshot"):
+            self._runtime_store.save_broker_position_snapshot(snapshot)
         return snapshot
 
     def record_sync_freshness(

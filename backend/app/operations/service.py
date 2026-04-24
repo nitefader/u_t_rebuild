@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from datetime import datetime
-from typing import TYPE_CHECKING, Mapping
+from typing import TYPE_CHECKING
 from uuid import UUID
 
 from backend.app.governor.models import GovernorDecision, GovernorPolicy
@@ -48,7 +48,6 @@ class OperationsCenterService:
         latest_governor_decisions: Iterable[GovernorDecision] = (),
         governor_state: GovernorPolicy | None = None,
         governor_id: str = "portfolio-governor",
-        deployment_account_ids: Mapping[UUID, UUID] | None = None,
     ) -> None:
         self._control_plane = control_plane
         self._runtime_store = runtime_store
@@ -60,7 +59,6 @@ class OperationsCenterService:
         self._latest_governor_decisions = tuple(latest_governor_decisions)
         self._governor_state = governor_state if governor_state is not None else self._load_governor_state(governor_id)
         self._governor_id = governor_id
-        self._deployment_account_ids = dict(deployment_account_ids or {})
 
     def get_runtime_overview(self) -> RuntimeOverview:
         control_state = self._control_plane.snapshot()
@@ -216,6 +214,8 @@ class OperationsCenterService:
         )
 
     def _account_ids(self) -> set[UUID]:
+        if self._runtime_store is not None and hasattr(self._runtime_store, "list_broker_accounts"):
+            return {account.id for account in self._runtime_store.list_broker_accounts()}
         account_ids = {order.account_id for order in self._all_orders()}
         account_ids.update(snapshot.account_id for snapshot in self._list_broker_account_snapshots())
         account_ids.update(state.account_id for state in self._list_broker_sync_freshness())
@@ -230,13 +230,7 @@ class OperationsCenterService:
         return deployment_ids
 
     def _deployment_ids_for_account(self, account_id: UUID) -> set[UUID]:
-        deployment_ids = {order.deployment_id for order in self._orders_by_account(account_id)}
-        deployment_ids.update(
-            deployment_id
-            for deployment_id, mapped_account_id in self._deployment_account_ids.items()
-            if mapped_account_id == account_id
-        )
-        return deployment_ids
+        return {order.deployment_id for order in self._orders_by_account(account_id)}
 
     def _all_orders(self) -> tuple[InternalOrder, ...]:
         if self._order_ledger is not None:
@@ -285,6 +279,8 @@ class OperationsCenterService:
     def _positions(self, account_id: UUID):
         if self._broker_sync_reader is not None and hasattr(self._broker_sync_reader, "latest_positions"):
             return tuple(self._broker_sync_reader.latest_positions(account_id))
+        if self._runtime_store is not None and hasattr(self._runtime_store, "list_broker_position_snapshots"):
+            return tuple(self._runtime_store.list_broker_position_snapshots(account_id))
         return ()
 
     def _all_positions(self):
@@ -316,8 +312,7 @@ class OperationsCenterService:
         return next((deployment for deployment in self._deployments if deployment.deployment_id == deployment_id), None)
 
     def _deployment_account_id(self, deployment_id: UUID, orders: tuple[InternalOrder, ...]) -> UUID | None:
-        if deployment_id in self._deployment_account_ids:
-            return self._deployment_account_ids[deployment_id]
+        _ = deployment_id
         return orders[0].account_id if orders else None
 
     def _deployment_program_id(self, context: DeploymentContext | None, orders: tuple[InternalOrder, ...]) -> UUID | None:

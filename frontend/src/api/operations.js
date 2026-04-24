@@ -1,11 +1,12 @@
 const API_PREFIX = "/api/v1/operations";
+const BROKER_ACCOUNTS_PREFIX = "/api/v1/broker-accounts";
 
-async function requestJson(path, options = {}, fetchImpl = globalThis.fetch) {
+async function requestJson(path, options = {}, fetchImpl = globalThis.fetch, prefix = API_PREFIX) {
   if (typeof fetchImpl !== "function") {
     throw new Error("Operations API unavailable: fetch is not configured");
   }
 
-  const response = await fetchImpl(`${API_PREFIX}${path}`, {
+  const response = await fetchImpl(`${prefix}${path}`, {
     headers: {
       "Content-Type": "application/json",
       Accept: "application/json",
@@ -38,6 +39,20 @@ export function createOperationsApi(fetchImpl = globalThis.fetch) {
     getOverview: () => requestJson("/overview", {}, fetchImpl),
     getAccount: (accountId) => requestJson(`/accounts/${accountId}`, {}, fetchImpl),
     getDeployment: (deploymentId) => requestJson(`/deployments/${deploymentId}`, {}, fetchImpl),
+    createAlpacaPaperAccount: ({ displayName, apiKey, apiSecret }) =>
+      requestJson(
+        "/alpaca-paper",
+        {
+          method: "POST",
+          body: JSON.stringify({
+            display_name: displayName,
+            api_key: apiKey,
+            api_secret: apiSecret
+          })
+        },
+        fetchImpl,
+        BROKER_ACCOUNTS_PREFIX
+      ),
     pauseAccount: (accountId, reason) =>
       requestJson(`/accounts/${accountId}/pause`, { method: "POST", body: commandBody(reason) }, fetchImpl),
     resumeAccount: (accountId, reason) =>

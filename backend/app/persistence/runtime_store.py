@@ -13,8 +13,10 @@ from backend.app.brokers import (
     BrokerFillUpdateEvent,
     BrokerOpenOrderSnapshot,
     BrokerOrderMapping,
+    BrokerPositionSnapshot,
     BrokerSyncState,
 )
+from backend.app.broker_accounts.models import BrokerAccount
 from backend.app.control_plane.service import ControlPlaneState
 from backend.app.domain._base import utc_now
 from backend.app.governor import GovernorPolicy
@@ -178,6 +180,41 @@ class SQLiteRuntimeStore:
         rows = self._fetch_all("SELECT payload FROM broker_order_mappings ORDER BY rowid")
         return tuple(_load_model(BrokerOrderMapping, row["payload"]) for row in rows)
 
+    def save_broker_account(self, account: BrokerAccount) -> BrokerAccount:
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO broker_accounts
+                    (account_id, provider, mode, validation_status, created_at, payload)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(account_id) DO UPDATE SET
+                    provider = excluded.provider,
+                    mode = excluded.mode,
+                    validation_status = excluded.validation_status,
+                    created_at = excluded.created_at,
+                    payload = excluded.payload
+                """,
+                (
+                    str(account.id),
+                    account.provider,
+                    account.mode.value,
+                    account.validation_status.value,
+                    account.created_at.isoformat(),
+                    _dump_model(account),
+                ),
+            )
+        return account
+
+    def load_broker_account(self, account_id: UUID) -> BrokerAccount:
+        row = self._fetch_one("SELECT payload FROM broker_accounts WHERE account_id = ?", (str(account_id),))
+        if row is None:
+            raise KeyError(f"unknown broker account: {account_id}")
+        return _load_model(BrokerAccount, row["payload"])
+
+    def list_broker_accounts(self) -> tuple[BrokerAccount, ...]:
+        rows = self._fetch_all("SELECT payload FROM broker_accounts ORDER BY created_at, account_id")
+        return tuple(_load_model(BrokerAccount, row["payload"]) for row in rows)
+
     def save_broker_account_snapshot(self, snapshot: BrokerAccountSnapshot) -> BrokerAccountSnapshot:
         with self._connect() as connection:
             connection.execute(
@@ -202,6 +239,26 @@ class SQLiteRuntimeStore:
     def list_broker_account_snapshots(self) -> tuple[BrokerAccountSnapshot, ...]:
         rows = self._fetch_all("SELECT payload FROM broker_account_snapshots ORDER BY rowid")
         return tuple(_load_model(BrokerAccountSnapshot, row["payload"]) for row in rows)
+
+    def save_broker_position_snapshot(self, snapshot: BrokerPositionSnapshot) -> BrokerPositionSnapshot:
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO broker_position_snapshots (account_id, symbol, payload)
+                VALUES (?, ?, ?)
+                ON CONFLICT(account_id, symbol) DO UPDATE SET
+                    payload = excluded.payload
+                """,
+                (str(snapshot.account_id), snapshot.symbol.upper(), _dump_model(snapshot)),
+            )
+        return snapshot
+
+    def list_broker_position_snapshots(self, account_id: UUID) -> tuple[BrokerPositionSnapshot, ...]:
+        rows = self._fetch_all(
+            "SELECT payload FROM broker_position_snapshots WHERE account_id = ? ORDER BY symbol",
+            (str(account_id),),
+        )
+        return tuple(_load_model(BrokerPositionSnapshot, row["payload"]) for row in rows)
 
     def save_broker_open_order_snapshot(self, snapshot: BrokerOpenOrderSnapshot) -> BrokerOpenOrderSnapshot:
         with self._connect() as connection:

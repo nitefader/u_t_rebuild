@@ -136,6 +136,13 @@ def test_account_snapshot_freshness_can_be_read() -> None:
     assert BrokerSync(ledger=OrderManager().ledger, adapter=adapter).sync_account(ACCOUNT_ID).last_synced_at == synced_at
 
 
+def test_fake_broker_does_not_create_placeholder_account_snapshot() -> None:
+    adapter = FakeBrokerAdapter()
+
+    with pytest.raises(BrokerAdapterError, match="no account snapshot"):
+        adapter.get_account_snapshot(ACCOUNT_ID)
+
+
 def test_position_snapshots_normalize_side_and_quantity() -> None:
     long_position = BrokerPositionSnapshot(
         account_id=ACCOUNT_ID,

@@ -84,6 +84,38 @@ function renderGovernorDecisions(decisions = []) {
     .join("")}</ul>`;
 }
 
+function renderAccountSetupPanel(detailState = {}) {
+  const status = detailState.accountSetup;
+  return `<section class="panel">
+    <header><h2>Add Alpaca Paper Account</h2></header>
+    <form class="account-form" data-form="alpaca-paper-account">
+      <label>
+        <span>Display name</span>
+        <input name="display_name" autocomplete="off" required>
+      </label>
+      <label>
+        <span>API key</span>
+        <input name="api_key" autocomplete="off" required>
+      </label>
+      <label>
+        <span>API secret</span>
+        <input name="api_secret" type="password" autocomplete="off" required>
+      </label>
+      <fieldset>
+        <legend>Account Type</legend>
+        <label class="checkbox-label">
+          <input type="checkbox" checked disabled>
+          <span>Paper (safe testing)</span>
+        </label>
+      </fieldset>
+      <button type="submit">Validate and add account</button>
+    </form>
+    ${status === "loading" ? `<p class="notice">Validating Alpaca paper credentials and syncing broker truth.</p>` : ""}
+    ${status === "error" ? `<p class="warning" role="alert">${escapeHtml(detailState.accountSetupError || "Account setup failed.")}</p>` : ""}
+    ${status === "success" ? `<p class="notice">Alpaca paper account added and synced.</p>` : ""}
+  </section>`;
+}
+
 function renderAccounts(accounts = [], selection = null) {
   if (!accounts.length) {
     return `<p class="empty">No broker accounts are registered in the Operations API.</p>`;
@@ -207,6 +239,7 @@ export function renderOperationsCenterOverview(overview, detailState = {}) {
     </article>
   </section>
   ${renderStaleSyncWarnings(overview.stale_sync_accounts || [])}
+  ${renderAccountSetupPanel(detailState)}
   <section class="panel">
     <header><h2>Broker Accounts</h2></header>
     ${renderAccounts(overview.broker_accounts || [], selection)}
@@ -498,6 +531,35 @@ export async function mountOperationsCenter(root, client = createOperationsApi()
     const card = event.target.closest("[data-select-type][data-id]");
     if (card) {
       await loadSelectedDetail(card.dataset.selectType, card.dataset.id);
+    }
+  });
+
+  root.addEventListener("submit", async (event) => {
+    const form = event.target.closest("form[data-form='alpaca-paper-account']");
+    if (!form) return;
+    event.preventDefault();
+    const data = new FormData(form);
+    state.detail = { ...state.detail, accountSetup: "loading" };
+    render();
+    try {
+      const result = await client.createAlpacaPaperAccount({
+        displayName: data.get("display_name"),
+        apiKey: data.get("api_key"),
+        apiSecret: data.get("api_secret")
+      });
+      const accountId = result?.account?.id;
+      state.detail = { status: "empty", accountSetup: "success" };
+      await refreshOverview();
+      if (accountId) {
+        await loadSelectedDetail("account", accountId);
+      }
+    } catch (error) {
+      state.detail = {
+        ...state.detail,
+        accountSetup: "error",
+        accountSetupError: error.message || String(error)
+      };
+      render();
     }
   });
 

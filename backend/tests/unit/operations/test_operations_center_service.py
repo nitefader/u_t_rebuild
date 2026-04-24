@@ -13,6 +13,7 @@ from backend.app.brokers import (
     BrokerPositionSnapshot,
     BrokerSyncState,
 )
+from backend.app.broker_accounts import BrokerAccount, BrokerAccountValidationStatus
 from backend.app.control_plane import ControlPlane
 from backend.app.domain import CandidateSide, IntentType, OrderType, ProgramVersion, TimeInForce, TradingMode
 from backend.app.governor import GovernorDecision, GovernorPolicy
@@ -132,7 +133,7 @@ def _snapshot() -> BrokerAccountSnapshot:
         equity=100_000,
         cash=40_000,
         buying_power=80_000,
-        provider="fake",
+        provider="alpaca",
         mode=TradingMode.BROKER_PAPER,
         timestamp=NOW,
     )
@@ -201,6 +202,19 @@ def _store(tmp_path, *, stale: bool = False) -> tuple[SQLiteRuntimeStore, Intern
     db_path = tmp_path / "utos.db"
     store = SQLiteRuntimeStore(db_path)
     order = _order()
+    store.save_broker_account(
+        BrokerAccount(
+            id=ACCOUNT_ID,
+            display_name="Paper account",
+            provider="alpaca",
+            mode=TradingMode.BROKER_PAPER,
+            credentials_ref=f"alpaca-paper:{ACCOUNT_ID}:test",
+            validation_status=BrokerAccountValidationStatus.VALID,
+            last_account_snapshot=_snapshot(),
+            broker_sync_freshness=_sync_state(stale=stale),
+            created_at=NOW,
+        )
+    )
     store.save_order(order)
     store.save_broker_account_snapshot(_snapshot())
     store.save_broker_sync_freshness(_sync_state(stale=stale))

@@ -2877,3 +2877,53 @@ Validation results:
 - In-process Operations API projection with `SEED_OPERATIONS_DEMO=1`: `1` account, `1` deployment, `0` open orders, `0` open positions; account and deployment detail projections loaded.
 - `cd frontend; npm run dev`: Vite started and `GET /` returned `200`.
 - Backend server start with `python -m uvicorn backend.app.api.server:app --host 127.0.0.1 --port 8000` could not be completed in this environment because `uvicorn` is not installed.
+
+## 2026-04-24 17:50 ET - Real Alpaca Paper Broker Account Setup
+
+Files created:
+
+- `backend/app/broker_accounts/__init__.py`
+- `backend/app/broker_accounts/models.py`
+- `backend/app/broker_accounts/runtime_service.py`
+- `backend/app/broker_accounts/service.py`
+- `backend/app/api/routes/broker_accounts.py`
+- `backend/tests/unit/api/test_broker_accounts_routes.py`
+- `backend/tests/unit/broker_accounts/test_alpaca_paper_account_service.py`
+
+Files removed:
+
+- `backend/app/operations/demo_seed.py`
+- `backend/scripts/__init__.py`
+- `backend/scripts/seed_operations_demo.py`
+- `backend/tests/unit/operations/test_operations_demo_seed.py`
+
+Implementation:
+
+- Removed the local Operations Center demo seed path and disabled demo account surfacing through Operations routes.
+- Added canonical `BrokerAccount` metadata with `id`, `display_name`, `provider`, `mode`, `credentials_ref`, `validation_status`, latest account snapshot, broker sync freshness, and `created_at`.
+- Added `POST /api/v1/broker-accounts/alpaca-paper` with input limited to `display_name`, `api_key`, and `api_secret`.
+- Added an Operations Center account setup panel for Alpaca paper accounts only; the UI does not ask for base URL, API endpoint, or environment URL.
+- Persisted broker accounts separately from broker truth so Operations Center only shows canonical real broker accounts.
+- Added durable broker position snapshots so account detail can show positions synced through broker sync.
+
+Endpoint and validation behavior:
+
+- `AlpacaBrokerAdapter` now derives endpoints from mode: `BROKER_PAPER` uses `https://paper-api.alpaca.markets`; `BROKER_LIVE` maps to `https://api.alpaca.markets` for future support.
+- External/custom base URL injection is rejected, and `ALPACA_BASE_URL` is ignored by the adapter.
+- Account creation validates read-only through Alpaca account snapshot, positions, and open orders calls.
+- Invalid validation returns an operator-readable error and does not persist a BrokerAccount.
+- After validation, broker truth is written only through `BrokerSync.sync_account`, `BrokerSync.sync_positions`, `BrokerSync.sync_open_orders`, and sync freshness recording.
+
+Safety constraints:
+
+- Paper mode only; live account creation remains disabled.
+- No order submission during account validation.
+- No automatic deployment creation.
+- No automatic trading.
+- No fake or demo account injection into Operations Center.
+
+Validation results:
+
+- `python -m pytest backend/tests -q`: `385 passed, 1 skipped`.
+- `cd frontend; npm test`: `17 passed`; architecture check passed.
+- `cd frontend; npm run build`: Vite production build passed; architecture check passed.

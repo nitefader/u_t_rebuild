@@ -14,6 +14,7 @@ from backend.app.brokers import (
     BrokerSync,
     BrokerSyncState,
 )
+from backend.app.broker_accounts import BrokerAccount, BrokerAccountValidationStatus
 from backend.app.control_plane import ControlPlane
 from backend.app.domain import (
     CandidateSide,
@@ -253,6 +254,18 @@ def _paper_context(tmp_path, monkeypatch, *, broker_freshness: GovernorBrokerSyn
 
 def _seed_broker_truth(store: SQLiteRuntimeStore, adapter: AlpacaBrokerAdapter, broker_sync: BrokerSync, order: InternalOrder) -> None:
     account_snapshot = adapter.get_account_snapshot(ACCOUNT_ID)
+    store.save_broker_account(
+        BrokerAccount(
+            id=ACCOUNT_ID,
+            display_name="Paper smoke account",
+            provider="alpaca",
+            mode=TradingMode.BROKER_PAPER,
+            credentials_ref=f"alpaca-paper:{ACCOUNT_ID}:smoke",
+            validation_status=BrokerAccountValidationStatus.VALID,
+            last_account_snapshot=account_snapshot,
+            created_at=NOW,
+        )
+    )
     broker_sync.sync_account(ACCOUNT_ID)
     for open_order in adapter.list_open_orders(ACCOUNT_ID):
         broker_sync.record_external_open_order(open_order)

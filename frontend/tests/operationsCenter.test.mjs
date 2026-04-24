@@ -166,6 +166,39 @@ test("account and deployment detail calls use Operations API routes", async () =
   ]);
 });
 
+test("alpaca paper account creation uses broker account API without URL input", async () => {
+  const calls = [];
+  const api = createOperationsApi(async (url, options = {}) => {
+    calls.push([url, options.method || "GET", JSON.parse(options.body)]);
+    return { ok: true, json: async () => ({ account: { id: accountId } }) };
+  });
+
+  await api.createAlpacaPaperAccount({
+    displayName: "Paper",
+    apiKey: "key",
+    apiSecret: "secret"
+  });
+
+  assert.equal(calls[0][0], "/api/v1/broker-accounts/alpaca-paper");
+  assert.equal(calls[0][1], "POST");
+  assert.deepEqual(calls[0][2], {
+    display_name: "Paper",
+    api_key: "key",
+    api_secret: "secret"
+  });
+  assert.ok(!("base_url" in calls[0][2]));
+});
+
+test("account setup UI is paper only and does not ask for API URLs", () => {
+  const html = renderOperationsCenterOverview(overview());
+
+  assert.match(html, /Add Alpaca Paper Account/);
+  assert.match(html, /Paper \(safe testing\)/);
+  assert.match(html, /name="api_key"/);
+  assert.match(html, /name="api_secret"/);
+  assert.doesNotMatch(html, /base_url|base url|endpoint|environment URL|api endpoint/i);
+});
+
 test("overview cards are clickable and selected account is highlighted", () => {
   const html = renderOperationsCenterOverview(overview(), {
     status: "loaded",
