@@ -6,12 +6,23 @@ from sqlite3 import IntegrityError
 from uuid import UUID
 from uuid import uuid4
 
-from backend.app.broker_accounts.models import BrokerAccount, BrokerAccountValidationStatus
+from backend.app.broker_accounts.models import (
+    BrokerAccount,
+    BrokerAccountCredentialUpdateResponse,
+    BrokerAccountCredentialValidationStatus,
+    BrokerAccountDeletionResponse,
+    BrokerAccountDeletionStatus,
+    BrokerAccountValidationStatus,
+)
 from backend.app.brokers import AlpacaBrokerAdapter, BrokerSync
+from backend.app.brokers.models import BrokerSyncState
+from backend.app.control_plane import ControlPlane
 from backend.app.domain import TradingMode
 from backend.app.domain._base import utc_now
+from backend.app.orders import InternalOrderStatus
 from backend.app.orders import OrderLedger
 from backend.app.persistence import SQLiteRuntimeStore
+from backend.app.runtime import RuntimeStatus
 
 
 class BrokerAccountCreationError(RuntimeError):
@@ -111,6 +122,119 @@ class BrokerAccountService:
         except Exception as exc:  # noqa: BLE001 - keep route errors operator-readable.
             raise BrokerAccountCreationError(f"Unable to validate Alpaca paper account: {exc}") from exc
 
+    def replace_alpaca_paper_credentials(
+        self,
+        *,
+        account_id: UUID,
+        api_key: str,
+        api_secret: str,
+        control_plane=None,
+    ) -> BrokerAccountCredentialUpdateResponse:
+        account = self._runtime_store.load_broker_account(account_id)
+        if account.mode != TradingMode.BROKER_PAPER or account.provider != "alpaca":
+            return BrokerAccountCredentialUpdateResponse(
+                account=account,
+                validation_status=BrokerAccountCredentialValidationStatus.MODE_MISMATCH,
+                message="credential replacement is supported only for Alpaca paper accounts",
+            )
+        if _masked_or_missing(api_key) or _masked_or_missing(api_secret):
+            return BrokerAccountCredentialUpdateResponse(
+                account=account,
+                validation_status=BrokerAccountCredentialValidationStatus.MISSING_CREDENTIALS,
+                message="new unmasked API key and secret are required",
+            )
+        blockers = self._active_runtime_blockers(account_id=account_id, control_plane=control_plane)
+        if blockers:
+            raise BrokerAccountCreationError(f"Account must be paused before credential replacement: {', '.join(blockers)}")
+        try:
+            adapter = self._adapter_factory(mode=TradingMode.BROKER_PAPER, api_key=api_key, secret_key=api_secret, load_env=False)
+            snapshot = adapter.get_account_snapshot(account_id)
+        except ConnectionError:
+            return self._mark_account_invalid(account, BrokerAccountCredentialValidationStatus.PROVIDER_UNREACHABLE, "provider unreachable")
+        except Exception as exc:  # noqa: BLE001 - invalid credentials should be operator-readable.
+            return self._mark_account_invalid(account, BrokerAccountCredentialValidationStatus.INVALID, f"invalid credentials: {exc}")
+        if snapshot.mode is not None and snapshot.mode != TradingMode.BROKER_PAPER:
+            return self._mark_account_invalid(account, BrokerAccountCredentialValidationStatus.MODE_MISMATCH, "credentials resolved to a non-paper account")
+        external_account_id = _external_account_id_from_snapshot(snapshot)
+        if account.external_account_id and external_account_id != account.external_account_id:
+            return self._mark_account_invalid(account, BrokerAccountCredentialValidationStatus.MODE_MISMATCH, "credentials resolved to a different Alpaca account")
+
+        credentials_ref = self._credential_store.store_alpaca_paper_credentials(
+            account_id=account_id,
+            api_key=api_key,
+            api_secret=api_secret,
+        )
+        stale_sync = BrokerSyncState(
+            account_id=account_id,
+            last_sync_at=utc_now(),
+            last_successful_sync_at=None,
+            is_stale=True,
+            stale_reason="credentials_replaced_requires_broker_sync",
+        )
+        updated = self._runtime_store.save_broker_account(
+            account.model_copy(
+                update={
+                    "credentials_ref": credentials_ref,
+                    "validation_status": BrokerAccountValidationStatus.VALID,
+                    "external_account_id": external_account_id,
+                    "last_account_snapshot": snapshot,
+                    "broker_sync_freshness": stale_sync,
+                }
+            )
+        )
+        self._runtime_store.save_broker_sync_freshness(stale_sync)
+        return BrokerAccountCredentialUpdateResponse(
+            account=updated,
+            validation_status=BrokerAccountCredentialValidationStatus.VALID,
+            message="credentials validated; broker sync is stale until the next successful sync",
+        )
+
+    def delete_or_archive_account(
+        self,
+        *,
+        account_id: UUID,
+        confirm_display_name: str,
+        confirm_mode: TradingMode,
+    ) -> BrokerAccountDeletionResponse:
+        account = self._runtime_store.load_broker_account(account_id)
+        if confirm_display_name != account.display_name or confirm_mode != account.mode:
+            return BrokerAccountDeletionResponse(
+                account_id=account_id,
+                status=BrokerAccountDeletionStatus.BLOCKED,
+                message="confirmation did not match account display name and mode",
+                blockers=("confirmation_mismatch",),
+            )
+        blockers = self._deletion_blockers(account)
+        if blockers:
+            return BrokerAccountDeletionResponse(
+                account_id=account_id,
+                status=BrokerAccountDeletionStatus.BLOCKED,
+                message="broker account deletion is blocked",
+                blockers=tuple(blockers),
+            )
+        if self._has_history(account_id):
+            archived = self._runtime_store.save_broker_account(
+                account.model_copy(
+                    update={
+                        "is_archived": True,
+                        "archived_at": utc_now(),
+                        "validation_status": BrokerAccountValidationStatus.PENDING,
+                    }
+                )
+            )
+            return BrokerAccountDeletionResponse(
+                account_id=account_id,
+                status=BrokerAccountDeletionStatus.ARCHIVED,
+                message="broker account archived; historical references preserved",
+                archived_account=archived,
+            )
+        self._runtime_store.delete_broker_account(account_id)
+        return BrokerAccountDeletionResponse(
+            account_id=account_id,
+            status=BrokerAccountDeletionStatus.HARD_DELETED,
+            message="broker account hard-deleted; no runtime history existed",
+        )
+
     def _load_existing_alpaca_paper_account(self, external_account_id: str) -> BrokerAccount | None:
         try:
             return self._runtime_store.load_broker_account_by_external_identity(
@@ -120,6 +244,67 @@ class BrokerAccountService:
             )
         except KeyError:
             return None
+
+    def _mark_account_invalid(
+        self,
+        account: BrokerAccount,
+        status: BrokerAccountCredentialValidationStatus,
+        message: str,
+    ) -> BrokerAccountCredentialUpdateResponse:
+        updated = self._runtime_store.save_broker_account(
+            account.model_copy(update={"validation_status": BrokerAccountValidationStatus.INVALID})
+        )
+        return BrokerAccountCredentialUpdateResponse(account=updated, validation_status=status, message=message)
+
+    def _active_runtime_blockers(self, *, account_id: UUID, control_plane=None) -> list[str]:
+        if control_plane is None:
+            control_plane = ControlPlane(state_store=self._runtime_store)
+        if control_plane is not None and control_plane.is_account_paused(account_id):
+            return []
+        deployment_ids = {order.deployment_id for order in self._runtime_store.list_orders_by_account(account_id)}
+        blockers = []
+        for state in self._runtime_store.list_deployment_runtime_states():
+            if state.deployment_id not in deployment_ids:
+                continue
+            if state.status in {RuntimeStatus.RUNNING, RuntimeStatus.DEGRADED}:
+                blockers.append(f"deployment_active:{state.deployment_id}")
+        return blockers
+
+    def _deletion_blockers(self, account: BrokerAccount) -> list[str]:
+        blockers: list[str] = []
+        runtime_deployments = {order.deployment_id for order in self._runtime_store.list_orders_by_account(account.id)}
+        for state in self._runtime_store.list_deployment_runtime_states():
+            if state.deployment_id in runtime_deployments and state.status in {RuntimeStatus.RUNNING, RuntimeStatus.DEGRADED, RuntimeStatus.BLOCKED}:
+                blockers.append(f"deployment_not_stopped:{state.deployment_id}")
+        open_statuses = {
+            InternalOrderStatus.CREATED,
+            InternalOrderStatus.PENDING_SUBMISSION,
+            InternalOrderStatus.SUBMITTED,
+            InternalOrderStatus.ACCEPTED,
+            InternalOrderStatus.PARTIALLY_FILLED,
+        }
+        if any(order.status in open_statuses for order in self._runtime_store.list_orders_by_account(account.id)):
+            blockers.append("open_internal_orders")
+        if self._runtime_store.list_broker_open_order_snapshots(account.id):
+            blockers.append("open_broker_orders")
+        if any(position.quantity != 0 for position in self._runtime_store.list_broker_position_snapshots(account.id)):
+            blockers.append("open_positions")
+        try:
+            freshness = self._runtime_store.load_broker_sync_freshness(account.id)
+            if freshness.is_stale:
+                blockers.append("broker_sync_stale")
+        except KeyError:
+            blockers.append("broker_sync_unknown")
+        return blockers
+
+    def _has_history(self, account_id: UUID) -> bool:
+        return any(
+            (
+                self._runtime_store.list_orders_by_account(account_id),
+                tuple(trade for trade in self._runtime_store.list_trades() if getattr(trade, "account_id", None) == account_id),
+                tuple(mapping for mapping in self._runtime_store.list_broker_order_mappings() if mapping.account_id == account_id),
+            )
+        )
 
 
 def _external_account_id_from_snapshot(snapshot: object) -> str:
@@ -132,3 +317,10 @@ def _external_account_id_from_snapshot(snapshot: object) -> str:
     if raw_account_id:
         return str(raw_account_id)
     raise BrokerAccountCreationError("Alpaca account response did not include an account id")
+
+
+def _masked_or_missing(value: str) -> bool:
+    stripped = (value or "").strip()
+    if not stripped:
+        return True
+    return set(stripped) <= {"*", "x", "X", "-", "_", " "}

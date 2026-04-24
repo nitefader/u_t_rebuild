@@ -3,7 +3,16 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 from typing import Annotated
 
-from backend.app.broker_accounts.models import BrokerAccountResponse, CreateAlpacaPaperBrokerAccountRequest
+from uuid import UUID
+
+from backend.app.broker_accounts.models import (
+    BrokerAccountCredentialUpdateResponse,
+    BrokerAccountDeletionResponse,
+    BrokerAccountResponse,
+    CreateAlpacaPaperBrokerAccountRequest,
+    DeleteBrokerAccountRequest,
+    ReplaceAlpacaPaperBrokerAccountCredentialsRequest,
+)
 from backend.app.broker_accounts.service import BrokerAccountCreationError
 
 if TYPE_CHECKING:
@@ -54,6 +63,38 @@ def create_alpaca_paper_broker_account(
     except BrokerAccountCreationError as exc:
         raise _operator_error(str(exc)) from exc
     return BrokerAccountResponse(account=result.account, already_exists=result.already_exists)
+
+
+@router.put("/{account_id}/alpaca-paper/credentials", response_model=BrokerAccountCredentialUpdateResponse)
+def replace_alpaca_paper_broker_account_credentials(
+    account_id: UUID,
+    request: ReplaceAlpacaPaperBrokerAccountCredentialsRequest,
+    service: BrokerAccountServiceDependency,
+) -> BrokerAccountCredentialUpdateResponse:
+    try:
+        return service.replace_alpaca_paper_credentials(
+            account_id=account_id,
+            api_key=request.api_key,
+            api_secret=request.api_secret,
+        )
+    except BrokerAccountCreationError as exc:
+        raise _operator_error(str(exc)) from exc
+
+
+@router.post("/{account_id}/delete", response_model=BrokerAccountDeletionResponse)
+def delete_broker_account(
+    account_id: UUID,
+    request: DeleteBrokerAccountRequest,
+    service: BrokerAccountServiceDependency,
+) -> BrokerAccountDeletionResponse:
+    try:
+        return service.delete_or_archive_account(
+            account_id=account_id,
+            confirm_display_name=request.confirm_display_name,
+            confirm_mode=request.confirm_mode,
+        )
+    except BrokerAccountCreationError as exc:
+        raise _operator_error(str(exc)) from exc
 
 
 def _operator_error(message: str) -> Exception:

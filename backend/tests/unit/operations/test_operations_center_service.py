@@ -8,6 +8,7 @@ from backend.app.brokers import (
     BrokerAccountSnapshot,
     BrokerFillUpdateEvent,
     BrokerOpenOrderSnapshot,
+    BrokerOrderMapping,
     BrokerOrderStatus,
     BrokerPositionSide,
     BrokerPositionSnapshot,
@@ -366,6 +367,24 @@ def test_global_kill_resume_delegates_to_control_plane_only() -> None:
     assert control_plane.calls == [("activate_global_kill", "global"), ("clear_global_kill", "global")]
 
 
+def test_global_kill_survives_restart_and_operations_overview_reports_it(tmp_path) -> None:
+    store, _ = _store(tmp_path)
+    ControlPlane(state_store=store).activate_global_kill()
+
+    restarted_control_plane = ControlPlane(state_store=store)
+    overview = OperationsCenterService(control_plane=restarted_control_plane, runtime_store=store).get_runtime_overview()
+    decision = restarted_control_plane.can_open_new_position(
+        account_id=ACCOUNT_ID,
+        deployment_id=DEPLOYMENT_ID,
+        symbol="SPY",
+        side="long",
+    )
+
+    assert overview.global_kill_active is True
+    assert decision.allowed is False
+    assert decision.reason == "global_kill_active"
+
+
 def test_flatten_returns_explicit_not_ready_when_control_plane_has_no_contract() -> None:
     response = OperationsCenterService(control_plane=ControlPlane()).request_flatten_account(ACCOUNT_ID, "operator")
 
@@ -399,3 +418,38 @@ def test_operations_center_does_not_call_broker_adapter_directly_or_create_order
     assert "save_broker_account_snapshot" not in source
     assert "save_broker_open_order_snapshot" not in source
     assert "save_broker_sync_freshness" not in source
+
+
+def test_order_detail_returns_internal_truth_mapping_and_fill_summary(tmp_path) -> None:
+    service, store, order = _service(tmp_path)
+    store.save_broker_order_mapping(
+        BrokerOrderMapping(
+            order_id=order.order_id,
+            client_order_id=order.client_order_id,
+            broker_order_id="broker-1",
+            provider="alpaca",
+            account_id=ACCOUNT_ID,
+            created_at=NOW,
+            last_synced_at=NOW,
+        )
+    )
+
+    detail = service.get_order_detail(order.order_id)
+
+    assert detail.internal_order == order
+    assert detail.broker_mapping is not None
+    assert detail.broker_order_id == "broker-1"
+    assert detail.broker_status == BrokerOrderStatus.ACCEPTED.value
+    assert detail.broker_sync_timestamp == NOW
+    assert detail.trade_summary["fill_count"] == 1
+    assert detail.trade_summary["filled_quantity"] == 1
+    assert "raw" not in detail.model_dump_json().lower()
+
+
+def test_order_detail_unknown_broker_state_renders_unknown_stale(tmp_path) -> None:
+    service, _store, order = _service(tmp_path)
+
+    detail = service.get_order_detail(order.order_id)
+
+    assert detail.broker_mapping is None
+    assert detail.broker_status == "unknown_stale"

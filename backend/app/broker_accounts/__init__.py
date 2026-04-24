@@ -2,9 +2,15 @@
 
 from .models import (
     BrokerAccount,
+    BrokerAccountCredentialUpdateResponse,
+    BrokerAccountCredentialValidationStatus,
+    BrokerAccountDeletionResponse,
+    BrokerAccountDeletionStatus,
     BrokerAccountResponse,
     BrokerAccountValidationStatus,
     CreateAlpacaPaperBrokerAccountRequest,
+    DeleteBrokerAccountRequest,
+    ReplaceAlpacaPaperBrokerAccountCredentialsRequest,
 )
 
 _SERVICE_EXPORTS = {
@@ -25,11 +31,17 @@ def __getattr__(name: str):
 
 __all__ = [
     "BrokerAccount",
+    "BrokerAccountCredentialUpdateResponse",
+    "BrokerAccountCredentialValidationStatus",
+    "BrokerAccountDeletionResponse",
+    "BrokerAccountDeletionStatus",
     "BrokerAccountCreationError",
     "BrokerAccountCreationResult",
     "BrokerAccountResponse",
     "BrokerAccountService",
     "BrokerAccountValidationStatus",
     "CreateAlpacaPaperBrokerAccountRequest",
+    "DeleteBrokerAccountRequest",
     "CredentialReferenceStore",
+    "ReplaceAlpacaPaperBrokerAccountCredentialsRequest",
 ]

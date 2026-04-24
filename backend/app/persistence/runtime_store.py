@@ -225,9 +225,20 @@ class SQLiteRuntimeStore:
             raise KeyError(f"unknown broker account external identity: {provider}:{mode}:{external_account_id}")
         return _load_model(BrokerAccount, row["payload"])
 
-    def list_broker_accounts(self) -> tuple[BrokerAccount, ...]:
+    def delete_broker_account(self, account_id: UUID) -> None:
+        with self._connect() as connection:
+            connection.execute("DELETE FROM broker_accounts WHERE account_id = ?", (str(account_id),))
+            connection.execute("DELETE FROM broker_account_snapshots WHERE account_id = ?", (str(account_id),))
+            connection.execute("DELETE FROM broker_sync_freshness WHERE account_id = ?", (str(account_id),))
+            connection.execute("DELETE FROM broker_position_snapshots WHERE account_id = ?", (str(account_id),))
+            connection.execute("DELETE FROM broker_open_order_snapshots WHERE account_id = ?", (str(account_id),))
+
+    def list_broker_accounts(self, *, include_archived: bool = False) -> tuple[BrokerAccount, ...]:
         rows = self._fetch_all("SELECT payload FROM broker_accounts ORDER BY created_at, account_id")
-        return tuple(_load_model(BrokerAccount, row["payload"]) for row in rows)
+        accounts = tuple(_load_model(BrokerAccount, row["payload"]) for row in rows)
+        if include_archived:
+            return accounts
+        return tuple(account for account in accounts if not account.is_archived)
 
     def save_broker_account_snapshot(self, snapshot: BrokerAccountSnapshot) -> BrokerAccountSnapshot:
         with self._connect() as connection:

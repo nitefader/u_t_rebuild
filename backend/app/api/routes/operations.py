@@ -11,6 +11,7 @@ from backend.app.operations.models import (
     AccountOperations,
     DeploymentOperations,
     FlattenRequestResponse,
+    OrderDetail,
     RuntimeOverview,
 )
 
@@ -82,6 +83,9 @@ class FallbackRouter:
     def post(self, path: str, *, response_model: type[BaseModel]) -> Callable[[Callable[..., object]], Callable[..., object]]:
         return self._register("POST", path, response_model)
 
+    def put(self, path: str, *, response_model: type[BaseModel]) -> Callable[[Callable[..., object]], Callable[..., object]]:
+        return self._register("PUT", path, response_model)
+
     def _register(
         self,
         method: str,
@@ -147,6 +151,14 @@ def get_deployment_operations(deployment_id: UUID, service: OperationsServiceDep
         return service.get_deployment_operations(deployment_id)
     except Exception as exc:  # noqa: BLE001
         raise _operator_error(f"Unable to load deployment operations for {deployment_id}", exc) from exc
+
+
+@router.get("/orders/{order_id}", response_model=OrderDetail)
+def get_order_detail(order_id: UUID, service: OperationsServiceDependency) -> OrderDetail:
+    try:
+        return service.get_order_detail(order_id)
+    except Exception as exc:  # noqa: BLE001
+        raise _operator_error(f"Unable to load order detail for {order_id}", exc) from exc
 
 
 @router.post("/deployments/{deployment_id}/pause", response_model=ControlCommandResponse)

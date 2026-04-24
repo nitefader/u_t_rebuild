@@ -7,6 +7,7 @@ from .models import (
     DeploymentSummary,
     FlattenRequestResponse,
     InternalOrderLedgerSummary,
+    OrderDetail,
     RuntimeOverview,
 )
 
@@ -27,6 +28,7 @@ __all__ = [
     "DeploymentSummary",
     "FlattenRequestResponse",
     "InternalOrderLedgerSummary",
+    "OrderDetail",
     "OperationsCenterService",
     "RuntimeOverview",
 ]

@@ -3029,3 +3029,67 @@ Validation results:
 - `python -m pytest backend/tests/unit/pipeline backend/tests/unit/governor backend/tests/unit/orders backend/tests/unit/brokers backend/tests/unit/runtime -q`: `136 passed`.
 - `python -m pytest backend/tests -q`: `407 passed, 1 skipped`.
 - `python -m compileall -q backend/app backend/tests`: passed.
+
+## 2026-04-24 19:41 ET - Paper Operations Hardening and Runbook
+
+Files changed:
+
+- `backend/app/api/routes/broker_accounts.py`
+- `backend/app/api/routes/operations.py`
+- `backend/app/broker_accounts/__init__.py`
+- `backend/app/broker_accounts/models.py`
+- `backend/app/broker_accounts/service.py`
+- `backend/app/operations/__init__.py`
+- `backend/app/operations/models.py`
+- `backend/app/operations/service.py`
+- `backend/app/persistence/runtime_store.py`
+- `backend/tests/unit/api/test_broker_accounts_routes.py`
+- `backend/tests/unit/api/test_operations_routes.py`
+- `backend/tests/unit/broker_accounts/test_alpaca_paper_account_service.py`
+- `backend/tests/unit/operations/test_operations_center_service.py`
+- `frontend/src/api/operations.js`
+- `frontend/src/operationsCenter.js`
+- `frontend/tests/operationsCenter.test.mjs`
+- `docs/operations/PAPER_RUNTIME_SHIP_GATE.md`
+- `docs/operations/DAY_1_PAPER_RUNBOOK.md`
+- `docs/system_rebuild_outputs/IMPLEMENTATION_LOG.md`
+
+Implementation:
+
+- Removed the broken/manual Alpaca smoke artifact from the active workspace; no `manual_alpaca_check.py` remains.
+- Added restart-safe global kill coverage proving persisted ControlPlane state is rehydrated and new opens stay blocked after restart.
+- Documented and tested the current paper-mode Operations API contract: local paper operations routes remain unauthenticated by design.
+- Added Alpaca paper credential replacement for existing broker accounts with masked-secret rejection, mode mismatch handling, invalid credential handling, provider-unreachable status, active runtime blocking, and stale broker sync marking after replacement.
+- Added safe broker account deletion/archive behavior with hard delete only for dependency-free accounts and archival for historical accounts.
+- Added deletion blockers for running/degraded/blocked deployments, open internal orders, open broker orders, open positions, stale sync, and unknown sync.
+- Added Operations order detail projection with internal order truth, broker mapping truth, broker status/freshness, and fill summary without raw Alpaca payloads or credentials.
+- Updated Operations Center UI/API client for credential replacement, safe account deletion confirmation, order detail navigation, and separated internal/broker/fill truth panels.
+- Added Paper Runtime Ship Gate and Day-1 Paper Trading Runbook.
+
+Tests added:
+
+- Broker account credential replacement, masked credential rejection, invalid credential rejection, mode mismatch rejection, stale sync marking, runtime open blocking after replacement, and active runtime replacement blocking.
+- Broker account deletion blockers, archive-vs-hard-delete behavior, and preservation of historical references.
+- Operations restart-safe global kill and order detail projection tests.
+- API route tests for credential replacement, deletion, unauthenticated local paper order detail behavior, and order detail response models.
+- Frontend tests for credential replacement/deletion API calls, order detail rendering, unknown broker state rendering, and order-detail navigation controls.
+
+Scope kept out:
+
+- No live trading path was added.
+- No manual trade placement was added.
+- No FeatureEngine, SignalEngine, PortfolioGovernor, OrderManager, BrokerAdapter, or BrokerSync core logic was changed.
+- BrokerSync remains the broker truth writer, OrderManager remains the internal order creator, and BrokerAdapter remains the only Alpaca caller.
+- Frontend still never calls Alpaca directly.
+
+Validation results:
+
+- `python -m compileall -q backend/app backend/tests`: passed.
+- `python -m pytest backend/tests/unit/runtime -q`: `31 passed`.
+- `python -m pytest backend/tests/unit/control_plane -q`: `13 passed`.
+- `python -m pytest backend/tests/unit/operations -q`: `11 passed`.
+- `python -m pytest backend/tests/unit/brokers -q`: `63 passed`.
+- `python -m pytest backend/tests/unit/orders -q`: `16 passed`.
+- `python -m pytest backend/tests -q`: `425 passed, 1 skipped`.
+- `cd frontend && npm.cmd run build`: Vite production build passed; frontend check passed.
+- `cd frontend && npm.cmd test`: `21 passed`; frontend check passed.

@@ -10,8 +10,10 @@ from backend.app.operations import (
     DeploymentOperations,
     FlattenRequestResponse,
     InternalOrderLedgerSummary,
+    OrderDetail,
     RuntimeOverview,
 )
+from backend.tests.unit.operations.test_operations_center_service import PROGRAM_ID, _order
 from backend.app.runtime import RuntimeStatus
 
 
@@ -36,6 +38,13 @@ class RecordingOperationsService:
             runtime_status=RuntimeStatus.RUNNING,
             governor_id="portfolio-governor",
         )
+        order = _order()
+        self.order_detail = OrderDetail(
+            internal_order=order,
+            broker_account_id=ACCOUNT_ID,
+            deployment_id=DEPLOYMENT_ID,
+            program_id=PROGRAM_ID,
+        )
 
     def get_runtime_overview(self) -> RuntimeOverview:
         self.calls.append(("get_runtime_overview", "global"))
@@ -48,6 +57,10 @@ class RecordingOperationsService:
     def get_deployment_operations(self, deployment_id: UUID) -> DeploymentOperations:
         self.calls.append(("get_deployment_operations", deployment_id))
         return self.deployment
+
+    def get_order_detail(self, order_id: UUID) -> OrderDetail:
+        self.calls.append(("get_order_detail", order_id))
+        return self.order_detail
 
     def pause_deployment(self, deployment_id: UUID, reason: str) -> None:
         self.calls.append(("pause_deployment", deployment_id))
@@ -104,6 +117,7 @@ def test_routes_are_registered_with_explicit_response_models() -> None:
     assert registered[("GET", "/api/v1/operations/overview")] is RuntimeOverview
     assert registered[("GET", f"/api/v1/operations/accounts/{{account_id}}")] is AccountOperations
     assert registered[("GET", f"/api/v1/operations/deployments/{{deployment_id}}")] is DeploymentOperations
+    assert registered[("GET", f"/api/v1/operations/orders/{{order_id}}")] is OrderDetail
     assert registered[("POST", f"/api/v1/operations/deployments/{{deployment_id}}/pause")] is operations.ControlCommandResponse
     assert registered[("POST", f"/api/v1/operations/deployments/{{deployment_id}}/resume")] is operations.ControlCommandResponse
     assert registered[("POST", f"/api/v1/operations/accounts/{{account_id}}/pause")] is operations.ControlCommandResponse
@@ -139,6 +153,16 @@ def test_deployment_route_returns_deployment_operations() -> None:
 
     assert response == service.deployment
     assert service.calls == [("get_deployment_operations", DEPLOYMENT_ID)]
+
+
+def test_order_detail_route_returns_order_detail_without_auth_dependency_in_paper_mode() -> None:
+    service = RecordingOperationsService()
+    order_id = service.order_detail.internal_order.order_id
+
+    response = operations.get_order_detail(order_id, service=service)
+
+    assert response == service.order_detail
+    assert service.calls == [("get_order_detail", order_id)]
 
 
 def test_pause_resume_deployment_delegates_through_service() -> None:

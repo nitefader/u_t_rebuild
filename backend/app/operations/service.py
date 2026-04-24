@@ -5,6 +5,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING
 from uuid import UUID
 
+from backend.app.brokers.models import BrokerFillUpdateEvent
 from backend.app.governor.models import GovernorDecision, GovernorPolicy
 from backend.app.orders.ledger import OrderLedger
 from backend.app.orders.models import InternalOrder
@@ -18,6 +19,7 @@ from .models import (
     DeploymentSummary,
     FlattenRequestResponse,
     InternalOrderLedgerSummary,
+    OrderDetail,
     OPEN_ORDER_STATUSES,
     RuntimeOverview,
     TERMINAL_ORDER_STATUSES,
@@ -144,6 +146,36 @@ class OperationsCenterService:
             latest_governor_decisions=decisions,
         )
 
+    def get_order_detail(self, order_id: UUID) -> OrderDetail:
+        order = self._order_by_id(order_id)
+        mapping = self._broker_mapping(order_id)
+        freshness = self._broker_sync_freshness(order.account_id)
+        broker_status = "unknown_stale"
+        if mapping is not None:
+            for snapshot in self._list_broker_open_order_snapshots(order.account_id):
+                if snapshot.client_order_id == order.client_order_id or snapshot.broker_order_id == mapping.broker_order_id:
+                    broker_status = snapshot.status.value
+                    break
+            else:
+                broker_status = "mapped_unknown"
+        fills = tuple(fill for fill in self._fills_for_order(order))
+        return OrderDetail(
+            internal_order=order,
+            broker_mapping=mapping,
+            broker_account_id=order.account_id,
+            deployment_id=order.deployment_id,
+            program_id=order.program_id,
+            broker_order_id=mapping.broker_order_id if mapping is not None else None,
+            broker_status=broker_status,
+            broker_sync_timestamp=self._last_broker_sync_timestamp_for_deployment(order.account_id) if freshness is not None else None,
+            fills=fills,
+            trade_summary={
+                "fill_count": len(fills),
+                "filled_quantity": sum(fill.qty for fill in fills),
+                "last_fill_at": max((fill.event_at for fill in fills), default=None),
+            },
+        )
+
     def pause_deployment(self, deployment_id: UUID, reason: str) -> None:
         _ = reason
         self._control_plane.pause_deployment(deployment_id)
@@ -229,7 +261,19 @@ class OperationsCenterService:
         account_ids.update(snapshot.account_id for snapshot in self._list_broker_account_snapshots())
         account_ids.update(state.account_id for state in self._list_broker_sync_freshness())
         account_ids.update(order.account_id for order in self._list_broker_open_order_snapshots())
-        return account_ids
+        return account_ids - self._archived_account_ids()
+
+    def _archived_account_ids(self) -> set[UUID]:
+        if self._runtime_store is None or not hasattr(self._runtime_store, "list_broker_accounts"):
+            return set()
+        try:
+            return {
+                account.id
+                for account in self._runtime_store.list_broker_accounts(include_archived=True)
+                if getattr(account, "is_archived", False)
+            }
+        except TypeError:
+            return set()
 
     def _deployment_ids(self) -> set[UUID]:
         deployment_ids = {state.deployment_id for state in self._list_runtime_states()}
@@ -247,6 +291,22 @@ class OperationsCenterService:
         if self._runtime_store is not None and hasattr(self._runtime_store, "list_orders"):
             return tuple(self._runtime_store.list_orders())
         return ()
+
+    def _order_by_id(self, order_id: UUID) -> InternalOrder:
+        if self._runtime_store is not None and hasattr(self._runtime_store, "load_order"):
+            return self._runtime_store.load_order(order_id)
+        for order in self._all_orders():
+            if order.order_id == order_id:
+                return order
+        raise KeyError(f"unknown order: {order_id}")
+
+    def _broker_mapping(self, order_id: UUID):
+        if self._runtime_store is None or not hasattr(self._runtime_store, "lookup_broker_mapping_by_internal_order_id"):
+            return None
+        try:
+            return self._runtime_store.lookup_broker_mapping_by_internal_order_id(order_id)
+        except KeyError:
+            return None
 
     def _orders_by_account(self, account_id: UUID) -> tuple[InternalOrder, ...]:
         if self._order_ledger is not None:
@@ -305,6 +365,15 @@ class OperationsCenterService:
         if self._broker_sync_reader is not None and hasattr(self._broker_sync_reader, "fills"):
             return tuple(self._broker_sync_reader.fills())
         return ()
+
+    def _fills_for_order(self, order: InternalOrder):
+        fills = list(self._fills())
+        fills.extend(
+            trade
+            for trade in self._trades_by_deployment(order.deployment_id)
+            if isinstance(trade, BrokerFillUpdateEvent)
+        )
+        return tuple(fill for fill in fills if fill.client_order_id == order.client_order_id)
 
     def _fill_belongs_to_deployment(self, fill, orders: tuple[InternalOrder, ...]) -> bool:
         return any(order.client_order_id == fill.client_order_id for order in orders)

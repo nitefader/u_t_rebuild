@@ -9,6 +9,7 @@ from backend.app.brokers.models import (
     BrokerAccountSnapshot,
     BrokerFillUpdateEvent,
     BrokerOpenOrderSnapshot,
+    BrokerOrderMapping,
     BrokerPositionSnapshot,
     BrokerSyncState,
 )
@@ -117,6 +118,21 @@ class DeploymentOperations(BaseModel):
     fills: tuple[BrokerFillUpdateEvent, ...] = ()
     latest_pipeline_events: tuple[PipelineEvent | RuntimeEvent, ...] = ()
     latest_governor_decisions: tuple[GovernorDecision, ...] = ()
+
+
+class OrderDetail(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    internal_order: InternalOrder
+    broker_mapping: BrokerOrderMapping | None = None
+    broker_account_id: UUID
+    deployment_id: UUID
+    program_id: UUID
+    broker_order_id: str | None = None
+    broker_status: str = "unknown_stale"
+    broker_sync_timestamp: datetime | None = None
+    fills: tuple[BrokerFillUpdateEvent, ...] = ()
+    trade_summary: dict[str, object] = Field(default_factory=dict)
 
 
 OPEN_ORDER_STATUSES = {

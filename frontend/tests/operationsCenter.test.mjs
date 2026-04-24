@@ -10,6 +10,7 @@ import {
   renderAccountDetail,
   renderDeploymentDetail,
   renderDetailPanel,
+  renderOrderDetail,
   renderOperationsCenterOverview
 } from "../src/operationsCenter.js";
 
@@ -159,10 +160,12 @@ test("account and deployment detail calls use Operations API routes", async () =
 
   await api.getAccount(accountId);
   await api.getDeployment(deploymentId);
+  await api.getOrder("order-1");
 
   assert.deepEqual(calls, [
     [`/api/v1/operations/accounts/${accountId}`, "GET"],
-    [`/api/v1/operations/deployments/${deploymentId}`, "GET"]
+    [`/api/v1/operations/deployments/${deploymentId}`, "GET"],
+    ["/api/v1/operations/orders/order-1", "GET"]
   ]);
 });
 
@@ -197,6 +200,24 @@ test("account setup UI is paper only and does not ask for API URLs", () => {
   assert.match(html, /name="api_key"/);
   assert.match(html, /name="api_secret"/);
   assert.doesNotMatch(html, /base_url|base url|endpoint|environment URL|api endpoint/i);
+});
+
+test("credential replacement and account deletion use broker account API without exposing secrets", async () => {
+  const calls = [];
+  const api = createOperationsApi(async (url, options = {}) => {
+    calls.push([url, options.method || "GET", options.body ? JSON.parse(options.body) : null]);
+    return { ok: true, json: async () => ({ validation_status: "valid", message: "ok" }) };
+  });
+
+  const replace = await api.replaceAlpacaPaperCredentials(accountId, { apiKey: "new-key", apiSecret: "new-secret" });
+  await api.deleteBrokerAccount(accountId, { confirmDisplayName: "Paper", confirmMode: "BROKER_PAPER" });
+
+  assert.equal(calls[0][0], `/api/v1/broker-accounts/${accountId}/alpaca-paper/credentials`);
+  assert.equal(calls[0][1], "PUT");
+  assert.deepEqual(calls[0][2], { api_key: "new-key", api_secret: "new-secret" });
+  assert.doesNotMatch(JSON.stringify(replace), /new-secret/);
+  assert.equal(calls[1][0], `/api/v1/broker-accounts/${accountId}/delete`);
+  assert.deepEqual(calls[1][2], { confirm_display_name: "Paper", confirm_mode: "BROKER_PAPER" });
 });
 
 test("duplicate account setup message renders while existing account is selected", () => {
@@ -363,6 +384,9 @@ test("account detail renders snapshot, positions, open orders, freshness, and co
   assert.match(html, /Last successful sync/);
   assert.match(html, /data-action="pause-account"/);
   assert.match(html, /data-action="resume-account"/);
+  assert.match(html, /Paper Credential Replacement/);
+  assert.match(html, /data-action="delete-account"/);
+  assert.doesNotMatch(html, /secret-value/);
 });
 
 test("deployment detail renders status, program, governor, orders, trades, fills, timestamps, and controls", () => {
@@ -392,6 +416,61 @@ test("deployment detail renders status, program, governor, orders, trades, fills
   assert.match(html, /Last market data/);
   assert.match(html, /data-action="pause-deployment"/);
   assert.match(html, /data-action="resume-deployment"/);
+});
+
+test("order detail distinguishes internal broker and fill truth without raw payloads", () => {
+  const html = renderOrderDetail({
+    internal_order: {
+      order_id: "order-1",
+      client_order_id: "client-1",
+      account_id: accountId,
+      deployment_id: deploymentId,
+      program_id: "program-a",
+      symbol: "SPY",
+      side: "long",
+      quantity: 10,
+      filled_quantity: 1,
+      order_type: "market",
+      time_in_force: "day",
+      intent: "open",
+      status: "accepted",
+      created_at: "2026-04-24T15:00:00Z",
+      updated_at: "2026-04-24T15:01:00Z"
+    },
+    broker_mapping: {
+      broker_order_id: "broker-1",
+      provider: "alpaca",
+      last_synced_at: "2026-04-24T15:01:00Z"
+    },
+    broker_account_id: accountId,
+    deployment_id: deploymentId,
+    program_id: "program-a",
+    broker_order_id: "broker-1",
+    broker_status: "accepted",
+    broker_sync_timestamp: "2026-04-24T15:02:00Z",
+    trade_summary: { fill_count: 1, filled_quantity: 1 },
+    fills: [{ symbol: "SPY", qty: 1, price: 401, event_at: "2026-04-24T15:02:00Z" }]
+  });
+
+  assert.match(html, /Internal Order Truth/);
+  assert.match(html, /Broker Mapped Truth/);
+  assert.match(html, /Trade\/Fill Truth/);
+  assert.match(html, /broker-1/);
+  assert.doesNotMatch(html, /raw_alpaca|credentials|api_secret/i);
+});
+
+test("unknown broker state renders as unknown stale", () => {
+  const html = renderOrderDetail({
+    internal_order: { order_id: "order-1", client_order_id: "client-1" },
+    broker_account_id: accountId,
+    deployment_id: deploymentId,
+    program_id: "program-a",
+    broker_status: "unknown_stale",
+    trade_summary: {}
+  });
+
+  assert.match(html, /unknown_stale/);
+  assert.match(html, /unknown\/stale/);
 });
 
 test("UI does not import broker, engine, or order internals", async () => {

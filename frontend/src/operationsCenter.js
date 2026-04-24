@@ -63,6 +63,7 @@ function renderRecordList(title, records = [], emptyText, fields = []) {
         <dl>${fields
           .map(({ label, value }) => `<div><dt>${label}</dt><dd>${renderJsonValue(value(record))}</dd></div>`)
           .join("")}</dl>
+        ${record.order_id ? `<button type="button" data-action="order-detail" data-id="${escapeHtml(record.order_id)}">Order detail</button>` : ""}
       </article>`)
       .join("")}</div>
   </section>`;
@@ -279,6 +280,8 @@ export function renderAccountDetail(account, flattenResult = null) {
         <button type="button" data-action="clear-detail">Clear</button>
         <button type="button" data-action="pause-account" data-id="${escapeHtml(account.account_id)}">Pause</button>
         <button type="button" data-action="resume-account" data-id="${escapeHtml(account.account_id)}">Resume</button>
+        <button type="button" data-action="show-credential-form" data-id="${escapeHtml(account.account_id)}">Replace paper credentials</button>
+        <button type="button" class="danger" data-action="delete-account" data-id="${escapeHtml(account.account_id)}" data-name="${escapeHtml(snapshot?.display_name || account.display_name || account.account_id)}" data-mode="${escapeHtml(snapshot?.mode || account.mode || "BROKER_PAPER")}">Delete account</button>
         <span class="status">${escapeHtml(account.account_id)}</span>
       </div>
     </header>
@@ -298,6 +301,15 @@ export function renderAccountDetail(account, flattenResult = null) {
       <div><dt>Internal open orders</dt><dd>${account.internal_order_ledger_summary?.open_count ?? 0}</dd></div>
     </dl>
     ${freshness?.is_stale ? `<p class="warning">Stale broker sync: ${escapeHtml(freshness.stale_reason || "freshness check failed")}</p>` : `<p class="notice">Sync freshness is current according to the Operations API.</p>`}
+    <section class="detail-section">
+      <h3>Paper Credential Replacement</h3>
+      <p class="notice">Alpaca paper only. Saved secrets are never displayed after validation.</p>
+      <form class="account-form" data-form="replace-paper-credentials" data-account-id="${escapeHtml(account.account_id)}">
+        <label><span>New API key</span><input name="api_key" autocomplete="off" required></label>
+        <label><span>New API secret</span><input name="api_secret" type="password" autocomplete="off" required></label>
+        <button type="submit">Validate and replace</button>
+      </form>
+    </section>
     ${renderRecordList("Positions", account.positions || [], "No positions reported.", [
       { label: "Symbol", value: (position) => position.symbol },
       { label: "Side", value: (position) => position.side },
@@ -312,6 +324,7 @@ export function renderAccountDetail(account, flattenResult = null) {
       { label: "Quantity", value: (order) => order.qty },
       { label: "Status", value: (order) => order.status },
       { label: "Type", value: (order) => order.order_type },
+      { label: "Internal order", value: (order) => order.order_id },
       { label: "Client order", value: (order) => order.client_order_id },
       { label: "Broker order", value: (order) => order.broker_order_id },
       { label: "Timestamp", value: (order) => formatTimestamp(order.timestamp) }
@@ -379,12 +392,67 @@ export function renderDeploymentDetail(deployment, flattenResult = null) {
   </article>`;
 }
 
+export function renderOrderDetail(detail) {
+  const order = detail.internal_order || {};
+  const mapping = detail.broker_mapping;
+  return `<article>
+    <header>
+      <h2>Order Detail</h2>
+      <button type="button" data-action="clear-detail">Clear</button>
+    </header>
+    <section class="detail-section">
+      <h3>Internal Order Truth</h3>
+      <dl class="detail-grid">
+        <div><dt>Internal order id</dt><dd>${escapeHtml(order.order_id)}</dd></div>
+        <div><dt>Client order id</dt><dd>${escapeHtml(order.client_order_id)}</dd></div>
+        <div><dt>Broker account</dt><dd>${escapeHtml(detail.broker_account_id)}</dd></div>
+        <div><dt>Deployment</dt><dd>${escapeHtml(detail.deployment_id)}</dd></div>
+        <div><dt>Program</dt><dd>${escapeHtml(detail.program_id)}</dd></div>
+        <div><dt>Symbol</dt><dd>${escapeHtml(order.symbol)}</dd></div>
+        <div><dt>Side</dt><dd>${escapeHtml(order.side)}</dd></div>
+        <div><dt>Quantity</dt><dd>${renderJsonValue(order.quantity)}</dd></div>
+        <div><dt>Filled quantity</dt><dd>${renderJsonValue(order.filled_quantity)}</dd></div>
+        <div><dt>Order type</dt><dd>${escapeHtml(order.order_type)}</dd></div>
+        <div><dt>Time in force</dt><dd>${escapeHtml(order.time_in_force)}</dd></div>
+        <div><dt>Intent</dt><dd>${escapeHtml(order.intent)}</dd></div>
+        <div><dt>Internal status</dt><dd>${escapeHtml(order.status)}</dd></div>
+        <div><dt>Reason</dt><dd>${escapeHtml(order.reason || "None reported")}</dd></div>
+        <div><dt>Created</dt><dd>${escapeHtml(formatTimestamp(order.created_at))}</dd></div>
+        <div><dt>Submitted</dt><dd>${escapeHtml(formatTimestamp(order.submitted_at))}</dd></div>
+        <div><dt>Updated</dt><dd>${escapeHtml(formatTimestamp(order.updated_at))}</dd></div>
+        <div><dt>Filled</dt><dd>${escapeHtml(formatTimestamp(order.filled_at))}</dd></div>
+      </dl>
+    </section>
+    <section class="detail-section">
+      <h3>Broker Mapped Truth</h3>
+      <dl class="detail-grid">
+        <div><dt>Broker order id</dt><dd>${escapeHtml(detail.broker_order_id || "unknown")}</dd></div>
+        <div><dt>Broker status</dt><dd>${escapeHtml(detail.broker_status || "unknown_stale")}</dd></div>
+        <div><dt>Provider</dt><dd>${escapeHtml(mapping?.provider || "unknown")}</dd></div>
+        <div><dt>Mapping synced</dt><dd>${escapeHtml(formatTimestamp(mapping?.last_synced_at))}</dd></div>
+        <div><dt>Broker sync freshness</dt><dd>${escapeHtml(formatTimestamp(detail.broker_sync_timestamp))}</dd></div>
+      </dl>
+      ${!mapping ? `<p class="warning">Broker state is unknown/stale until BrokerSync maps this order.</p>` : ""}
+    </section>
+    <section class="detail-section">
+      <h3>Trade/Fill Truth</h3>
+      <pre>${renderJsonValue(detail.trade_summary)}</pre>
+      ${renderRecordList("Fills", detail.fills || [], "No fills reported.", [
+        { label: "Symbol", value: (fill) => fill.symbol },
+        { label: "Quantity", value: (fill) => fill.qty },
+        { label: "Price", value: (fill) => fill.price },
+        { label: "Event", value: (fill) => formatTimestamp(fill.event_at) }
+      ])}
+    </section>
+  </article>`;
+}
+
 export function renderDetailPanel(detailState = {}) {
   if (detailState.status === "custom") {
     return detailState.html;
   }
   if (detailState.status === "loading") {
-    const label = detailState.selection?.type === "deployment" ? "deployment" : "account";
+    const label = detailState.selection?.type || "account";
     return `<div class="detail-loading" role="status"><span class="spinner" aria-hidden="true"></span><p>Loading ${label} detail from the Operations API.</p></div>`;
   }
   if (detailState.status === "error") {
@@ -402,6 +470,9 @@ export function renderDetailPanel(detailState = {}) {
   }
   if (detailState.status === "loaded" && detailState.selection?.type === "deployment") {
     return renderDeploymentDetail(detailState.data, detailState.flattenResult);
+  }
+  if (detailState.status === "loaded" && detailState.selection?.type === "order") {
+    return renderOrderDetail(detailState.data);
   }
   return `<p class="empty">Select an account or deployment for detail.</p>`;
 }
@@ -462,7 +533,7 @@ export async function mountOperationsCenter(root, client = createOperationsApi()
     state.detail = { status: "loading", selection };
     render();
     try {
-      const data = type === "account" ? await client.getAccount(id) : await client.getDeployment(id);
+      const data = type === "account" ? await client.getAccount(id) : type === "deployment" ? await client.getDeployment(id) : await client.getOrder(id);
       if (itemKey(state.detail.selection?.type, state.detail.selection?.id) !== itemKey(type, id)) return;
       state.detail = { status: "loaded", selection, data, flattenResult };
       render();
@@ -501,6 +572,20 @@ export async function mountOperationsCenter(root, client = createOperationsApi()
           await loadSelectedDetail("deployment", id);
           return;
         }
+        if (action === "order-detail") {
+          await loadSelectedDetail("order", id);
+          return;
+        }
+        if (action === "delete-account") {
+          const confirmed = window.confirm(`Delete or archive Alpaca paper account ${button.dataset.name || id} (${button.dataset.mode || "BROKER_PAPER"})?`);
+          if (!confirmed) return;
+          await client.deleteBrokerAccount(id, {
+            confirmDisplayName: button.dataset.name || id,
+            confirmMode: button.dataset.mode || "BROKER_PAPER"
+          });
+          await refreshSelection();
+          return;
+        }
         const result = await executeOperationAction(action, id, client);
         if (result?.skipped) {
           button.disabled = false;
@@ -537,8 +622,24 @@ export async function mountOperationsCenter(root, client = createOperationsApi()
 
   root.addEventListener("submit", async (event) => {
     const form = event.target.closest("form[data-form='alpaca-paper-account']");
-    if (!form) return;
+    const replacementForm = event.target.closest("form[data-form='replace-paper-credentials']");
+    if (!form && !replacementForm) return;
     event.preventDefault();
+    if (replacementForm) {
+      const data = new FormData(replacementForm);
+      try {
+        await client.replaceAlpacaPaperCredentials(replacementForm.dataset.accountId, {
+          apiKey: data.get("api_key"),
+          apiSecret: data.get("api_secret")
+        });
+        replacementForm.reset();
+        await refreshSelection();
+      } catch (error) {
+        state.detail = { status: "error", selection: state.detail.selection, error };
+        render();
+      }
+      return;
+    }
     const data = new FormData(form);
     state.detail = { ...state.detail, accountSetup: "loading" };
     render();

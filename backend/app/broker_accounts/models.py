@@ -14,6 +14,21 @@ from backend.app.domain._base import utc_now
 class BrokerAccountValidationStatus(StrEnum):
     PENDING = "pending"
     VALID = "valid"
+    INVALID = "invalid"
+
+
+class BrokerAccountCredentialValidationStatus(StrEnum):
+    VALID = "valid"
+    INVALID = "invalid"
+    MODE_MISMATCH = "mode_mismatch"
+    MISSING_CREDENTIALS = "missing_credentials"
+    PROVIDER_UNREACHABLE = "provider_unreachable"
+
+
+class BrokerAccountDeletionStatus(StrEnum):
+    HARD_DELETED = "hard_deleted"
+    ARCHIVED = "archived"
+    BLOCKED = "blocked"
 
 
 class BrokerAccount(BaseModel):
@@ -29,6 +44,8 @@ class BrokerAccount(BaseModel):
     last_account_snapshot: BrokerAccountSnapshot | None = None
     broker_sync_freshness: BrokerSyncState | None = None
     created_at: datetime = Field(default_factory=utc_now)
+    is_archived: bool = False
+    archived_at: datetime | None = None
 
 
 class CreateAlpacaPaperBrokerAccountRequest(BaseModel):
@@ -44,3 +61,35 @@ class BrokerAccountResponse(BaseModel):
 
     account: BrokerAccount
     already_exists: bool = False
+
+
+class ReplaceAlpacaPaperBrokerAccountCredentialsRequest(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    api_key: str = Field(min_length=1)
+    api_secret: str = Field(min_length=1)
+
+
+class BrokerAccountCredentialUpdateResponse(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    account: BrokerAccount | None = None
+    validation_status: BrokerAccountCredentialValidationStatus
+    message: str
+
+
+class DeleteBrokerAccountRequest(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    confirm_display_name: str = Field(min_length=1)
+    confirm_mode: TradingMode
+
+
+class BrokerAccountDeletionResponse(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    account_id: UUID
+    status: BrokerAccountDeletionStatus
+    message: str
+    blockers: tuple[str, ...] = ()
+    archived_account: BrokerAccount | None = None
