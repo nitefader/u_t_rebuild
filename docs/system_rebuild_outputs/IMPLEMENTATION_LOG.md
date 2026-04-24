@@ -2994,3 +2994,38 @@ Validation results:
 - `.venv\Scripts\python.exe -m pytest backend/tests -q`: `392 passed, 1 skipped`, with one third-party `websockets.legacy` deprecation warning.
 - `npm.cmd test --prefix frontend`: `18 passed`; frontend check passed.
 - `npm.cmd run build --prefix frontend`: Vite production build passed; frontend check passed.
+
+## 2026-04-24 19:07 ET - Broker Runtime Trading Loop Orchestrator
+
+Files changed:
+
+- `backend/app/runtime/broker_runtime_orchestrator.py`
+- `backend/app/runtime/models.py`
+- `backend/app/runtime/__init__.py`
+- `backend/app/operations/models.py`
+- `backend/app/operations/service.py`
+- `backend/tests/unit/runtime/test_broker_runtime_orchestrator.py`
+- `docs/system_rebuild_outputs/IMPLEMENTATION_LOG.md`
+
+Implementation:
+
+- Added a BROKER_PAPER runtime orchestrator service with deployment start/stop, deterministic `run_once`, completed-bar processing, and recovery resume lifecycle methods.
+- The service loads active paper deployments, verifies paper broker account mode, recovery readiness, broker sync freshness, and ControlPlane kill/pause gates before opening risk.
+- Completed bars are delegated through the existing runtime pipeline, preserving FeatureEngine, SignalEngine, PortfolioGovernor, OrderManager, BrokerAdapter, and BrokerSync authority boundaries.
+- Broker results are applied through BrokerSync, sync failures degrade the runtime and block subsequent opens, and duplicate restart processing is prevented by persisted last-bar timestamps.
+- Runtime loop state now persists last bar, signal, governor decision, order id, broker sync timestamp, and last error.
+- Operations Center deployment detail projection now exposes runtime loop state and timestamps without adding a duplicate monitor page.
+
+Scope kept out:
+
+- No FeatureEngine, SignalEngine, PortfolioGovernor, OrderManager, BrokerAdapter, or BrokerSync core logic changes.
+- No BROKER_LIVE execution path was enabled.
+- No BrokerAdapter usage was added to Chart Lab or Sim Lab.
+- No duplicate order authority, broker truth writer, or standalone monitor page was introduced.
+
+Validation results:
+
+- `python -m pytest backend/tests/unit/runtime -q`: `31 passed`.
+- `python -m pytest backend/tests/unit/pipeline backend/tests/unit/governor backend/tests/unit/orders backend/tests/unit/brokers backend/tests/unit/runtime -q`: `136 passed`.
+- `python -m pytest backend/tests -q`: `407 passed, 1 skipped`.
+- `python -m compileall -q backend/app backend/tests`: passed.

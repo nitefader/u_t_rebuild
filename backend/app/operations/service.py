@@ -126,8 +126,17 @@ class OperationsCenterService:
             governor_id=self._governor_id,
             governor_state=self._governor_state,
             last_market_data_timestamp=self._last_market_data_timestamp(runtime_state, events),
-            last_broker_sync_timestamp=self._last_broker_sync_timestamp_for_deployment(account_id),
+            last_broker_sync_timestamp=(
+                runtime_state.last_broker_sync_timestamp
+                if runtime_state is not None and runtime_state.last_broker_sync_timestamp is not None
+                else self._last_broker_sync_timestamp_for_deployment(account_id)
+            ),
             last_decision_timestamp=self._last_decision_timestamp(events),
+            runtime_loop_state=runtime_state.status if runtime_state is not None else None,
+            last_signal_timestamp=runtime_state.last_signal_timestamp if runtime_state is not None else None,
+            last_governor_decision=runtime_state.last_governor_decision if runtime_state is not None else None,
+            last_order_id=runtime_state.last_order_id if runtime_state is not None else None,
+            last_runtime_error=runtime_state.last_error if runtime_state is not None else None,
             open_orders=tuple(order for order in orders if order.status in OPEN_ORDER_STATUSES),
             trades=self._trades_by_deployment(deployment_id),
             fills=tuple(fill for fill in self._fills() if self._fill_belongs_to_deployment(fill, orders)),

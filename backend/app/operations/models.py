@@ -107,6 +107,11 @@ class DeploymentOperations(BaseModel):
     last_market_data_timestamp: datetime | None = None
     last_broker_sync_timestamp: datetime | None = None
     last_decision_timestamp: datetime | None = None
+    runtime_loop_state: RuntimeStatus | None = None
+    last_signal_timestamp: datetime | None = None
+    last_governor_decision: dict[str, object] | None = None
+    last_order_id: UUID | None = None
+    last_runtime_error: str | None = None
     open_orders: tuple[InternalOrder, ...] = ()
     trades: tuple[BrokerFillUpdateEvent | object, ...] = ()
     fills: tuple[BrokerFillUpdateEvent, ...] = ()

@@ -17,6 +17,9 @@ class RuntimeError(ValueError):
 class RuntimeStatus(StrEnum):
     READY = "ready"
     RUNNING = "running"
+    STOPPED = "stopped"
+    BLOCKED = "blocked"
+    DEGRADED = "degraded"
     PAUSED = "paused"
     KILLED = "killed"
     ERROR = "error"
@@ -65,6 +68,9 @@ class RuntimeState(BaseModel):
     last_bar_timestamp_by_symbol_timeframe: dict[str, datetime] = Field(default_factory=dict)
     last_signal_timestamp: datetime | None = None
     last_execution_intent_timestamp: datetime | None = None
+    last_governor_decision: dict[str, object] | None = None
+    last_order_id: UUID | None = None
+    last_broker_sync_timestamp: datetime | None = None
     last_error: str | None = None
 
 

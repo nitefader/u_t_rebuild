@@ -13,7 +13,23 @@ from .models import (
 )
 from .recovery_orchestrator import RecoveryResult, RuntimeRecoveryOrchestrator
 
+
+def __getattr__(name: str):
+    if name in {"BrokerRuntimeDeployment", "BrokerRuntimeLoopStatus", "BrokerRuntimeOrchestrator"}:
+        from .broker_runtime_orchestrator import BrokerRuntimeDeployment, BrokerRuntimeLoopStatus, BrokerRuntimeOrchestrator
+
+        return {
+            "BrokerRuntimeDeployment": BrokerRuntimeDeployment,
+            "BrokerRuntimeLoopStatus": BrokerRuntimeLoopStatus,
+            "BrokerRuntimeOrchestrator": BrokerRuntimeOrchestrator,
+        }[name]
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
 __all__ = [
+    "BrokerRuntimeDeployment",
+    "BrokerRuntimeLoopStatus",
+    "BrokerRuntimeOrchestrator",
     "DeploymentContext",
     "ExecutionIntent",
     "ExecutionIntentBuilder",
