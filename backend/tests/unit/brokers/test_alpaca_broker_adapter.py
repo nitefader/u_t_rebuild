@@ -3,6 +3,7 @@ from __future__ import annotations
 import inspect
 import re
 from datetime import datetime, timezone
+from enum import Enum
 from uuid import UUID, uuid4
 
 import pytest
@@ -20,6 +21,12 @@ from backend.app.domain._base import utc_now
 from backend.app.orders import InternalOrder, InternalOrderIntent, InternalOrderStatus
 from backend.app.runtime import ExecutionIntent
 import backend.app.brokers.alpaca as alpaca_module
+
+try:
+    from alpaca.trading.enums import OrderStatus
+except ImportError:  # pragma: no cover - local fallback when alpaca-py is unavailable.
+    class OrderStatus(Enum):
+        PENDING_NEW = "pending_new"
 
 
 ACCOUNT_ID = UUID("11111111-2222-3333-4444-555555555555")
@@ -122,11 +129,19 @@ def test_invalid_unsupported_order_type_rejected() -> None:
 def test_status_normalization_works() -> None:
     adapter = _adapter()
 
+    assert adapter.normalize_status("pending_new") == BrokerOrderStatus.ACCEPTED
+    assert adapter.normalize_status(OrderStatus.PENDING_NEW) == BrokerOrderStatus.ACCEPTED
+    assert adapter.normalize_status("OrderStatus.PENDING_NEW") == BrokerOrderStatus.ACCEPTED
     assert adapter.normalize_status("new") == BrokerOrderStatus.ACCEPTED
+    assert adapter.normalize_status("accepted") == BrokerOrderStatus.ACCEPTED
     assert adapter.normalize_status("partially_filled") == BrokerOrderStatus.PARTIAL_FILL
     assert adapter.normalize_status("filled") == BrokerOrderStatus.FILLED
     assert adapter.normalize_status("rejected") == BrokerOrderStatus.REJECTED
     assert adapter.normalize_status("canceled") == BrokerOrderStatus.CANCELED
+    assert adapter.normalize_status("expired") == BrokerOrderStatus.EXPIRED
+    assert adapter.normalize_status("pending_cancel") == BrokerOrderStatus.PENDING_CANCEL
+    assert adapter.normalize_status("pending_replace") == BrokerOrderStatus.REPLACED
+    assert adapter.normalize_status("done_for_day") == BrokerOrderStatus.ACCEPTED
 
 
 def test_unknown_status_returns_controlled_failure() -> None:

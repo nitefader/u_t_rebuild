@@ -1312,3 +1312,77 @@ Result:
 
 - Broker tests: `36 passed`
 - Targeted backend unit slice: `245 passed`
+
+## 2026-04-24 - Alpaca Status Normalization Fix
+
+Fixed `AlpacaBrokerAdapter.normalize_status()` so Alpaca SDK enum statuses normalize correctly instead of failing as unknown stringified enum names.
+
+Updated:
+
+- `backend/app/brokers/alpaca.py`
+- `backend/tests/unit/brokers/test_alpaca_broker_adapter.py`
+
+Implemented:
+
+- status normalization accepts plain strings
+- status normalization accepts SDK enum objects such as `OrderStatus.PENDING_NEW`
+- status normalization accepts stringified enum names such as `OrderStatus.PENDING_NEW`
+- status normalization extracts the final dotted token and lowercases it
+- `pending_new`, `new`, `accepted`, and `done_for_day` map to internal accepted status
+- `partially_filled`, `filled`, `canceled`, `expired`, `rejected`, `pending_cancel`, and `pending_replace` are supported
+- unknown statuses still raise controlled `AlpacaBrokerError` with code `unknown_order_status`
+
+Scope kept out:
+
+- No OrderManager changes
+- No Governor changes
+- No pipeline ordering changes
+- No broker submission behavior changes
+
+Validation performed:
+
+- `python -m pytest backend\tests\unit\brokers -q`
+- `python -m pytest backend\tests\unit\market_data backend\tests\unit\tools backend\tests\unit\brokers backend\tests\unit\pipeline backend\tests\unit\governor backend\tests\unit\orders backend\tests\unit\runtime backend\tests\unit\simulation backend\tests\unit\chart_lab backend\tests\unit\decision backend\tests\unit\features backend\tests\unit\domain -q`
+- `python -m compileall -q backend\app\brokers backend\tests\unit\brokers`
+
+Result:
+
+- Broker tests: `36 passed`
+- Targeted backend unit slice: `245 passed`
+
+## 2026-04-24 - Paper Runtime Dry-Run Confirmation Guard Ordering
+
+Fixed the controlled paper runtime dry-run tool so execute-mode confirmation is validated before any market-clock check can produce a clean closed-market exit.
+
+Updated:
+
+- `tools/run_paper_runtime_dry_run.py`
+- `backend/tests/unit/tools/test_paper_operator_tools.py`
+
+Implemented:
+
+- separated static paper environment validation from execute confirmation validation
+- `CONFIRM_PAPER_RUNTIME=yes` is required when `--execute` is passed
+- missing execute confirmation returns exit code `2`
+- missing execute confirmation is checked before constructing `AlpacaBrokerAdapter`
+- missing execute confirmation is checked before market clock access
+- dry-run mode still does not require confirmation
+- market closed still exits `0` only after safety guards pass
+
+Scope kept out:
+
+- No runtime pipeline changes
+- No broker adapter changes
+- No Governor changes
+- No order path changes
+
+Validation performed:
+
+- `python -m pytest backend\tests\unit\tools -q`
+- `python -m pytest backend\tests\unit\market_data backend\tests\unit\tools backend\tests\unit\brokers backend\tests\unit\pipeline backend\tests\unit\governor backend\tests\unit\orders backend\tests\unit\runtime backend\tests\unit\simulation backend\tests\unit\chart_lab backend\tests\unit\decision backend\tests\unit\features backend\tests\unit\domain -q`
+- `python -m compileall -q tools backend\tests\unit\tools`
+
+Result:
+
+- Operator tool tests: `18 passed`
+- Targeted backend unit slice: `246 passed`

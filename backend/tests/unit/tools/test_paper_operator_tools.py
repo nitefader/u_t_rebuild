@@ -497,6 +497,7 @@ def test_paper_runtime_dry_run_execute_requires_confirmation(monkeypatch, capsys
     _paper_env(monkeypatch)
     monkeypatch.delenv("CONFIRM_PAPER_RUNTIME", raising=False)
     FakeRuntimeAdapter.submitted_orders = []
+    FakeRuntimeAdapter.calls = []
     monkeypatch.setattr(runtime_dry_run, "AlpacaBrokerAdapter", FakeRuntimeAdapter)
     monkeypatch.setattr(runtime_dry_run, "AlpacaMarketDataAdapter", FakeDryRunMarketDataAdapter)
 
@@ -505,6 +506,28 @@ def test_paper_runtime_dry_run_execute_requires_confirmation(monkeypatch, capsys
     assert code == 2
     assert "CONFIRM_PAPER_RUNTIME=yes" in capsys.readouterr().err
     assert FakeRuntimeAdapter.submitted_orders == []
+    assert FakeRuntimeAdapter.calls == []
+
+
+def test_paper_runtime_dry_run_execute_confirmation_blocks_before_market_clock(monkeypatch, capsys) -> None:  # type: ignore[no-untyped-def]
+    _paper_env(monkeypatch)
+    monkeypatch.delenv("CONFIRM_PAPER_RUNTIME", raising=False)
+    FakeRuntimeAdapter.submitted_orders = []
+    FakeRuntimeAdapter.calls = []
+    FakeRuntimeAdapter.market_is_open = False
+    FakeDryRunMarketDataAdapter.collect_count = 0
+    monkeypatch.setattr(runtime_dry_run, "AlpacaBrokerAdapter", FakeRuntimeAdapter)
+    monkeypatch.setattr(runtime_dry_run, "AlpacaMarketDataAdapter", FakeDryRunMarketDataAdapter)
+
+    code = runtime_dry_run.main(["--execute"])
+
+    captured = capsys.readouterr()
+    assert code == 2
+    assert "CONFIRM_PAPER_RUNTIME=yes" in captured.err
+    assert "Market closed" not in captured.out
+    assert FakeRuntimeAdapter.calls == []
+    assert FakeRuntimeAdapter.submitted_orders == []
+    assert FakeDryRunMarketDataAdapter.collect_count == 0
 
 
 def test_paper_runtime_dry_run_execute_uses_proper_order_path(monkeypatch, capsys) -> None:  # type: ignore[no-untyped-def]

@@ -224,8 +224,8 @@ class AlpacaBrokerAdapter:
             )
         raise AlpacaBrokerError("unsupported_order_type", f"Unsupported Alpaca order type: {order.order_type.value}")
 
-    def normalize_status(self, status: str) -> BrokerOrderStatus:
-        normalized = status.strip().lower()
+    def normalize_status(self, status: object) -> BrokerOrderStatus:
+        normalized = self._status_token(status)
         mapping = {
             "new": BrokerOrderStatus.ACCEPTED,
             "accepted": BrokerOrderStatus.ACCEPTED,
@@ -237,15 +237,23 @@ class AlpacaBrokerAdapter:
             "cancelled": BrokerOrderStatus.CANCELED,
             "expired": BrokerOrderStatus.EXPIRED,
             "pending_cancel": BrokerOrderStatus.PENDING_CANCEL,
+            "pending_replace": BrokerOrderStatus.REPLACED,
             "replaced": BrokerOrderStatus.REPLACED,
             "rejected": BrokerOrderStatus.REJECTED,
             "suspended": BrokerOrderStatus.SUSPENDED,
-            "done_for_day": BrokerOrderStatus.DONE_FOR_DAY,
+            "done_for_day": BrokerOrderStatus.ACCEPTED,
         }
         try:
             return mapping[normalized]
         except KeyError as exc:
             raise AlpacaBrokerError("unknown_order_status", f"Unknown Alpaca order status: {status}") from exc
+
+    def _status_token(self, status: object) -> str:
+        raw_status = getattr(status, "value", status)
+        token = str(raw_status).strip()
+        if "." in token:
+            token = token.rsplit(".", 1)[-1]
+        return token.lower()
 
     def order_response_to_result(self, *, order: InternalOrder, response: dict[str, Any]) -> BrokerOrderResult:
         self._require_internal_order(order)

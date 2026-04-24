@@ -62,7 +62,13 @@ def main(argv: list[str] | None = None) -> int:
     _print_step("Loading .env")
     load_dotenv()
     _print_step("Validating paper runtime dry-run guards")
-    error = _validate_environment(bars=args.bars, qty=args.qty, execute=args.execute)
+    error = _validate_environment(bars=args.bars, qty=args.qty)
+    if error is not None:
+        print(json.dumps({"ok": False, "error": error}), file=sys.stderr, flush=True)
+        return 2
+    if args.execute:
+        _print_step("Validating execute confirmation")
+        error = _validate_execute_confirmation()
     if error is not None:
         print(json.dumps({"ok": False, "error": error}), file=sys.stderr, flush=True)
         return 2
@@ -221,11 +227,9 @@ def _run_execute(
     }
 
 
-def _validate_environment(*, bars: int, qty: int, execute: bool) -> str | None:
+def _validate_environment(*, bars: int, qty: int) -> str | None:
     if os.getenv("ALPACA_BASE_URL") != PAPER_BASE_URL:
         return "ALPACA_BASE_URL must equal https://paper-api.alpaca.markets"
-    if execute and os.getenv("CONFIRM_PAPER_RUNTIME") != "yes":
-        return "CONFIRM_PAPER_RUNTIME=yes is required when --execute is passed"
     if bars <= 0:
         return "bars must be greater than 0"
     if bars > 5:
@@ -236,6 +240,12 @@ def _validate_environment(*, bars: int, qty: int, execute: bool) -> str | None:
         return "qty > 1 is blocked by paper runtime dry-run"
     if not os.getenv("ALPACA_API_KEY") or not os.getenv("ALPACA_SECRET_KEY"):
         return "ALPACA_API_KEY and ALPACA_SECRET_KEY are required"
+    return None
+
+
+def _validate_execute_confirmation() -> str | None:
+    if os.getenv("CONFIRM_PAPER_RUNTIME") != "yes":
+        return "CONFIRM_PAPER_RUNTIME=yes is required when --execute is passed"
     return None
 
 
