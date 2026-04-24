@@ -36,6 +36,13 @@ class BrokerPositionSide(StrEnum):
     SHORT = "short"
 
 
+class BrokerReconciliationIssueType(StrEnum):
+    MISSING_LOCAL_ORDER = "missing_local_order"
+    MISSING_BROKER_ORDER = "missing_broker_order"
+    POSITION_MISMATCH = "position_mismatch"
+    STALE_SYNC = "stale_sync"
+
+
 class BrokerOrderResult(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -113,3 +120,37 @@ class BrokerOrderMapping(BaseModel):
     account_id: UUID
     created_at: datetime = Field(default_factory=utc_now)
     last_synced_at: datetime = Field(default_factory=utc_now)
+
+
+class BrokerReconciliationIssue(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    issue_type: BrokerReconciliationIssueType
+    account_id: UUID
+    symbol: str | None = None
+    order_id: UUID | None = None
+    client_order_id: str | None = None
+    broker_order_id: str | None = None
+    message: str
+    expected: float | str | None = None
+    actual: float | str | None = None
+    action: str = "flag_only"
+    detected_at: datetime = Field(default_factory=utc_now)
+
+
+class BrokerReconciliationReport(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    account_id: UUID
+    checked_at: datetime = Field(default_factory=utc_now)
+    updated_order_count: int = 0
+    broker_position_count: int = 0
+    issues: tuple[BrokerReconciliationIssue, ...] = ()
+
+    @property
+    def has_issues(self) -> bool:
+        return bool(self.issues)
+
+    @property
+    def is_stale(self) -> bool:
+        return any(issue.issue_type == BrokerReconciliationIssueType.STALE_SYNC for issue in self.issues)

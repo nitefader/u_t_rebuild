@@ -1195,3 +1195,120 @@ Result:
 
 - Market-data tests: `8 passed`
 - Targeted backend unit slice: `233 passed`
+
+## 2026-04-24 - Controlled Paper Runtime Dry Run
+
+Added a dry-run-first paper runtime tool that consumes Alpaca market data bars and runs the runtime decision chain without submitting orders by default.
+
+Created:
+
+- `tools/run_paper_runtime_dry_run.py`
+
+Updated:
+
+- `backend/tests/unit/tools/test_paper_operator_tools.py`
+
+Implemented:
+
+- `.env` loading
+- paper environment validation
+- market clock check before market data subscription
+- default dry-run mode
+- explicit `--execute` mode
+- `CONFIRM_PAPER_RUNTIME=yes` required only when `--execute` is passed
+- one-symbol market data subscription, default `SPY`
+- one-timeframe market data subscription, default `1m`
+- max `5` normalized bars per run
+- dry-run path through:
+  - Alpaca market data adapter
+  - Feature Engine via `RuntimeEngine`
+  - Signal Engine
+  - Strategy Controls
+  - Risk sizing
+  - Execution Intent Builder
+  - Portfolio Governor
+- execute path through:
+  - `RuntimeOrchestrator`
+  - `PortfolioGovernor`
+  - `OrderManager`
+  - `AlpacaBrokerAdapter`
+  - `BrokerSync`
+  - `OrderLedger`
+- candidate decision output
+- governor decision output
+- max one order in execute mode
+- closed-market path exits cleanly
+
+Scope kept out:
+
+- No frontend
+- No API routes
+- No unattended loop
+- No streaming order execution
+- No order submission in dry-run mode
+- No direct order creation outside `OrderManager`
+- No broker submission outside `AlpacaBrokerAdapter`
+- No ledger update outside `BrokerSync`
+
+Validation performed:
+
+- `python -m pytest backend\tests\unit\tools -q`
+- `python -m pytest backend\tests\unit\market_data backend\tests\unit\tools backend\tests\unit\brokers backend\tests\unit\pipeline backend\tests\unit\governor backend\tests\unit\orders backend\tests\unit\runtime backend\tests\unit\simulation backend\tests\unit\chart_lab backend\tests\unit\decision backend\tests\unit\features backend\tests\unit\domain -q`
+- `python -m compileall -q tools backend\tests\unit\tools`
+
+Result:
+
+- Operator tool tests: `17 passed`
+- Targeted backend unit slice: `238 passed`
+
+## 2026-04-24 - BrokerSync Reconciliation
+
+Added passive broker reconciliation for comparing the internal `OrderLedger` with broker truth without canceling or mutating unknown external orders.
+
+Created:
+
+- `backend/tests/unit/brokers/test_broker_sync_reconciliation.py`
+
+Updated:
+
+- `backend/app/brokers/models.py`
+- `backend/app/brokers/sync.py`
+- `backend/app/brokers/__init__.py`
+
+Implemented:
+
+- `BrokerReconciliationIssueType`
+- `BrokerReconciliationIssue`
+- `BrokerReconciliationReport`
+- `BrokerSync.reconcile(account_id, ...)`
+- known local order reconciliation through `adapter.get_order(order)`
+- filled order reconciliation into `OrderLedger`
+- rejected order reconciliation into `OrderLedger`
+- missing local broker order flagging
+- missing broker order flagging
+- unknown external order intent preservation and flagging
+- broker position mismatch detection
+- broker account snapshot staleness detection
+- passive report output with no cancellation behavior
+- stale reconciliation report support for Governor stale-sync blocking
+
+Scope kept out:
+
+- No frontend
+- No API routes
+- No strategy changes
+- No Feature Engine changes
+- No automatic order cancellation
+- No unknown external order mutation
+- No Governor policy changes
+
+Validation performed:
+
+- `python -m pytest backend\tests\unit\brokers -q`
+- `python -m pytest backend\tests\unit\market_data backend\tests\unit\tools backend\tests\unit\brokers backend\tests\unit\pipeline backend\tests\unit\governor backend\tests\unit\orders backend\tests\unit\runtime backend\tests\unit\simulation backend\tests\unit\chart_lab backend\tests\unit\decision backend\tests\unit\features backend\tests\unit\domain -q`
+- `python -m compileall -q backend\app\brokers backend\tests\unit\brokers`
+
+Result:
+
+- Broker tests: `36 passed`
+- Targeted backend unit slice: `245 passed`

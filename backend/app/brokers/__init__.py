@@ -15,6 +15,9 @@ from .models import (
     BrokerOrderStatus,
     BrokerPositionSide,
     BrokerPositionSnapshot,
+    BrokerReconciliationIssue,
+    BrokerReconciliationIssueType,
+    BrokerReconciliationReport,
 )
 from .sync import BrokerSync
 
@@ -32,6 +35,9 @@ __all__ = [
     "BrokerOrderStatus",
     "BrokerPositionSide",
     "BrokerPositionSnapshot",
+    "BrokerReconciliationIssue",
+    "BrokerReconciliationIssueType",
+    "BrokerReconciliationReport",
     "BrokerSync",
     "FakeBrokerAdapter",
 ]

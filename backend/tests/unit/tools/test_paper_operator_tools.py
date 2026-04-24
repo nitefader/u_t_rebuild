@@ -14,12 +14,14 @@ from backend.app.brokers import (
     BrokerPositionSnapshot,
 )
 from backend.app.domain._base import utc_now
+from backend.app.features import NormalizedBar
 from backend.app.governor import GovernorPolicy, PortfolioGovernor
 from backend.app.orders import InternalOrder, OrderManager
 from backend.app.pipeline import RuntimeOrchestrator
 import tools.check_alpaca_readiness as readiness
 import tools.paper_order_smoke as smoke
 import tools.run_paper_runtime as paper_runtime
+import tools.run_paper_runtime_dry_run as runtime_dry_run
 
 
 ACCOUNT_ID = UUID("00000000-0000-0000-0000-000000000001")
@@ -156,11 +158,33 @@ def _paper_env(monkeypatch) -> None:  # type: ignore[no-untyped-def]
     monkeypatch.setattr(smoke, "load_dotenv", lambda: False)
     monkeypatch.setattr(readiness, "load_dotenv", lambda: False)
     monkeypatch.setattr(paper_runtime, "load_dotenv", lambda: False)
+    monkeypatch.setattr(runtime_dry_run, "load_dotenv", lambda: False)
 
 
 def _paper_runtime_env(monkeypatch) -> None:  # type: ignore[no-untyped-def]
     _paper_env(monkeypatch)
     monkeypatch.setenv("CONFIRM_PAPER_RUNTIME", "yes")
+
+
+class FakeDryRunMarketDataAdapter:
+    collect_count = 0
+
+    def collect_bars_sync(self, *, subscription, timeout_seconds):  # type: ignore[no-untyped-def]
+        _ = timeout_seconds
+        FakeDryRunMarketDataAdapter.collect_count += 1
+        return tuple(
+            NormalizedBar(
+                symbol=subscription.symbol,
+                timeframe=subscription.timeframe,
+                timestamp=datetime(2026, 1, 2, 14, 30 + index, tzinfo=timezone.utc),
+                open=100 + index,
+                high=102 + index,
+                low=99 + index,
+                close=101 + index,
+                volume=100_000 + index,
+            )
+            for index in range(subscription.limit)
+        )
 
 
 def test_cli_refuses_without_confirm(monkeypatch, capsys) -> None:  # type: ignore[no-untyped-def]
@@ -426,3 +450,129 @@ def test_paper_runtime_blocks_without_confirmation(monkeypatch, capsys) -> None:
     assert code == 2
     assert "CONFIRM_PAPER_RUNTIME=yes" in capsys.readouterr().err
     assert FakeRuntimeAdapter.submitted_orders == []
+
+
+def test_paper_runtime_dry_run_submits_no_orders(monkeypatch, capsys) -> None:  # type: ignore[no-untyped-def]
+    _paper_env(monkeypatch)
+    monkeypatch.delenv("CONFIRM_PAPER_RUNTIME", raising=False)
+    FakeRuntimeAdapter.submitted_orders = []
+    FakeRuntimeAdapter.market_is_open = True
+    FakeRuntimeAdapter.calls = []
+    FakeDryRunMarketDataAdapter.collect_count = 0
+    monkeypatch.setattr(runtime_dry_run, "AlpacaBrokerAdapter", FakeRuntimeAdapter)
+    monkeypatch.setattr(runtime_dry_run, "AlpacaMarketDataAdapter", FakeDryRunMarketDataAdapter)
+
+    code = runtime_dry_run.main(["--bars", "2"])
+
+    output = capsys.readouterr().out
+    assert code == 0
+    assert '"mode": "dry_run"' in output
+    assert '"orders_created": 0' in output
+    assert '"candidate_decisions"' in output
+    assert '"governor_decisions"' in output
+    assert FakeRuntimeAdapter.submitted_orders == []
+    assert "AlpacaBrokerAdapter.submit_order" not in FakeRuntimeAdapter.calls
+    assert FakeDryRunMarketDataAdapter.collect_count == 1
+
+
+def test_paper_runtime_dry_run_market_closed_exits_cleanly(monkeypatch, capsys) -> None:  # type: ignore[no-untyped-def]
+    _paper_env(monkeypatch)
+    FakeRuntimeAdapter.submitted_orders = []
+    FakeRuntimeAdapter.market_is_open = False
+    FakeRuntimeAdapter.calls = []
+    FakeDryRunMarketDataAdapter.collect_count = 0
+    monkeypatch.setattr(runtime_dry_run, "AlpacaBrokerAdapter", FakeRuntimeAdapter)
+    monkeypatch.setattr(runtime_dry_run, "AlpacaMarketDataAdapter", FakeDryRunMarketDataAdapter)
+
+    code = runtime_dry_run.main([])
+
+    output = capsys.readouterr().out
+    assert code == 0
+    assert "Market closed. No runtime executed." in output
+    assert FakeRuntimeAdapter.submitted_orders == []
+    assert FakeDryRunMarketDataAdapter.collect_count == 0
+
+
+def test_paper_runtime_dry_run_execute_requires_confirmation(monkeypatch, capsys) -> None:  # type: ignore[no-untyped-def]
+    _paper_env(monkeypatch)
+    monkeypatch.delenv("CONFIRM_PAPER_RUNTIME", raising=False)
+    FakeRuntimeAdapter.submitted_orders = []
+    monkeypatch.setattr(runtime_dry_run, "AlpacaBrokerAdapter", FakeRuntimeAdapter)
+    monkeypatch.setattr(runtime_dry_run, "AlpacaMarketDataAdapter", FakeDryRunMarketDataAdapter)
+
+    code = runtime_dry_run.main(["--execute"])
+
+    assert code == 2
+    assert "CONFIRM_PAPER_RUNTIME=yes" in capsys.readouterr().err
+    assert FakeRuntimeAdapter.submitted_orders == []
+
+
+def test_paper_runtime_dry_run_execute_uses_proper_order_path(monkeypatch, capsys) -> None:  # type: ignore[no-untyped-def]
+    _paper_runtime_env(monkeypatch)
+    FakeRuntimeAdapter.submitted_orders = []
+    FakeRuntimeAdapter.market_is_open = True
+    FakeDryRunMarketDataAdapter.collect_count = 0
+    calls: list[str] = []
+    FakeRuntimeAdapter.calls = calls
+
+    class RecordingOrderManager:
+        def __init__(self) -> None:
+            calls.append("OrderManager.__init__")
+            self._manager = OrderManager()
+
+        @property
+        def ledger(self):  # type: ignore[no-untyped-def]
+            return self._manager.ledger
+
+        def create_order(self, **kwargs):  # type: ignore[no-untyped-def]
+            calls.append("OrderManager.create_order")
+            return self._manager.create_order(**kwargs)
+
+    class RecordingBrokerSync:
+        def __init__(self, *, ledger, adapter) -> None:  # type: ignore[no-untyped-def]
+            calls.append("BrokerSync.__init__")
+            self._sync = BrokerSync(ledger=ledger, adapter=adapter)
+
+        def apply_result(self, result):  # type: ignore[no-untyped-def]
+            calls.append("BrokerSync.apply_result")
+            return self._sync.apply_result(result)
+
+        def sync_account(self, account_id):  # type: ignore[no-untyped-def]
+            calls.append("BrokerSync.sync_account")
+            return self._sync.sync_account(account_id)
+
+        def sync_positions(self, account_id):  # type: ignore[no-untyped-def]
+            calls.append("BrokerSync.sync_positions")
+            return self._sync.sync_positions(account_id)
+
+    monkeypatch.setattr(runtime_dry_run, "AlpacaBrokerAdapter", FakeRuntimeAdapter)
+    monkeypatch.setattr(runtime_dry_run, "AlpacaMarketDataAdapter", FakeDryRunMarketDataAdapter)
+    monkeypatch.setattr(runtime_dry_run, "OrderManager", RecordingOrderManager)
+    monkeypatch.setattr(runtime_dry_run, "BrokerSync", RecordingBrokerSync)
+
+    code = runtime_dry_run.main(["--execute", "--bars", "3"])
+
+    output = capsys.readouterr().out
+    assert code == 0
+    assert '"mode": "execute"' in output
+    assert '"orders_created": 1' in output
+    assert len(FakeRuntimeAdapter.submitted_orders) == 1
+    assert calls.index("OrderManager.create_order") < calls.index("AlpacaBrokerAdapter.submit_order")
+    assert calls.index("AlpacaBrokerAdapter.submit_order") < calls.index("BrokerSync.apply_result")
+
+
+def test_paper_runtime_dry_run_execute_enforces_max_one_order(monkeypatch, capsys) -> None:  # type: ignore[no-untyped-def]
+    _paper_runtime_env(monkeypatch)
+    FakeRuntimeAdapter.submitted_orders = []
+    FakeRuntimeAdapter.market_is_open = True
+    FakeRuntimeAdapter.calls = []
+    FakeDryRunMarketDataAdapter.collect_count = 0
+    monkeypatch.setattr(runtime_dry_run, "AlpacaBrokerAdapter", FakeRuntimeAdapter)
+    monkeypatch.setattr(runtime_dry_run, "AlpacaMarketDataAdapter", FakeDryRunMarketDataAdapter)
+
+    code = runtime_dry_run.main(["--execute", "--bars", "5"])
+
+    output = capsys.readouterr().out
+    assert code == 0
+    assert '"orders_created": 1' in output
+    assert len(FakeRuntimeAdapter.submitted_orders) == 1
