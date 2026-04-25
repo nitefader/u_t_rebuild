@@ -183,13 +183,15 @@ class MarketDataServiceCatalog:
         self._save()
         return updated
 
-    def resolve(self, request: ResolveMarketDataRequest) -> ResolverResult:
+    def resolve(self, request: ResolveMarketDataRequest, *, pipeline_registry: object | None = None) -> ResolverResult:
+        lookup = pipeline_registry.lookup_default_for_provider if pipeline_registry is not None else None
         return resolve_market_data_service(
             request.intent,
             tuple(service.to_resolver_config() for service in self._records.values()),
             request.selection_strategy,
             selected_service_id=str(request.selected_service_id) if request.selected_service_id is not None else None,
             invocation_context=request.invocation_context,
+            pipeline_lookup=lookup,
         )
 
     def _load(self) -> None:

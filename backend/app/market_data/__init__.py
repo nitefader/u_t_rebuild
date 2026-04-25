@@ -16,6 +16,17 @@ from .catalog import (
     MarketDataServiceCatalog,
     ResolveMarketDataRequest,
 )
+from .pipeline import (
+    MarketDataPipeline,
+    MarketDataPipelineList,
+    MarketDataPipelineWrite,
+    PipelineStatus,
+)
+from .pipeline_registry import (
+    MarketDataPipelineRegistry,
+    PipelineRegistryError,
+    PipelineRegistrySnapshot,
+)
 from .data_intent import (
     DataConsumer,
     DataIntent,
@@ -52,7 +63,7 @@ from .resolver import (
     resolve_market_data_service,
     yahoo_market_data_service,
 )
-from .runtime import create_market_data_catalog_from_environment
+from .runtime import create_market_data_catalog_from_environment, create_pipeline_registry_from_environment
 from .validation import (
     MarketDataProviderValidator,
     MarketDataValidationResult,
@@ -75,6 +86,10 @@ __all__ = [
     "MarketDataCapabilities",
     "MarketDataCatalogError",
     "MarketDataCatalogSnapshot",
+    "MarketDataPipeline",
+    "MarketDataPipelineList",
+    "MarketDataPipelineRegistry",
+    "MarketDataPipelineWrite",
     "MarketDataProviderValidator",
     "MarketDataServiceCatalog",
     "MarketDataServiceConfig",
@@ -85,6 +100,9 @@ __all__ = [
     "MarketDataValidationResult",
     "MarketDataValidationStatus",
     "PerSymbolResolution",
+    "PipelineRegistryError",
+    "PipelineRegistrySnapshot",
+    "PipelineStatus",
     "Provider",
     "ProviderCapabilityProfile",
     "RESOLVER_VERSION",
@@ -101,6 +119,7 @@ __all__ = [
     "alpaca_capabilities",
     "alpaca_market_data_service",
     "create_market_data_catalog_from_environment",
+    "create_pipeline_registry_from_environment",
     "provider_capability_profile",
     "resolve_market_data_service",
     "yahoo_capabilities",

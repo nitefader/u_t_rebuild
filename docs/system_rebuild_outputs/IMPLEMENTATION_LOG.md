@@ -3521,3 +3521,63 @@ Verification:
 
 Commit:
 - pending.
+
+## 2026-04-25 03:44 ET - Slice 1B: MarketDataPipeline + Providers IA flip (Phase 1 §11)
+
+Task:
+- Phase 1 §11 deliverable 3-5: introduce first-class `MarketDataPipeline` model + registry; resolver populates real `pipeline_id`; flip IA from "Services Center" to "Providers → Market Data Pipelines" per §J. Single slice per architect verdict (no 1B-min split — dead code).
+
+Files changed:
+- backend/app/market_data/pipeline.py (new)
+- backend/app/market_data/pipeline_registry.py (new)
+- backend/app/market_data/runtime.py (factory)
+- backend/app/market_data/__init__.py (exports)
+- backend/app/market_data/resolver.py (pipeline_lookup parameter)
+- backend/app/market_data/catalog.py (pipeline_registry kwarg on resolve)
+- backend/app/api/routes/market_data.py (5 new pipeline endpoints + resolve wiring)
+- backend/tests/unit/market_data/test_pipeline_registry.py (new)
+- backend/tests/unit/market_data/test_resolver.py (4 new pipeline_id tests)
+- backend/tests/integration/test_resolver_to_pipeline_id_e2e.py (new)
+- frontend/providers.html (new)
+- frontend/src/providers.js (new — replaces servicesCenter.js)
+- frontend/src/api/pipelines.js (new)
+- frontend/src/main.js (mount providers)
+- frontend/index.html (nav: Services Center → Providers)
+- frontend/vite.config.js (multi-page input: providers replaces services)
+- frontend/scripts/check-frontend.mjs (import providers.js + api/pipelines.js)
+- frontend/tests/marketDataPipelines.test.mjs (new)
+- DELETED: frontend/services.html, frontend/src/servicesCenter.js, frontend/tests/servicesCenter.test.mjs
+
+Implemented:
+- `MarketDataPipeline` Pydantic model with `trading_mode: TradingMode | None` (BROKER_PAPER / BROKER_LIVE / None for vendor-only); validator rejects chart-lab/sim-lab modes.
+- `MarketDataPipelineRegistry` with JSON persistence at `market_data_pipelines.json`. Default-per-provider invariant: `set_default_for_provider` un-sets siblings only within the same provider (Yahoo and Alpaca defaults coexist).
+- `lookup_default_for_provider` returns the active default's id or None; disabled pipelines never resolve.
+- Resolver accepts optional `pipeline_lookup` callable; populates `PerSymbolResolution.pipeline_id` for SELECTED rows only. REJECTED rows leave pipeline_id null. Lookup not invoked when no compatible service found.
+- 5 new API endpoints: `GET/POST /pipelines`, `GET/PUT /pipelines/{id}`, `POST /pipelines/{id}/set-default`, `POST /pipelines/{id}/disable`. Resolve endpoint passes pipeline registry through.
+- Bumped `RESOLVER_VERSION` to 0.11.0.
+- Providers page hosts three tabs: Market Data Pipelines (default; carries Resolver Result Panel + debug), Market Data Services, AI Providers. Trading-mode dropdown offers only `BROKER_PAPER`/`BROKER_LIVE`/None — banned standalone `paper`/`live` strings never appear as form values. Resolver Result Panel reads only from `per_symbol_rows`.
+- IA-flip enforcement test asserts `services.html`, `servicesCenter.js`, `servicesCenter.test.mjs` are absent and that no source still imports the deleted module.
+
+Scope kept out:
+- `FeaturePlanner.data_requirements` per-FeatureKey view (1C).
+- FeatureEngine `SubscriptionManager` + FeatureKey-level dedup (1D).
+- Real provider subscribe/unsubscribe wiring (Phase 2).
+- SQLite migration of pipeline persistence (deferred until BarBuilder/streaming truth slice).
+
+Validation performed:
+- python -m compileall -q backend/app backend/tests
+- python -m pytest backend/tests -q
+- cd frontend && npm.cmd run build
+- cd frontend && npm.cmd test
+
+Result:
+- compileall clean. Backend: 589 passed, 1 skipped (+22 vs slice 1A). Frontend: 37 passed (+15 new providers tests; legacy Services Center suite deleted). Build clean (providers.html replaces services.html).
+
+Verification:
+- Feature Engine did not call external providers.
+- Resolver pipeline_lookup invoked exclusively for SELECTED rows.
+- No duplicate streaming path introduced — pipelines are the canonical fan-out unit (§3 hard rule "one paid stream serves many accounts").
+- No architecture boundaries violated (banned-name lint green; trading_mode validator rejects non-broker modes).
+
+Commit:
+- pending.

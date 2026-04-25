@@ -58,13 +58,16 @@ import json
 from datetime import datetime, timezone
 from enum import StrEnum
 from hashlib import sha256
+from typing import Callable
 
 from pydantic import BaseModel, ConfigDict
 
 from .data_intent import DataConsumer, DataIntent, DataTolerance, Timeframe
 
 
-RESOLVER_VERSION = "0.10.1"
+RESOLVER_VERSION = "0.11.0"
+
+PipelineLookup = Callable[["Provider"], str | None]
 
 
 class Provider(StrEnum):
@@ -292,6 +295,7 @@ def resolve_market_data_service(
     selected_service_id: str | None = None,
     invocation_context: InvocationContext | str = InvocationContext.OPERATIONS_PREVIEW,
     decided_at: datetime | None = None,
+    pipeline_lookup: PipelineLookup | None = None,
 ) -> ResolverResult:
     strategy = SelectionStrategy(selection_strategy)
     context = InvocationContext(invocation_context)
@@ -313,6 +317,7 @@ def resolve_market_data_service(
             services=services,
             strategy=strategy,
             selected_service_id=selected_service_id,
+            pipeline_lookup=pipeline_lookup,
         )
         for symbol in symbols
     )
@@ -338,6 +343,7 @@ def _resolve_for_symbol(
     services: tuple[MarketDataServiceConfig, ...],
     strategy: SelectionStrategy,
     selected_service_id: str | None,
+    pipeline_lookup: PipelineLookup | None,
 ) -> PerSymbolResolution:
     if strategy == SelectionStrategy.MANUAL_OVERRIDE:
         chosen = next((s for s in services if s.service_id == selected_service_id), None)
@@ -356,7 +362,7 @@ def _resolve_for_symbol(
                 explanation="Manually selected service was not found in catalog.",
                 rejected_providers=(synthetic,),
             )
-        return _select_or_reject_row(symbol, intent, chosen, ResolverSelectionCode.SELECTED_MANUAL_OVERRIDE)
+        return _select_or_reject_row(symbol, intent, chosen, ResolverSelectionCode.SELECTED_MANUAL_OVERRIDE, pipeline_lookup)
 
     if strategy == SelectionStrategy.DEFAULT_PREFERRED:
         default = next((s for s in services if s.is_default), None)
@@ -367,9 +373,15 @@ def _resolve_for_symbol(
                 reason=ResolverRejectionCode.NO_COMPATIBLE_PROVIDER.value,
                 explanation="No default market data service is configured.",
             )
-        return _select_or_reject_row(symbol, intent, default, ResolverSelectionCode.SELECTED_DEFAULT_PREFERRED)
+        return _select_or_reject_row(symbol, intent, default, ResolverSelectionCode.SELECTED_DEFAULT_PREFERRED, pipeline_lookup)
 
-    return _auto_select_row(symbol, intent, services)
+    return _auto_select_row(symbol, intent, services, pipeline_lookup)
+
+
+def _resolve_pipeline_id(provider: Provider, lookup: PipelineLookup | None) -> str | None:
+    if lookup is None:
+        return None
+    return lookup(provider)
 
 
 def _select_or_reject_row(
@@ -377,6 +389,7 @@ def _select_or_reject_row(
     intent: DataIntent,
     service: MarketDataServiceConfig,
     selection_code: ResolverSelectionCode,
+    pipeline_lookup: PipelineLookup | None,
 ) -> PerSymbolResolution:
     rejection = _rejection_for(intent, service)
     if rejection is not None:
@@ -393,7 +406,7 @@ def _select_or_reject_row(
         selected_service_id=service.service_id,
         selected_service_name=service.service_name,
         selected_provider=service.provider,
-        pipeline_id=None,
+        pipeline_id=_resolve_pipeline_id(service.provider, pipeline_lookup),
         reason=selection_code.value,
         explanation=_selected_explanation(intent, service, selection_code),
     )
@@ -403,6 +416,7 @@ def _auto_select_row(
     symbol: str,
     intent: DataIntent,
     services: tuple[MarketDataServiceConfig, ...],
+    pipeline_lookup: PipelineLookup | None,
 ) -> PerSymbolResolution:
     rejected: list[RejectedCandidate] = []
     compatible: list[MarketDataServiceConfig] = []
@@ -435,7 +449,7 @@ def _auto_select_row(
         selected_service_id=selected.service_id,
         selected_service_name=selected.service_name,
         selected_provider=selected.provider,
-        pipeline_id=None,
+        pipeline_id=_resolve_pipeline_id(selected.provider, pipeline_lookup),
         reason=selection_code.value,
         explanation=_selected_explanation(intent, selected, selection_code),
         rejected_providers=tuple(rejected),

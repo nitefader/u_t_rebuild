@@ -1,4 +1,4 @@
-"""Market-data API surface — replaces the deprecated /api/v1/services/* routes."""
+"""Market-data API surface — services + pipelines + resolve."""
 
 from __future__ import annotations
 
@@ -8,15 +8,19 @@ from uuid import UUID
 
 from backend.app.market_data import (
     MarketDataCatalogError,
+    MarketDataPipeline,
+    MarketDataPipelineList,
+    MarketDataPipelineWrite,
     MarketDataServiceList,
     MarketDataServiceRecord,
     MarketDataServiceWrite,
+    PipelineRegistryError,
     ResolveMarketDataRequest,
     ResolverResult,
 )
 
 if TYPE_CHECKING:
-    from backend.app.market_data import MarketDataServiceCatalog
+    from backend.app.market_data import MarketDataPipelineRegistry, MarketDataServiceCatalog
 
 try:  # pragma: no cover
     from fastapi import APIRouter, Depends, HTTPException
@@ -30,6 +34,12 @@ def get_market_data_catalog() -> "MarketDataServiceCatalog":
     from backend.app.market_data.runtime import create_market_data_catalog_from_environment
 
     return create_market_data_catalog_from_environment()
+
+
+def get_pipeline_registry() -> "MarketDataPipelineRegistry":
+    from backend.app.market_data.runtime import create_pipeline_registry_from_environment
+
+    return create_pipeline_registry_from_environment()
 
 
 def _dependency(default: object) -> object:
@@ -47,6 +57,12 @@ else:
 
 
 CatalogDependency = Annotated[Any, _dependency(get_market_data_catalog)]
+PipelineDependency = Annotated[Any, _dependency(get_pipeline_registry)]
+
+
+# ---------------------------------------------------------------------------
+# Services (existing surface)
+# ---------------------------------------------------------------------------
 
 
 @router.get("/services", response_model=MarketDataServiceList)
@@ -94,8 +110,59 @@ def disable_service(service_id: UUID, catalog: CatalogDependency) -> MarketDataS
 
 
 @router.post("/services/resolve", response_model=ResolverResult)
-def resolve_service(request: ResolveMarketDataRequest, catalog: CatalogDependency) -> ResolverResult:
-    return catalog.resolve(request)
+def resolve_service(
+    request: ResolveMarketDataRequest,
+    catalog: CatalogDependency,
+    pipelines: PipelineDependency,
+) -> ResolverResult:
+    return catalog.resolve(request, pipeline_registry=pipelines)
+
+
+# ---------------------------------------------------------------------------
+# Pipelines (Phase 1 §11.3 deliverable — first-class MarketDataPipeline)
+# ---------------------------------------------------------------------------
+
+
+@router.get("/pipelines", response_model=MarketDataPipelineList)
+def list_pipelines(pipelines: PipelineDependency) -> MarketDataPipelineList:
+    return pipelines.list_pipelines()
+
+
+@router.post("/pipelines", response_model=MarketDataPipeline)
+def create_pipeline(request: MarketDataPipelineWrite, pipelines: PipelineDependency) -> MarketDataPipeline:
+    return pipelines.create_pipeline(request)
+
+
+@router.get("/pipelines/{pipeline_id}", response_model=MarketDataPipeline)
+def get_pipeline(pipeline_id: UUID, pipelines: PipelineDependency) -> MarketDataPipeline:
+    try:
+        return pipelines.get_pipeline(pipeline_id)
+    except PipelineRegistryError as exc:
+        raise _operator_error(str(exc)) from exc
+
+
+@router.put("/pipelines/{pipeline_id}", response_model=MarketDataPipeline)
+def update_pipeline(pipeline_id: UUID, request: MarketDataPipelineWrite, pipelines: PipelineDependency) -> MarketDataPipeline:
+    try:
+        return pipelines.update_pipeline(pipeline_id, request)
+    except PipelineRegistryError as exc:
+        raise _operator_error(str(exc)) from exc
+
+
+@router.post("/pipelines/{pipeline_id}/set-default", response_model=MarketDataPipeline)
+def set_default_pipeline(pipeline_id: UUID, pipelines: PipelineDependency) -> MarketDataPipeline:
+    try:
+        return pipelines.set_default_for_provider(pipeline_id)
+    except PipelineRegistryError as exc:
+        raise _operator_error(str(exc)) from exc
+
+
+@router.post("/pipelines/{pipeline_id}/disable", response_model=MarketDataPipeline)
+def disable_pipeline(pipeline_id: UUID, pipelines: PipelineDependency) -> MarketDataPipeline:
+    try:
+        return pipelines.disable_pipeline(pipeline_id)
+    except PipelineRegistryError as exc:
+        raise _operator_error(str(exc)) from exc
 
 
 def _operator_error(message: str) -> Exception:

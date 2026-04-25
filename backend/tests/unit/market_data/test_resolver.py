@@ -254,13 +254,88 @@ def test_resolver_result_has_no_top_level_selection_mirror() -> None:
     } <= fields
 
 
-def test_pipeline_id_lives_only_on_per_symbol_rows_and_is_null_until_phase_1b() -> None:
+def test_pipeline_id_lives_only_on_per_symbol_rows() -> None:
     intent = _backtest_intent()
     result = resolve_market_data_service(intent, [yahoo_market_data_service()], SelectionStrategy.AUTO)
 
     assert "pipeline_id" not in ResolverResult.model_fields
     assert "pipeline_id" in PerSymbolResolution.model_fields
+
+
+def test_resolver_returns_null_pipeline_id_when_lookup_omitted() -> None:
+    intent = _backtest_intent()
+    result = resolve_market_data_service(intent, [yahoo_market_data_service()], SelectionStrategy.AUTO)
     assert all(row.pipeline_id is None for row in result.per_symbol_rows)
+
+
+def test_resolver_returns_pipeline_id_from_lookup_when_provided() -> None:
+    intent = _backtest_intent(symbols=["SPY", "AAPL"])
+
+    def lookup(provider):
+        return f"pipeline-{provider.value}"
+
+    result = resolve_market_data_service(
+        intent,
+        [yahoo_market_data_service()],
+        SelectionStrategy.AUTO,
+        pipeline_lookup=lookup,
+    )
+
+    assert all(row.pipeline_id == "pipeline-yahoo" for row in result.per_symbol_rows)
+
+
+def test_resolver_pipeline_lookup_called_with_selected_provider() -> None:
+    """Different providers should yield different pipeline_id values."""
+    intent = DataIntent(
+        consumer=DataConsumer.BROKER_RUNTIME,
+        mode=DataIntentMode.LIVE_RUNTIME,
+        symbols=["SPY"],
+        timeframe=Timeframe.M5,
+        purpose=DataPurpose.RUNTIME_TRADING,
+    )
+
+    captured: list[Provider] = []
+
+    def lookup(provider):
+        captured.append(provider)
+        return f"pipeline-for-{provider.value}"
+
+    result = resolve_market_data_service(
+        intent,
+        [yahoo_market_data_service(), alpaca_market_data_service()],
+        SelectionStrategy.AUTO,
+        pipeline_lookup=lookup,
+    )
+
+    assert captured == [Provider.ALPACA]
+    assert result.per_symbol_rows[0].pipeline_id == "pipeline-for-alpaca"
+
+
+def test_resolver_does_not_invoke_pipeline_lookup_for_rejected_rows() -> None:
+    intent = DataIntent(
+        consumer=DataConsumer.BROKER_RUNTIME,
+        mode=DataIntentMode.LIVE_RUNTIME,
+        symbols=["SPY"],
+        timeframe=Timeframe.M5,
+        purpose=DataPurpose.RUNTIME_TRADING,
+    )
+
+    captured: list[Provider] = []
+
+    def lookup(provider):
+        captured.append(provider)
+        return "should-not-appear"
+
+    result = resolve_market_data_service(
+        intent,
+        [yahoo_market_data_service()],  # Yahoo cannot stream; auto rejects
+        SelectionStrategy.AUTO,
+        pipeline_lookup=lookup,
+    )
+
+    assert result.decision == ResolverDecision.REJECTED
+    assert captured == []
+    assert result.per_symbol_rows[0].pipeline_id is None
 
 
 # ---------------------------------------------------------------------------

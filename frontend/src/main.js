@@ -1,15 +1,19 @@
 import { createOperationsApi } from "./api/operations.js";
+import { createPipelinesApi } from "./api/pipelines.js";
 import { createServicesApi } from "./api/services.js";
 import { mountOperationsCenter } from "./operationsCenter.js";
-import { mountServicesCenter } from "./servicesCenter.js";
+import { mountProviders } from "./providers.js";
 
-const root = document.querySelector("#operations-center");
-const servicesRoot = document.querySelector("#services-center");
+const operationsRoot = document.querySelector("#operations-center");
+const providersRoot = document.querySelector("#providers");
 
-if (root) {
-  mountOperationsCenter(root, createOperationsApi());
+if (operationsRoot) {
+  mountOperationsCenter(operationsRoot, createOperationsApi());
 }
 
-if (servicesRoot) {
-  mountServicesCenter(servicesRoot, createServicesApi());
+if (providersRoot) {
+  mountProviders(providersRoot, {
+    pipelinesApi: createPipelinesApi(),
+    servicesApi: createServicesApi()
+  });
 }
