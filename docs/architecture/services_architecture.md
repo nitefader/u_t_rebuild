@@ -49,6 +49,21 @@ Disabled and invalid services are hard rejected. Services missing required strea
 
 Resolver output is UI-ready: selected service id/name/provider, decision, reason code, explanation, and rejected candidates with precise explanations.
 
+## Services Center CRUD
+
+Services Center manages configured supporting services before runtime wiring:
+
+- Market Data Services can be created, edited, validated, disabled, and set as the single Market Data default.
+- AI Services can be created, edited, validated, disabled, and set as the single AI default.
+- Secrets are represented to the UI only as masked credential presence and non-secret credential references.
+- Masked placeholders are not accepted as replacement secrets.
+- Invalid or disabled services cannot become defaults.
+- Disabling a default service clears its default flag.
+
+Provider validation is provider-aware but intentionally narrow. Alpaca requires API key, secret, and paper/live mode, and validation is abstracted behind a fakeable validator. Yahoo requires no credentials and validates as historical-only. Groq requires an API key and validates through the AI validator boundary. Other AI providers may be created as drafts and validated through the same boundary without adding SDK-specific behavior yet.
+
+The persisted Market Data Services feed the Data Intent resolver. Disabled and invalid services remain rejected by resolver policy.
+
 ## Streams
 
 Market data stream and broker account event stream are separate.
@@ -71,3 +86,5 @@ The frontend displays resolver decisions from backend/platform state. It must no
 ## Non-Goals
 
 This implementation does not wire real Alpaca streaming, implement provider fallback, add A/B provider testing, create per-account data-provider overrides, merge Broker Accounts into Services, or change FeatureEngine, SignalEngine, PortfolioGovernor, OrderManager, BrokerAdapter, or BrokerSync.
+
+It also does not wire runtime trading to the Services registry or add live trading behavior.

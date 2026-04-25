@@ -33,6 +33,8 @@ for (const file of sourceFiles) {
 }
 
 await import("../src/api/operations.js");
+await import("../src/api/services.js");
 await import("../src/operationsCenter.js");
+await import("../src/servicesCenter.js");
 
 console.log(`Frontend check passed for ${sourceFiles.length} files.`);

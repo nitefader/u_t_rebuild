@@ -3113,3 +3113,20 @@ Validation results:
   - `cd frontend && npm test` attempted; blocked by local PowerShell `npm.ps1` execution policy.
   - `cd frontend && npm.cmd test`
 - Test results: compile passed; backend service tests passed `12 passed`; backend runtime tests passed `32 passed`; full backend tests passed `438 passed, 1 skipped`; frontend build passed; frontend tests passed `22 passed`.
+## 2026-04-24 20:52 ET
+
+- Implemented Services Center CRUD and provider validation for Market Data Services and AI Services.
+- Created persistent Services Center models/service APIs with non-secret credential references, validation status fields, default enforcement, disable behavior, and persisted market data resolver integration.
+- Added backend routes in `backend/app/api/routes/services.py` and registered them with the API server.
+- Added frontend Services Center page, API client, renderer, summary cards, Market Data and AI tabs, provider-aware forms, service actions, validation history display, and resolver panel display.
+- Files created/updated include `backend/app/services/models.py`, `backend/app/services/service.py`, `backend/app/services/validation.py`, `backend/app/services/runtime_service.py`, `backend/app/api/routes/services.py`, `frontend/src/api/services.js`, `frontend/src/servicesCenter.js`, `frontend/services.html`, `frontend/vite.config.js`, `frontend/scripts/check-frontend.mjs`, `frontend/tests/servicesCenter.test.mjs`, and architecture/log docs.
+- Tests added for Market Data CRUD, masked credential rejection, validation outcomes, default rules, disabled resolver rejection, AI CRUD/default rules, persisted resolver behavior, Services API calls, Services Center rendering, provider-aware fields, actions, resolver display, and no raw secret rendering.
+- Scope kept out: real market data streaming, runtime trading wiring to Services, Broker Accounts-as-Services, frontend provider calls, per-account data provider overrides, live trading behavior, and changes to FeatureEngine, SignalEngine, PortfolioGovernor, OrderManager, BrokerAdapter, or BrokerSync.
+- Validation commands run:
+  - `python -m compileall -q backend/app backend/tests`
+  - `python -m pytest backend/tests/unit/services -q`
+  - `python -m pytest backend/tests/unit/runtime -q`
+  - `python -m pytest backend/tests -q`
+  - `cd frontend && npm.cmd run build`
+  - `cd frontend && npm.cmd test`
+- Test results: compile passed; backend service tests passed `17 passed`; backend runtime tests passed `32 passed`; full backend tests passed `443 passed, 1 skipped`; frontend build passed; frontend tests passed `27 passed`.

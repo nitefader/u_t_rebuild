@@ -304,6 +304,18 @@ dd {
   padding: 12px;
 }
 
+.service-table,
+.chip-row {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.chip-row {
+  display: flex;
+  flex-wrap: wrap;
+}
+
 pre {
   margin: 0;
   overflow: auto;

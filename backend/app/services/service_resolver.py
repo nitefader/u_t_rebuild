@@ -97,6 +97,9 @@ class MarketDataServiceConfig(BaseModel):
     is_default: bool = False
     capabilities: MarketDataCapabilities
     provider_reachable: bool = True
+    credentials_ref: str | None = None
+    validation_status: str | None = None
+    validation_message: str | None = None
 
 
 class RejectedCandidate(BaseModel):
