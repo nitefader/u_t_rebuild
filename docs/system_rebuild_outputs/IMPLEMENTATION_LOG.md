@@ -3198,3 +3198,63 @@ Validation results:
 - Backend services tests: `17 passed`
 - Backend full suite: `443 passed, 1 skipped`
 - `python -m compileall -q backend/app backend/tests`: passed
+
+## 2026-04-24 23:13 ET
+
+Refined the Services Center UX against the redline contract so the page reflects persisted backend records, current Data Intent form state, and resolver API output instead of hardcoded selected-service recommendations.
+
+Files updated:
+- `frontend/src/servicesCenter.js`
+- `frontend/tests/servicesCenter.test.mjs`
+- `docs/system_rebuild_outputs/IMPLEMENTATION_LOG.md`
+
+What changed:
+- Updated the page header copy to frame Services Center as external-provider configuration with Data Intent based service selection.
+- Changed Market Data and AI creation to collapsed action-first panels opened by `+ Add Market Data Service` and `+ Add AI Service`.
+- Made provider-specific form fields render only when applicable:
+  - Alpaca shows mode, API key, and API secret.
+  - Yahoo omits credential fields and shows historical-only provider context.
+  - AI providers show API key and capability label when applicable.
+- Added summary cards that use real configured services, default service records, backend capability summaries, and real status counts.
+- Added service-card `Best For` sections derived from backend capability fields or AI capability labels, not service names.
+- Reworked the resolver area:
+  - mode labels are `Auto (Recommended)`, `Default`, and `Manual Selection`.
+  - explanations clarify auto/default/manual behavior.
+  - action label is `Preview Service Decision`.
+  - selected-service and no-compatible-service states come from resolver output.
+  - missing resolver explanations now surface as a backend contract issue instead of silent fallback text.
+  - rejected services render only from resolver response candidates.
+- Kept raw credentials out of rendered DOM and ensured masked placeholders are not submitted as replacement secrets.
+
+Tests added/updated:
+- Services page render and no raw secret checks.
+- Collapsed Market Data creation panel by default.
+- Expanded Market Data provider-aware form checks.
+- Yahoo credential-field hiding.
+- AI services render from backend fixture data.
+- Resolver selected-service display from resolver response.
+- No-compatible-service resolver state.
+- Rejected candidates from resolver response.
+- Source-level guard against hardcoded selected provider recommendations.
+
+Scope kept out:
+- No real streaming wiring.
+- No broker account behavior.
+- No live trading.
+- No unrelated pages.
+- No hardcoded Alpaca/Yahoo selected service recommendations.
+- No Broker Accounts merged into Services.
+
+Validation commands run:
+- `cd frontend && npm.cmd run build`
+- `cd frontend && npm.cmd test`
+- `python -m pytest backend/tests/unit/services -q`
+- `python -m pytest backend/tests -q`
+- `python -m compileall -q backend/app backend/tests`
+
+Validation results:
+- Frontend build: passed.
+- Frontend tests: `33 passed`.
+- Backend services tests: `17 passed`.
+- Backend full suite: `443 passed, 1 skipped`.
+- Compileall: passed.

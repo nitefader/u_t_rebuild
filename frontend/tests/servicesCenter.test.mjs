@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { readFileSync } from "node:fs";
 
 import { createServicesApi } from "../src/api/services.js";
 import { renderServicesCenter } from "../src/servicesCenter.js";
@@ -69,7 +70,31 @@ test("Services Center renders summary cards, market data table, capabilities, an
   assert.match(html, /Yahoo Historical/);
   assert.match(html, /streaming/);
   assert.match(html, /\*\*\*\*\*\*\*\*/);
+  assert.match(html, /\+ Add Market Data Service/);
+  assert.doesNotMatch(html, /Create Market Data Service/);
   assert.doesNotMatch(html, /gsk_|new-secret|api-secret-value/);
+});
+
+test("Add Market Data Service panel is collapsed by default and expands with provider-aware form", () => {
+  const collapsed = renderServicesCenter(state());
+  const expanded = renderServicesCenter(state({ marketDataFormState: { visible: true, provider: "alpaca", mode: "paper" } }));
+
+  assert.doesNotMatch(collapsed, /Create Market Data Service/);
+  assert.match(expanded, /Create Market Data Service/);
+  assert.match(expanded, /API Key/);
+  assert.match(expanded, /API Secret/);
+  assert.match(expanded, /<span>Mode<\/span>/);
+});
+
+test("Yahoo provider hides credential fields in the expanded market form", () => {
+  const html = renderServicesCenter(state({ marketDataFormState: { visible: true, provider: "yahoo", mode: "none", name: "" } }));
+  const formStart = html.indexOf('data-form="market-data"');
+  const formEnd = html.indexOf("</form>", formStart);
+  const formHtml = html.slice(formStart, formEnd);
+
+  assert.match(formHtml, /No credentials required/);
+  assert.doesNotMatch(formHtml, /API Key/);
+  assert.doesNotMatch(formHtml, /API Secret/);
 });
 
 test("Resolver panel shows decision modes and detected intent", () => {
@@ -78,6 +103,7 @@ test("Resolver panel shows decision modes and detected intent", () => {
       activeResolverMode: "auto",
       resolution: {
         selection_mode: "auto",
+        decision: "selected",
         intent: {
           consumer: "backtest",
           timeframe: "1d",
@@ -96,8 +122,8 @@ test("Resolver panel shows decision modes and detected intent", () => {
   );
 
   assert.match(html, /Auto \(Recommended\)/);
-  assert.match(html, /Default \(system default\)/);
-  assert.match(html, /Manual \(explicit selection\)/);
+  assert.match(html, />Default</);
+  assert.match(html, /Manual Selection/);
   assert.match(html, /Detected Intent/);
   assert.match(html, /consumer/i);
   assert.match(html, /timeframe/i);
@@ -105,21 +131,21 @@ test("Resolver panel shows decision modes and detected intent", () => {
   assert.match(html, /Selected Service/);
   assert.match(html, /Yahoo Historical/);
   assert.match(html, /selected_auto_best_fit/);
-  assert.match(html, /Rejected candidates \(1\)/);
+  assert.match(html, /Rejected Services \(1\)/);
 });
 
 test("Services Center renders AI table and provider-aware fields", () => {
-  const html = renderServicesCenter(state({ activeTab: "ai" }));
+  const html = renderServicesCenter(state({ activeTab: "ai", aiFormState: { visible: true, provider: "groq", capability_label: "fast" } }));
 
   assert.match(html, /AI Services/);
   assert.match(html, /Groq Fast/);
-  assert.match(html, /capability_label/);
+  assert.match(html, /Capability Label/);
   assert.match(html, /option value="groq"/);
-  assert.match(html, /Set default/);
+  assert.match(html, /Set Default/);
 });
 
 test("provider dropdown supports context-aware market fields", () => {
-  const html = renderServicesCenter(state({ marketDataFormState: { provider: "yahoo", mode: "none", name: "", id: null } }));
+  const html = renderServicesCenter(state({ marketDataFormState: { visible: true, provider: "yahoo", mode: "none", name: "", id: null } }));
 
   assert.match(html, /data-provider-select="market-data"/);
   assert.match(html, /option value="alpaca"/);
@@ -132,6 +158,7 @@ test("Data Source Resolver panel displays selected service and rejected candidat
   const html = renderServicesCenter(state({
     resolution: {
       selection_mode: "auto",
+      decision: "selected",
       intent: { consumer: "backtest", timeframe: "1d", requires_streaming: false, requires_intraday: false },
       selected_service_name: "Yahoo Historical",
       provider: "yahoo",
@@ -142,7 +169,25 @@ test("Data Source Resolver panel displays selected service and rejected candidat
 
   assert.match(html, /Selected Service/);
   assert.match(html, /Yahoo Historical/);
-  assert.match(html, /Rejected candidates \(1\)/);
+  assert.match(html, /Rejected Services \(1\)/);
+});
+
+test("Resolver panel displays no-compatible-service state cleanly", () => {
+  const html = renderServicesCenter(state({
+    resolution: {
+      selection_mode: "auto",
+      decision: "rejected",
+      reason_code: "rejected_no_compatible_service",
+      explanation: "No enabled service supports the requested realtime streaming intent.",
+      intent: { consumer: "broker_runtime", timeframe: "5m", requires_streaming: true, requires_intraday: true, purpose: "runtime_trading" },
+      rejected_candidates: [{ service_id: marketId, reason_code: "rejected_no_streaming", explanation: "Streaming is required." }]
+    }
+  }));
+
+  assert.match(html, /No Compatible Service Found/);
+  assert.match(html, /No enabled service supports the requested realtime streaming intent/);
+  assert.match(html, /rejected_no_compatible_service/);
+  assert.match(html, /Rejected Services \(1\)/);
 });
 
 test("Disabled services are marked as disabled", () => {
@@ -204,4 +249,13 @@ test("Services API calls backend routes for validate, default, disable, and reso
     [`/api/v1/services/ai/${aiId}/disable`, "POST"],
     ["/api/v1/services/market-data/resolve", "POST"]
   ]);
+});
+
+test("Services UI source does not hardcode selected provider recommendations", () => {
+  const source = readFileSync(new URL("../src/servicesCenter.js", import.meta.url), "utf8");
+
+  assert.doesNotMatch(source, /Yahoo selected/i);
+  assert.doesNotMatch(source, /Alpaca selected/i);
+  assert.doesNotMatch(source, /selected_service_name:\s*["']Yahoo/i);
+  assert.doesNotMatch(source, /selected_service_name:\s*["']Alpaca/i);
 });
