@@ -3664,3 +3664,46 @@ Phase 1 Data Flow Lock — exit gate satisfied.
 
 Commit:
 - pending.
+
+## 2026-04-25 12:03 ET - Slice 2A: BarBuilder intra-day aggregation (Phase 2 §11.1-3)
+
+Task:
+- Phase 2 §11 deliverables 1-3: aggregate 1m NormalizedBar streams into completed higher-timeframe bars (3m/5m/15m/30m/1h) with bucket-cross emission. Pure data, no broker, no money path. Calendar-aware aggregation (4h/1d/1w) deferred to slice 2B.
+
+Files changed:
+- backend/app/features/bar_builder.py (new — BarBuilder, BarBuilderRegistry, _Accumulator)
+- backend/app/features/__init__.py (exports)
+- backend/tests/unit/features/test_bar_builder.py (new — 17 tests)
+
+Implemented:
+- ``BarBuilder``: per-symbol stateful 1m → {3m, 5m, 15m, 30m, 1h} aggregator. Bucket-cross emission only — forming bar never exposed publicly (no ``current()`` / ``forming()`` / ``pending()`` methods; lint-style test guards this).
+- ``BarBuilderRegistry``: lazy multi-symbol fan-out. ``feed(bar)`` routes by symbol; per-symbol state isolation verified.
+- Bucket alignment: UTC wall-clock floor. Hourly aligns to 09:00, 10:00, …; first NYSE RTH hour may emit a "complete" bar with only 30 minutes of data (calendar-aware first/last-bar handling lands in 2B).
+- Strict input validation: rejects non-1m bars, symbol mismatch, non-strictly-increasing timestamps, unsupported timeframes (4h/1d/1w error message points to 2B).
+- ``flush_at(ts)`` is a documented no-op stub for slice 2B's session-close emission.
+- Naive timestamps explicitly normalized to UTC (no silent timezone surprise).
+
+Scope kept out:
+- 4h, 1d, 1w aggregation (slice 2B — calendar-aware).
+- Calendar / holiday / half-day handling (slice 2B).
+- Broker event stream integration, BrokerSync writes, TradeLedger (slice 2C — money path; review-gated).
+- Wiring BarBuilder output into IncrementalFeatureEngine.update (deferred to integration slice).
+
+Validation performed:
+- python -m compileall -q backend/app backend/tests
+- python -m pytest backend/tests -q
+- cd frontend && npm.cmd run build
+- cd frontend && npm.cmd test
+
+Result:
+- compileall clean. Backend: 646 passed, 1 skipped (+19 BarBuilder tests). Frontend: 37 passed. Build clean.
+
+Verification:
+- Feature Engine still does not call external providers (BarBuilder consumes already-normalized bars).
+- §16 default "completed bars over forming bars" mechanically enforced.
+- §11.3 "no incomplete higher timeframe bars leak into decisions" verified by tests.
+- No architecture boundaries violated.
+- Architecture-isolation lint (added in 1D) still green — BarBuilder imports nothing from market_data.alpaca or any provider SDK.
+
+Commit:
+- pending.

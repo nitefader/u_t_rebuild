@@ -1,5 +1,12 @@
 """Canonical feature identity and registry contracts."""
 
+from .bar_builder import (
+    INPUT_TIMEFRAME,
+    SUPPORTED_TIMEFRAMES,
+    BarBuilder,
+    BarBuilderError,
+    BarBuilderRegistry,
+)
 from .batch import BatchFeatureEngine, BatchFeatureEngineError, UnsupportedBatchFeatureError
 from .frames import FeatureAvailability, FeatureFrame, FeatureFrameSet, FeatureSnapshot, FeatureValue, NormalizedBar
 from .incremental import FeatureCache, IncrementalFeatureEngine, IncrementalFeatureEngineError, IncrementalFeatureUpdate
@@ -26,6 +33,11 @@ from .subscription_manager import (
 __all__ = [
     "CANONICAL_TIMEFRAMES",
     "FEATURE_REGISTRY",
+    "INPUT_TIMEFRAME",
+    "SUPPORTED_TIMEFRAMES",
+    "BarBuilder",
+    "BarBuilderError",
+    "BarBuilderRegistry",
     "BatchFeatureEngine",
     "BatchFeatureEngineError",
     "FeatureAvailability",
