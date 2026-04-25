@@ -384,3 +384,86 @@ def test_full_pipeline_does_not_submit_when_governor_blocks_with_real_adapter(mo
 
     assert result.orders == ()
     assert client.submitted_client_order_ids == []
+
+
+# ---------------------------------------------------------------------------
+# Composition-root wiring (Phase 2 slice 2C-followup)
+# ---------------------------------------------------------------------------
+
+
+def test_orchestrator_owns_trade_ledger_and_broker_sync_service() -> None:
+    """Construction wires TradeLedger + BrokerSyncService into the order manager."""
+    from backend.app.brokers import BrokerSyncService
+    from backend.app.orders import TradeLedger
+
+    pipeline = _orchestrator()
+
+    assert isinstance(pipeline.trade_ledger, TradeLedger)
+    assert isinstance(pipeline.broker_sync_service, BrokerSyncService)
+    # Late binding hooked up.
+    assert pipeline.order_manager._broker_sync_service is pipeline.broker_sync_service
+
+
+def test_orchestrator_seeds_broker_sync_service_freshness_on_construction() -> None:
+    """Without the seed, the gate would block the very first opening order."""
+    pipeline = _orchestrator()
+
+    state = pipeline.broker_sync_service.current_sync_state(ACCOUNT_ID)
+    assert state.is_stale is False
+
+
+def test_orchestrator_records_successful_poll_after_each_broker_submit() -> None:
+    """The synchronous submit path must keep BrokerSyncService freshness alive."""
+    pipeline = _orchestrator()
+
+    pipeline.process_bar(_bar(0))
+    pipeline.process_bar(_bar(1, open_=99, close=100))
+    state = pipeline.broker_sync_service.current_sync_state(ACCOUNT_ID)
+    assert state.is_stale is False
+    assert state.last_poll_sync_at is not None
+
+
+def test_orchestrator_attaches_stream_router_to_provided_stream_adapter() -> None:
+    """A stream adapter exposing subscribe(emit) gets bound to the router."""
+
+    class FakeStreamAdapter:
+        def __init__(self) -> None:
+            self.subscribed_callbacks: list = []
+
+        def subscribe(self, emit) -> None:  # type: ignore[no-untyped-def]
+            self.subscribed_callbacks.append(emit)
+
+    stream_adapter = FakeStreamAdapter()
+    resolved = _components()
+    pipeline = RuntimeOrchestrator(
+        account_id=ACCOUNT_ID,
+        deployment=_deployment(resolved),
+        components=resolved,
+        stream_adapter=stream_adapter,
+    )
+
+    assert len(stream_adapter.subscribed_callbacks) == 1
+    assert stream_adapter.subscribed_callbacks[0] == pipeline.stream_router.route
+
+
+def test_stream_event_routes_through_orchestrator_router_into_trade_ledger() -> None:
+    """A fill event delivered via the router lands as a Trade and updates freshness."""
+    from backend.app.brokers import BrokerFillUpdateEvent
+
+    pipeline = _orchestrator()
+
+    fill = BrokerFillUpdateEvent(
+        account_id=ACCOUNT_ID,
+        client_order_id="client-end-to-end",
+        symbol="SPY",
+        qty=5,
+        price=101,
+        side="buy",
+        broker_execution_id="exec-1",
+    )
+    pipeline.stream_router.route(fill)
+
+    trades = pipeline.trade_ledger.all()
+    assert len(trades) == 1
+    assert trades[0].broker_execution_id == "exec-1"
+    assert pipeline.broker_sync_service.current_sync_state(ACCOUNT_ID).is_stale is False

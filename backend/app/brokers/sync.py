@@ -355,6 +355,22 @@ class BrokerSyncService:
         self._persist_sync_state(state)
         return state
 
+    def record_successful_poll(self, account_id: UUID, *, at: datetime | None = None) -> BrokerSyncState:
+        """Mark that a synchronous broker round-trip just succeeded.
+
+        Synchronous submit/cancel paths call ``BrokerSync.apply_result``
+        directly (not through ``handle_order_update``) so the service
+        does not see a stream event. This method keeps the service's
+        view of ``last_poll_sync_at`` fresh after such round-trips so
+        downstream consumers (the OrderManager stale-sync gate, the
+        governor's freshness signal) treat the account as up to date.
+        """
+        timestamp = _aware(at) if at is not None else datetime.now(timezone.utc)
+        self._last_poll_sync_at_by_account[account_id] = timestamp
+        self._last_successful_sync_at_by_account[account_id] = timestamp
+        self._stale_reason_by_account.pop(account_id, None)
+        return self.current_sync_state(account_id)
+
     def fetch_account_snapshot(self, account_id: UUID) -> BrokerAccountSnapshot:
         return self._adapter.get_account_snapshot(account_id)
 

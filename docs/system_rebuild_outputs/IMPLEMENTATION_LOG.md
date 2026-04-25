@@ -3806,3 +3806,46 @@ Verification:
 
 Commit:
 - pending.
+
+---
+
+## 2026-04-25 18:15 ET - Slice 2C-followup: Composition root wiring
+
+Task:
+- Wire the slice 2C surface (TradeLedger / BrokerSyncService / BrokerStreamRouter / OrderManager stale-sync gate) into the runtime composition root so the gate is live in production paths and stream events route through to the canonical TradeLedger.
+
+Files changed:
+- backend/app/orders/manager.py (attach_broker_sync_service for late binding)
+- backend/app/brokers/sync.py (BrokerSyncService.record_successful_poll for synchronous-submit freshness)
+- backend/app/pipeline/orchestrator.py (RuntimeOrchestrator constructs TradeLedger + BrokerSyncService + BrokerStreamRouter; binds service to OrderManager; seeds freshness on construction; records successful poll after each broker submit; binds stream_adapter.subscribe to router.route when provided)
+- backend/tests/unit/pipeline/test_runtime_orchestrator.py (5 wiring tests appended)
+
+Implemented:
+- RuntimeOrchestrator now owns a TradeLedger, BrokerSyncService, and BrokerStreamRouter. Service is constructed with the orchestrator's broker_adapter, broker_sync, order_ledger, trade_ledger, and runtime_store.
+- OrderManager.attach_broker_sync_service binds the service after both components exist (resolves the OrderManager.ledger ↔ BrokerSyncService construction-order cycle without forcing callers to hold a holder).
+- BrokerSyncService.record_successful_poll(account_id, *, at=None) bumps last_poll_sync_at + last_successful_sync_at and clears any stale_reason. Called by the orchestrator on construction (so onboarding-validated adapters seed fresh) and after each successful synchronous broker submit (so the OrderManager stale-sync gate doesn't trigger on FakeBrokerAdapter / between stream events).
+- stream_adapter kwarg: when provided, the orchestrator subscribes BrokerStreamRouter(service).route as the adapter's emit callback. AlpacaAccountStreamAdapter remains a pure normalizer; the seam is at the orchestrator.
+- attach_broker_sync_service is hasattr-guarded in the orchestrator so duck-typed RecordingOrderManager fixtures keep working without subclassing.
+
+Scope kept out:
+- broker_accounts/service.py still constructs a one-shot BrokerSync for credential validation; it does not own a long-lived BrokerSyncService since onboarding doesn't yet build a runtime. Onboarding → orchestrator wiring is a future slice.
+- Real Alpaca trade-update WebSocket. AlpacaBrokerAdapter doesn't yet expose a stream_client surface for the orchestrator to attach. The seam is ready (pass stream_adapter=...); the adapter-side stream client construction remains.
+- Routing trades back to InternalOrder.order_id automatically (BrokerOrderMapping lookup in the stream path).
+
+Validation performed:
+- python -m compileall -q backend
+- python -m pytest backend/
+- cd frontend && npm.cmd run build
+- cd frontend && npm.cmd test
+
+Result:
+- compileall clean. Backend: 699 passed, 1 skipped (+5 vs slice 2C). Frontend: 37 passed. Build clean.
+
+Verification:
+- Pipeline orchestrator owns canonical TradeLedger + BrokerSyncService and binds the service to its OrderManager.
+- Stream router accepts BrokerFillUpdateEvent through the orchestrator, lands a Trade in trade_ledger, and clears stale flag.
+- Synchronous submit path keeps freshness alive (process_bar twice → service.current_sync_state still fresh).
+- Slice 2C contracts unchanged: AlpacaAccountStreamAdapter source still has no BrokerSync references; OrderManager source still has no submit_order; cumulative partial-fill test still green.
+
+Commit:
+- pending.

@@ -49,6 +49,17 @@ class OrderManager:
     def ledger(self) -> OrderLedger:
         return self._ledger
 
+    def attach_broker_sync_service(self, service: Any) -> None:
+        """Bind a BrokerSyncService after construction.
+
+        The runtime orchestrator owns both the OrderManager and the
+        BrokerSyncService, but the service depends on the OrderManager's
+        ledger — so the service can only be built after the OrderManager
+        exists. This setter completes the wiring without forcing callers
+        to thread construction order through their composition root.
+        """
+        self._broker_sync_service = service
+
     def create_order(
         self,
         *,

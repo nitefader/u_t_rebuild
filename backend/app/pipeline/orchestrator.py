@@ -3,7 +3,16 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import UUID
 
-from backend.app.brokers import BrokerAdapter, BrokerAdapterError, BrokerOrderResult, BrokerOrderStatus, BrokerSync, FakeBrokerAdapter
+from backend.app.brokers import (
+    BrokerAdapter,
+    BrokerAdapterError,
+    BrokerOrderResult,
+    BrokerOrderStatus,
+    BrokerStreamRouter,
+    BrokerSync,
+    BrokerSyncService,
+    FakeBrokerAdapter,
+)
 from backend.app.control_plane.service import ControlPlane
 from backend.app.decision import SignalEngine, SignalEvaluationError
 from backend.app.domain import CandidateTradeIntent
@@ -26,7 +35,7 @@ from backend.app.governor import (
     PortfolioGovernor,
     PortfolioSnapshot,
 )
-from backend.app.orders import InternalOrder, InternalOrderIntent, OrderManager
+from backend.app.orders import InternalOrder, InternalOrderIntent, OrderManager, TradeLedger
 from backend.app.runtime import DeploymentContext, ExecutionIntent, ExecutionIntentBuilder, RuntimeState
 
 from .models import PipelineEvent, PipelineEventType, PipelineResult
@@ -87,6 +96,9 @@ class RuntimeOrchestrator:
         order_manager: OrderManager | None = None,
         broker_adapter: BrokerAdapter | None = None,
         broker_sync: BrokerSync | None = None,
+        broker_sync_service: BrokerSyncService | None = None,
+        trade_ledger: TradeLedger | None = None,
+        stream_adapter: object | None = None,
         broker_freshness: BrokerSyncFreshness | None = None,
         portfolio_snapshot: PortfolioSnapshot | None = None,
         feature_cache: FeatureCache | None = None,
@@ -105,6 +117,24 @@ class RuntimeOrchestrator:
         self._order_manager = order_manager or OrderManager()
         self._broker_adapter = broker_adapter or FakeBrokerAdapter()
         self._broker_sync = broker_sync or BrokerSync(ledger=self._order_manager.ledger)
+        self._trade_ledger = trade_ledger or TradeLedger()
+        self._broker_sync_service = broker_sync_service or BrokerSyncService(
+            adapter=self._broker_adapter,
+            broker_sync=self._broker_sync,
+            order_ledger=self._order_manager.ledger,
+            trade_ledger=self._trade_ledger,
+            runtime_store=runtime_store,
+        )
+        if hasattr(self._order_manager, "attach_broker_sync_service"):
+            self._order_manager.attach_broker_sync_service(self._broker_sync_service)
+        # Seed the service with a successful poll on construction so the
+        # OrderManager stale-sync gate doesn't block before the first
+        # process_bar round-trip. Onboarding has already verified the
+        # adapter is connected by the time the orchestrator is built.
+        self._broker_sync_service.record_successful_poll(account_id)
+        self._stream_router = BrokerStreamRouter(self._broker_sync_service)
+        if stream_adapter is not None and hasattr(stream_adapter, "subscribe"):
+            stream_adapter.subscribe(self._stream_router.route)
         self._broker_freshness = broker_freshness or BrokerSyncFreshness()
         self._portfolio_snapshot = portfolio_snapshot or PortfolioSnapshot()
         self._feature_cache = feature_cache or FeatureCache()
@@ -118,6 +148,18 @@ class RuntimeOrchestrator:
     @property
     def order_manager(self) -> OrderManager:
         return self._order_manager
+
+    @property
+    def broker_sync_service(self) -> BrokerSyncService:
+        return self._broker_sync_service
+
+    @property
+    def trade_ledger(self) -> TradeLedger:
+        return self._trade_ledger
+
+    @property
+    def stream_router(self) -> BrokerStreamRouter:
+        return self._stream_router
 
     @property
     def feature_cache(self) -> FeatureCache:
@@ -293,6 +335,7 @@ class RuntimeOrchestrator:
         )
         try:
             broker_result = self._broker_adapter.submit_order(order)
+            self._broker_sync_service.record_successful_poll(self._account_id, at=broker_result.received_at)
         except BrokerAdapterError as exc:
             broker_result = BrokerOrderResult(
                 order_id=order.order_id,
