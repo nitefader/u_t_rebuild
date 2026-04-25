@@ -3620,3 +3620,47 @@ Verification:
 
 Commit:
 - pending.
+
+## 2026-04-25 04:34 ET - Slice 1D: SubscriptionManager + Phase 1 exit gate
+
+Task:
+- Phase 1 §11.4-5 + exit gate: build the FeatureEngine ``SubscriptionManager`` so demand-dedup happens at the FeatureKey level, multiple Deployments share one subscription per key, and a single Deployment may resolve different keys to different pipelines.
+
+Files changed:
+- backend/app/features/subscription_manager.py (new)
+- backend/app/features/__init__.py (exports)
+- backend/tests/unit/features/test_subscription_manager.py (new — 12 tests)
+- backend/tests/integration/test_feature_demand_to_pipeline_subscription_e2e.py (new — 3 acceptance tests)
+- backend/tests/unit/lint/test_feature_engine_isolation.py (new — architecture lint per §12 stop 1)
+
+Implemented:
+- ``SubscriptionManager`` owns the canonical ``FeatureKey -> Subscription`` map. Methods: ``register_plan(deployment_id, plan, pipeline_resolver) -> SubscriptionDelta``, ``unregister_plan``, ``subscription_for``, ``all_subscriptions``, ``consumer_count``.
+- ``SubscriptionDelta`` reports ``added``, ``removed``, ``unchanged`` (consumer-count change without subscription change), and ``unresolved`` (FeatureKeys whose pipeline_resolver returned None — graceful degradation).
+- Re-registering the same plan is idempotent; re-registering a different plan removes orphaned keys.
+- Pipeline resolution per FeatureKey is injected as ``Callable[[FeatureSpec, str], str | None]`` — SubscriptionManager has zero coupling to Provider, MarketDataPipeline, or any provider SDK.
+- Architecture-isolation lint: parametrized AST scan over ``backend/app/features/`` and ``backend/app/decision/`` blocks any import of provider SDKs (alpaca, yfinance, polygon, openai, anthropic, groq) or internal broker/alpaca modules. Phase 1 §12 stop condition 1 mechanically defended.
+- Acceptance e2e: full ``Plan -> Resolver -> SubscriptionManager`` chain. Two deployments with overlapping plans share subscriptions; one deployment with mixed timeframes resolves to different pipelines per FeatureKey; no provider call required.
+
+Scope kept out:
+- Real provider subscribe/unsubscribe wiring (caller wires the delta in Phase 2 alongside BarBuilder + streaming truth).
+- Durable persistence of the subscription map (rebuilds at startup from registered plans).
+
+Validation performed:
+- python -m compileall -q backend/app backend/tests
+- python -m pytest backend/tests -q
+- cd frontend && npm.cmd run build
+- cd frontend && npm.cmd test
+
+Result:
+- compileall clean. Backend: 627 passed, 1 skipped (+28 vs 1C: 12 SubscriptionManager + 3 acceptance + 13 architecture-lint parametrizations). Frontend: 37 passed. Build clean.
+
+Verification:
+- §12 stop 1 enforced: feature/decision modules cannot import any provider SDK.
+- §I FINAL: dedup at FeatureKey level (not symbol); Deployment may mix Pipelines per FeatureKey (acceptance test pins this).
+- §11 exit gate: a Deployment can declare feature demand, resolve a pipeline per FeatureKey, and attach data demand without any direct provider call.
+- No architecture boundaries violated.
+
+Phase 1 Data Flow Lock — exit gate satisfied.
+
+Commit:
+- pending.

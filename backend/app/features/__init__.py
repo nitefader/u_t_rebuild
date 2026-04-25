@@ -15,6 +15,13 @@ from .planner import (
 )
 from .registry import FEATURE_REGISTRY, FeatureRegistry, FeatureRegistryEntry, registry
 from .spec import CANONICAL_TIMEFRAMES, FeatureNamespace, FeatureScope, FeatureSpec, FeatureValidationError
+from .subscription_manager import (
+    PipelineResolver,
+    SubscriptionChange,
+    SubscriptionDelta,
+    SubscriptionEntry,
+    SubscriptionManager,
+)
 
 __all__ = [
     "CANONICAL_TIMEFRAMES",
@@ -41,7 +48,12 @@ __all__ = [
     "IncrementalFeatureEngineError",
     "IncrementalFeatureUpdate",
     "NormalizedBar",
+    "PipelineResolver",
     "ResolvedProgramComponents",
+    "SubscriptionChange",
+    "SubscriptionDelta",
+    "SubscriptionEntry",
+    "SubscriptionManager",
     "UnsupportedBatchFeatureError",
     "build_feature_plan",
     "canonical_params_json",
