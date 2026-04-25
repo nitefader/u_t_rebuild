@@ -106,6 +106,7 @@ class RejectedCandidate(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     service_id: str
+    service_name: str | None = None
     reason_code: ResolverReasonCode
     explanation: str
 
@@ -247,14 +248,17 @@ def _auto_select(intent: DataIntent, services: tuple[MarketDataServiceConfig, ..
             "no_compatible_service: no configured market data service satisfies this data intent.",
             tuple(rejected),
         )
-    selected = min(compatible, key=lambda service: _auto_score(intent, service))
+    default = next((service for service in compatible if service.is_default), None)
+    selected = default or min(compatible, key=lambda service: _auto_score(intent, service))
+    selected_reason = ResolverReasonCode.SELECTED_DEFAULT if default is not None else ResolverReasonCode.SELECTED_AUTO_BEST_FIT
     for service in compatible:
         if service.service_id != selected.service_id:
             rejected.append(
                 RejectedCandidate(
                     service_id=service.service_id,
-                    reason_code=ResolverReasonCode.SELECTED_AUTO_BEST_FIT,
-                    explanation=f"{service.service_name} is compatible, but {selected.service_name} is a better fit for this intent.",
+                    service_name=service.service_name,
+                    reason_code=selected_reason,
+                    explanation=f"{service.service_name} is compatible, but {selected.service_name} was selected for this intent.",
                 )
             )
     return ResolverResult(
@@ -263,8 +267,8 @@ def _auto_select(intent: DataIntent, services: tuple[MarketDataServiceConfig, ..
         provider=selected.provider,
         selection_mode=SelectionMode.AUTO,
         decision=ResolverDecision.SELECTED,
-        reason_code=ResolverReasonCode.SELECTED_AUTO_BEST_FIT,
-        explanation=_selected_explanation(intent, selected, ResolverReasonCode.SELECTED_AUTO_BEST_FIT),
+        reason_code=selected_reason,
+        explanation=_selected_explanation(intent, selected, selected_reason),
         rejected_candidates=tuple(rejected),
     )
 
@@ -306,8 +310,6 @@ def _auto_score(intent: DataIntent, service: MarketDataServiceConfig) -> tuple[i
             score -= 30
         if caps.latency_class == LatencyClass.LOW:
             score -= 20
-        if service.provider == Provider.ALPACA:
-            score -= 10
     elif intent.is_long_range_historical and not intent.requires_streaming:
         score += _cost_rank(caps.cost_class)
         if caps.supports_long_range_history:
@@ -343,7 +345,7 @@ def _selected_explanation(intent: DataIntent, service: MarketDataServiceConfig, 
 
 
 def _reject(service: MarketDataServiceConfig, reason_code: ResolverReasonCode, explanation: str) -> RejectedCandidate:
-    return RejectedCandidate(service_id=service.service_id, reason_code=reason_code, explanation=explanation)
+    return RejectedCandidate(service_id=service.service_id, service_name=service.service_name, reason_code=reason_code, explanation=explanation)
 
 
 def _rejected_result(

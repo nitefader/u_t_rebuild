@@ -3258,3 +3258,66 @@ Validation results:
 - Backend services tests: `17 passed`.
 - Backend full suite: `443 passed, 1 skipped`.
 - Compileall: passed.
+
+## 2026-04-24 23:27 ET
+
+Implemented lightweight Services Resolver capability learning and capability metadata display.
+
+Files created:
+- `backend/app/services/capability_profiles.py`
+
+Files updated:
+- `backend/app/services/models.py`
+- `backend/app/services/service.py`
+- `backend/app/services/service_resolver.py`
+- `backend/app/services/validation.py`
+- `backend/tests/unit/services/test_service_resolver.py`
+- `backend/tests/unit/services/test_services_center_service.py`
+- `frontend/src/servicesCenter.js`
+- `frontend/tests/servicesCenter.test.mjs`
+- `docs/system_rebuild_outputs/IMPLEMENTATION_LOG.md`
+
+What changed:
+- Added provider capability profiles as lightweight, docs-informed baselines instead of embedding provider selection rules in the resolver.
+- Added persisted market-data capability metadata:
+  - `capability_source`
+  - `capability_notes`
+  - `capability_updated_at`
+  - `capability_manual_override`
+- Validation can now update learned capabilities, source, and notes from validator responses.
+- Manual capability override is supported through Market Data service create/update payloads via optional `capabilities` and `capability_notes`.
+- Manual overrides persist across validation so operators can correct provider metadata without provider-specific code changes.
+- Resolver hard filters still reject incompatible services for missing streaming, realtime, intraday, historical, daily, weekly, monthly, or long-range support.
+- Auto selection no longer uses provider-name bonuses; ranking is based on compatibility, default status, cost class, latency class, and intent shape.
+- Auto mode now prefers a compatible default service before best-fit scoring.
+- Rejected candidates now include service names as UI-friendly metadata.
+- Services Center cards now show capability source, capability updated timestamp, manual override state, and provider limitation notes in a collapsible details section.
+
+Tests added/updated:
+- Validation-learned capabilities are stored on service records.
+- Learned lack of intraday support causes resolver hard rejection for intraday intent.
+- Manual capability override can evolve a service from historical-only to intraday-capable.
+- Auto resolver prefers a compatible default before best-fit scoring.
+- Frontend renders provider capability notes/source and keeps raw secrets hidden.
+
+Scope kept out:
+- No real streaming.
+- No multi-provider blending.
+- No full scoring engine.
+- No broker account behavior.
+- No live trading behavior.
+- No frontend direct provider calls.
+
+Validation commands run:
+- `python -m pytest backend/tests/unit/services -q`
+- `cd frontend && npm.cmd test`
+- `python -m compileall -q backend/app backend/tests`
+- `python -m pytest backend/tests -q`
+- `cd frontend && npm.cmd run build`
+
+Validation results:
+- Backend services tests: `20 passed`.
+- Frontend tests: `33 passed`.
+- Compileall: passed.
+- Backend full suite: `446 passed, 1 skipped`.
+- Frontend build: passed.

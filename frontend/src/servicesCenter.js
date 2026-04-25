@@ -151,9 +151,23 @@ function bestForItems(service, type) {
 }
 
 function renderBestFor(service, type) {
+  const notes = Array.isArray(service.capability_notes) ? service.capability_notes : [];
   return `<section class="best-for">
     <h4>Best For</h4>
     <ul>${bestForItems(service, type).map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>
+    ${
+      type === "market"
+        ? `<details class="provider-notes">
+            <summary>Provider limitations and notes</summary>
+            <dl>
+              <div><dt>Capability Source</dt><dd>${escapeHtml(service.capability_source || "not reported")}</dd></div>
+              <div><dt>Capability Updated</dt><dd>${escapeHtml(formatDate(service.capability_updated_at))}</dd></div>
+              <div><dt>Manual Override</dt><dd>${service.capability_manual_override ? "yes" : "no"}</dd></div>
+            </dl>
+            ${notes.length ? `<ul>${notes.map((note) => `<li>${escapeHtml(note)}</li>`).join("")}</ul>` : `<p class="empty">No provider limitations reported.</p>`}
+          </details>`
+        : ""
+    }
   </section>`;
 }
 
@@ -238,6 +252,7 @@ function renderMarketDataRow(service) {
       <div><dt>Credentials</dt><dd>${service.has_api_key || service.has_api_secret ? MASKED : "not required"}</dd></div>
       <div><dt>Validation</dt><dd>${escapeHtml(service.validation_status || "not validated")} - ${escapeHtml(service.validation_message || "pending verification")}</dd></div>
       <div><dt>Last validated</dt><dd>${formatDate(service.last_validated_at)}</dd></div>
+      <div><dt>Capability updated</dt><dd>${formatDate(service.capability_updated_at)}</dd></div>
     </dl>
     <div class="chip-row" aria-label="Capability summary">${capabilityChips(service.capabilities)}</div>
     ${renderBestFor(service, "market")}

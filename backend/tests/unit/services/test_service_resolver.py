@@ -37,7 +37,7 @@ def test_backtest_daily_three_year_intent_auto_selects_yahoo_when_alpaca_is_also
     result = resolve_market_data_service(
         intent,
         [
-            alpaca_market_data_service(is_default=True),
+            alpaca_market_data_service(),
             yahoo_market_data_service(),
         ],
         SelectionMode.AUTO,
@@ -47,6 +47,31 @@ def test_backtest_daily_three_year_intent_auto_selects_yahoo_when_alpaca_is_also
     assert result.selected_service_id == "yahoo-historical"
     assert result.provider == "yahoo"
     assert "long-range historical" in result.explanation
+
+
+def test_auto_prefers_compatible_default_before_best_fit_scoring() -> None:
+    intent = DataIntent(
+        consumer=DataConsumer.BACKTEST,
+        mode=DataIntentMode.REPLAY,
+        symbols=["SPY"],
+        timeframe=Timeframe.D1,
+        start_at=_dt("2023-01-01"),
+        end_at=_dt("2026-01-01"),
+        purpose=DataPurpose.BACKTEST,
+    )
+
+    result = resolve_market_data_service(
+        intent,
+        [
+            alpaca_market_data_service(is_default=True),
+            yahoo_market_data_service(),
+        ],
+        SelectionMode.AUTO,
+    )
+
+    assert result.decision == ResolverDecision.SELECTED
+    assert result.selected_service_id == "alpaca-main-data"
+    assert result.reason_code == ResolverReasonCode.SELECTED_DEFAULT
 
 
 def test_broker_runtime_five_minute_intent_auto_selects_alpaca_for_streaming_realtime() -> None:

@@ -22,6 +22,9 @@ function state(overrides = {}) {
           has_api_key: true,
           has_api_secret: true,
           capabilities: { supports_streaming: true, supports_realtime: true, supports_intraday: true },
+          capability_source: "validation:fixture",
+          capability_notes: ["Fixture reports streaming and intraday support."],
+          capability_updated_at: "2026-04-24T20:00:00Z",
           validation_status: "valid",
           validation_message: "ok"
         },
@@ -35,6 +38,9 @@ function state(overrides = {}) {
           has_api_key: false,
           has_api_secret: false,
           capabilities: { supports_historical: true, supports_daily: true, supports_streaming: false },
+          capability_source: "validation:fixture",
+          capability_notes: ["Fixture reports historical daily support only."],
+          capability_updated_at: "2026-04-24T20:00:00Z",
           validation_status: "valid",
           validation_message: "historical only"
         }
@@ -69,6 +75,8 @@ test("Services Center renders summary cards, market data table, capabilities, an
   assert.match(html, /Alpaca Main/);
   assert.match(html, /Yahoo Historical/);
   assert.match(html, /streaming/);
+  assert.match(html, /Provider limitations and notes/);
+  assert.match(html, /validation:fixture/);
   assert.match(html, /\*\*\*\*\*\*\*\*/);
   assert.match(html, /\+ Add Market Data Service/);
   assert.doesNotMatch(html, /Create Market Data Service/);

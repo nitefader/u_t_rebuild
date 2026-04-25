@@ -8,6 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from backend.app.domain._base import utc_now
 
+from .capability_profiles import provider_capability_profile
 from .service_resolver import (
     MarketDataCapabilities,
     MarketDataServiceConfig,
@@ -67,6 +68,10 @@ class MarketDataServiceRecord(BaseModel):
     api_key_shape_valid: bool = True
     api_secret_shape_valid: bool = True
     capabilities: MarketDataCapabilities = Field(default_factory=MarketDataCapabilities)
+    capability_source: str | None = None
+    capability_notes: tuple[str, ...] = ()
+    capability_updated_at: datetime | None = None
+    capability_manual_override: bool = False
     validation_status: ServiceValidationStatus | None = None
     validation_message: str | None = None
     last_validated_at: datetime | None = None
@@ -88,6 +93,12 @@ class MarketDataServiceRecord(BaseModel):
             validation_status=self.validation_status.value if self.validation_status is not None else None,
             validation_message=self.validation_message,
         )
+
+    @property
+    def provider_limitations(self) -> tuple[str, ...]:
+        if self.capability_notes:
+            return self.capability_notes
+        return provider_capability_profile(self.provider).notes
 
 
 class AIServiceRecord(BaseModel):
@@ -118,6 +129,8 @@ class MarketDataServiceWrite(BaseModel):
     mode: ServiceMode = ServiceMode.NONE
     api_key: str | None = None
     api_secret: str | None = None
+    capabilities: MarketDataCapabilities | None = None
+    capability_notes: tuple[str, ...] = ()
 
     @field_validator("api_key", "api_secret")
     @classmethod

@@ -10,6 +10,8 @@ from backend.app.services import (
     DataIntent,
     DataIntentMode,
     DataPurpose,
+    LatencyClass,
+    MarketDataCapabilities,
     MarketDataServiceWrite,
     ResolveMarketDataRequest,
     SelectionMode,
@@ -20,6 +22,7 @@ from backend.app.services import (
     ServicesCenterService,
     Timeframe,
 )
+from backend.app.services import CostClass
 from backend.app.services.validation import AIValidationResult, MarketDataValidationResult, alpaca_capabilities
 
 
@@ -35,6 +38,27 @@ class FakeMarketDataValidator:
         if not kwargs["has_api_key"] or not kwargs["has_api_secret"]:
             return MarketDataValidationResult(ServiceValidationStatus.MISSING_CREDENTIALS, "missing", alpaca_capabilities())
         return MarketDataValidationResult(self.status, self.status.value, alpaca_capabilities())
+
+
+class LearnedIntradayLimitValidator:
+    def validate(self, **kwargs):
+        return MarketDataValidationResult(
+            ServiceValidationStatus.VALID,
+            "provider validated with historical daily coverage only",
+            MarketDataCapabilities(
+                supports_historical=True,
+                supports_streaming=False,
+                supports_intraday=False,
+                supports_daily=True,
+                supports_weekly=True,
+                supports_monthly=True,
+                supports_long_range_history=True,
+                cost_class=CostClass.FREE,
+                latency_class=LatencyClass.DELAYED,
+            ),
+            "validation:learned-limit",
+            ("Validation learned that this provider cannot satisfy intraday requests.",),
+        )
 
 
 class FakeAIValidator:
@@ -109,6 +133,64 @@ def test_alpaca_missing_and_invalid_validation_statuses(tmp_path) -> None:
 
     invalid = service.create_market_data_service(MarketDataServiceWrite(name="Bad Alpaca", provider="alpaca", mode=ServiceMode.PAPER, api_key="x", api_secret="y"))
     assert service.validate_market_data_service(invalid.id).validation_status == ServiceValidationStatus.INVALID
+
+
+def test_validation_learns_capabilities_and_resolver_hard_rejects_incompatible_service(tmp_path) -> None:
+    service = ServicesCenterService(store_path=tmp_path / "services.json", market_data_validator=LearnedIntradayLimitValidator())
+    learned = service.create_market_data_service(
+        MarketDataServiceWrite(name="Learned Historical", provider="future", mode=ServiceMode.NONE)
+    )
+
+    validated = service.validate_market_data_service(learned.id)
+    assert validated.capability_source == "validation:learned-limit"
+    assert validated.capabilities.supports_intraday is False
+    assert validated.capability_notes == ("Validation learned that this provider cannot satisfy intraday requests.",)
+
+    intent = DataIntent(
+        consumer=DataConsumer.BACKTEST,
+        mode=DataIntentMode.REPLAY,
+        symbols=["SPY"],
+        timeframe=Timeframe.M5,
+        requires_intraday=True,
+        purpose=DataPurpose.BACKTEST,
+    )
+    result = service.resolve_market_data(ResolveMarketDataRequest(intent=intent, selection_mode=SelectionMode.AUTO))
+    assert result.decision == "rejected"
+    assert result.rejected_candidates[0].reason_code == "rejected_no_intraday"
+
+
+def test_manual_capability_override_can_evolve_service_capabilities(tmp_path) -> None:
+    service = ServicesCenterService(store_path=tmp_path / "services.json", market_data_validator=LearnedIntradayLimitValidator())
+    learned = service.create_market_data_service(
+        MarketDataServiceWrite(name="Manual Override Provider", provider="future", mode=ServiceMode.NONE)
+    )
+    service.validate_market_data_service(learned.id)
+
+    override = MarketDataCapabilities(
+        supports_historical=True,
+        supports_streaming=False,
+        supports_intraday=True,
+        supports_daily=True,
+        supports_long_range_history=True,
+        cost_class=CostClass.STANDARD,
+        latency_class=LatencyClass.NORMAL,
+    )
+    updated = service.update_market_data_service(
+        learned.id,
+        MarketDataServiceWrite(
+            name="Manual Override Provider",
+            provider="future",
+            mode=ServiceMode.NONE,
+            capabilities=override,
+            capability_notes=("Operator confirmed short-range intraday coverage.",),
+        ),
+    )
+    assert updated.capability_manual_override is True
+    assert updated.capabilities.supports_intraday is True
+
+    validated = service.validate_market_data_service(learned.id)
+    assert validated.capabilities.supports_intraday is True
+    assert validated.capability_source == "manual_override"
 
 
 def test_ai_crud_validation_default_and_disable(tmp_path) -> None:

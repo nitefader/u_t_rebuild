@@ -19,14 +19,14 @@ from .models import (
     MarketDataServiceWrite,
     ServiceValidationStatus,
 )
+from .capability_profiles import provider_capability_profile
 from .service_resolver import (
-    MarketDataCapabilities,
     ResolverResult,
     SelectionMode,
     ServiceStatus,
     resolve_market_data_service,
 )
-from .validation import AIProviderValidator, MarketDataProviderValidator, yahoo_capabilities
+from .validation import AIProviderValidator, MarketDataProviderValidator
 
 
 class ServicesCenterError(ValueError):
@@ -67,6 +67,8 @@ class ServicesCenterService:
         return MarketDataServiceList(services=tuple(sorted(self._market_data.values(), key=lambda service: service.created_at)))
 
     def create_market_data_service(self, request: MarketDataServiceWrite) -> MarketDataServiceRecord:
+        profile = provider_capability_profile(request.provider)
+        manual_capabilities = request.capabilities is not None
         record = MarketDataServiceRecord(
             name=request.name,
             provider=request.provider,
@@ -76,7 +78,11 @@ class ServicesCenterService:
             has_api_secret=bool(request.api_secret),
             api_key_shape_valid=(not request.api_key or len(request.api_key.strip()) >= 6),
             api_secret_shape_valid=(not request.api_secret or len(request.api_secret.strip()) >= 8),
-            capabilities=yahoo_capabilities() if request.provider.value == "yahoo" else MarketDataCapabilities(),
+            capabilities=request.capabilities or profile.capabilities,
+            capability_source="manual_override" if manual_capabilities else profile.source,
+            capability_notes=request.capability_notes or profile.notes,
+            capability_updated_at=utc_now(),
+            capability_manual_override=manual_capabilities,
         )
         self._market_data[record.id] = record
         self._save()
@@ -87,6 +93,8 @@ class ServicesCenterService:
 
     def update_market_data_service(self, service_id: UUID, request: MarketDataServiceWrite) -> MarketDataServiceRecord:
         existing = self.get_market_data_service(service_id)
+        manual_capabilities = request.capabilities is not None
+        profile = provider_capability_profile(request.provider)
         updated = existing.model_copy(
             update={
                 "name": request.name,
@@ -97,6 +105,11 @@ class ServicesCenterService:
                 "has_api_secret": existing.has_api_secret or bool(request.api_secret),
                 "api_key_shape_valid": existing.api_key_shape_valid if not request.api_key else len(request.api_key.strip()) >= 6,
                 "api_secret_shape_valid": existing.api_secret_shape_valid if not request.api_secret else len(request.api_secret.strip()) >= 8,
+                "capabilities": request.capabilities or (profile.capabilities if existing.provider != request.provider else existing.capabilities),
+                "capability_source": "manual_override" if manual_capabilities else (profile.source if existing.provider != request.provider else existing.capability_source),
+                "capability_notes": request.capability_notes or (profile.notes if existing.provider != request.provider else existing.capability_notes),
+                "capability_updated_at": utc_now() if manual_capabilities or existing.provider != request.provider else existing.capability_updated_at,
+                "capability_manual_override": manual_capabilities or (existing.capability_manual_override and existing.provider == request.provider),
                 "status": ServiceStatus.DRAFT if existing.status == ServiceStatus.VALID else existing.status,
                 "updated_at": utc_now(),
             }
@@ -111,6 +124,8 @@ class ServicesCenterService:
             result_status = ServiceValidationStatus.DISABLED
             message = "Disabled services cannot be validated."
             capabilities = existing.capabilities
+            capability_source = existing.capability_source
+            capability_notes = existing.capability_notes
         else:
             result = self._market_data_validator.validate(
                 provider=existing.provider,
@@ -122,11 +137,16 @@ class ServicesCenterService:
             )
             result_status = result.status
             message = result.message
-            capabilities = result.capabilities
+            capabilities = existing.capabilities if existing.capability_manual_override else result.capabilities
+            capability_source = existing.capability_source if existing.capability_manual_override else result.capability_source
+            capability_notes = existing.capability_notes if existing.capability_manual_override else result.capability_notes
         updated = existing.model_copy(
             update={
                 "status": ServiceStatus.VALID if result_status == ServiceValidationStatus.VALID else ServiceStatus.INVALID,
                 "capabilities": capabilities,
+                "capability_source": capability_source,
+                "capability_notes": capability_notes,
+                "capability_updated_at": utc_now(),
                 "validation_status": result_status,
                 "validation_message": message,
                 "last_validated_at": utc_now(),
