@@ -18,12 +18,49 @@ from backend.app.domain import (
 
 from .key import make_feature_key
 from .parser import parse_feature_expression
-from .registry import FeatureRegistry, registry
+from .registry import FeatureRegistry, FeatureRegistryEntry, registry
 from .spec import FeatureSpec, FeatureValidationError
+
+
+# ---------------------------------------------------------------------------
+# Per-FeatureKey data requirements (Phase 1 §11 deliverable 1)
+# ---------------------------------------------------------------------------
+
+INTRADAY_TIMEFRAMES = frozenset({"1m", "5m", "15m", "30m", "1h", "4h"})
+
+# Consumer → data requirement projection. Used to translate a FeatureSpec +
+# Program consumer into a per-FeatureKey ``FeatureDataRequirement`` so the
+# resolver can pick a pipeline per FeatureKey instead of per Deployment.
+_LIVE_CONSUMERS = frozenset({"live", "runtime", "paper", "sim_stream"})
+_HISTORICAL_CONSUMERS = frozenset({"backtest", "sim_replay", "optimization", "walk_forward"})
+_INSPECTION_CONSUMERS = frozenset({"chart_lab"})
+_PORTFOLIO_CONSUMERS = frozenset({"portfolio_governor"})
 
 
 class FeaturePlanError(ValueError):
     """Raised when feature planning cannot produce a valid all-or-nothing plan."""
+
+
+class FeatureDataRequirement(BaseModel):
+    """Per-FeatureKey data demand projection.
+
+    Computed at plan-build time from ``(FeatureSpec, consumer, registry entry)``.
+    Consumed by the resolver / FeatureEngine subscription manager to pick a
+    pipeline per FeatureKey (not per Deployment) — multiple FeatureKeys in the
+    same Deployment may resolve to different pipelines.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    feature_key: str
+    timeframe: str
+    instrument_class: str
+    requires_streaming: bool
+    requires_realtime: bool
+    requires_intraday: bool
+    requires_historical: bool
+    requires_long_range_history: bool
+    warmup_bars: int
 
 
 class FeaturePlan(BaseModel):
@@ -37,6 +74,7 @@ class FeaturePlan(BaseModel):
     feature_specs: tuple[FeatureSpec, ...]
     feature_keys: tuple[str, ...]
     warmup_by_timeframe: dict[str, int]
+    data_requirements: tuple[FeatureDataRequirement, ...] = ()
 
 
 class ResolvedProgramComponents(BaseModel):
@@ -130,6 +168,17 @@ def build_feature_plan(
             feature_registry.warmup_bars(spec),
         )
 
+    data_requirements = tuple(
+        _build_data_requirement(
+            feature_key=feature_keys[index],
+            spec=feature_specs[index],
+            consumer=consumer,
+            entry=feature_registry.get(feature_specs[index].kind),
+            warmup_bars=feature_registry.warmup_bars(feature_specs[index]),
+        )
+        for index in range(len(feature_keys))
+    )
+
     return FeaturePlan(
         program_version_id=components.program.id,
         consumer=consumer,
@@ -138,4 +187,55 @@ def build_feature_plan(
         feature_specs=feature_specs,
         feature_keys=feature_keys,
         warmup_by_timeframe=warmup_by_timeframe,
+        data_requirements=data_requirements,
+    )
+
+
+def _build_data_requirement(
+    *,
+    feature_key: str,
+    spec: FeatureSpec,
+    consumer: str,
+    entry: FeatureRegistryEntry,
+    warmup_bars: int,
+) -> FeatureDataRequirement:
+    is_portfolio_feature = entry.instrument_class == "portfolio_state"
+    is_live_consumer = consumer in _LIVE_CONSUMERS
+    is_historical_consumer = consumer in _HISTORICAL_CONSUMERS
+    is_inspection_consumer = consumer in _INSPECTION_CONSUMERS
+
+    # Portfolio features operate on internal portfolio state — no streaming or
+    # historical market-data subscription is implied.
+    if is_portfolio_feature:
+        return FeatureDataRequirement(
+            feature_key=feature_key,
+            timeframe=spec.timeframe,
+            instrument_class=entry.instrument_class,
+            requires_streaming=False,
+            requires_realtime=False,
+            requires_intraday=False,
+            requires_historical=False,
+            requires_long_range_history=False,
+            warmup_bars=warmup_bars,
+        )
+
+    requires_streaming = is_live_consumer
+    requires_realtime = is_live_consumer
+    requires_intraday = spec.timeframe in INTRADAY_TIMEFRAMES
+    requires_historical = is_historical_consumer or is_inspection_consumer
+    requires_long_range_history = (
+        is_historical_consumer
+        and spec.timeframe in {"1d", "1w", "1mo"}
+    )
+
+    return FeatureDataRequirement(
+        feature_key=feature_key,
+        timeframe=spec.timeframe,
+        instrument_class=entry.instrument_class,
+        requires_streaming=requires_streaming,
+        requires_realtime=requires_realtime,
+        requires_intraday=requires_intraday,
+        requires_historical=requires_historical,
+        requires_long_range_history=requires_long_range_history,
+        warmup_bars=warmup_bars,
     )

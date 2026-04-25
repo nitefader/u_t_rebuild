@@ -54,6 +54,7 @@ class FeatureRegistryEntry:
     supported_modes: frozenset[str] = field(default_factory=lambda: frozenset({"batch_replay"}))
     warmup: WarmupFn = no_warmup
     version: str = "v1"
+    instrument_class: str = "equity"
 
     def normalized_params(self, params: dict[str, Any] | None = None) -> dict[str, Any]:
         merged = {**self.default_params, **(params or {})}
@@ -73,6 +74,7 @@ def _entry(
     allowed_params: set[str] | None = None,
     default_params: dict[str, Any] | None = None,
     warmup: WarmupFn = no_warmup,
+    instrument_class: str = "equity",
 ) -> FeatureRegistryEntry:
     return FeatureRegistryEntry(
         kind=kind,
@@ -83,6 +85,7 @@ def _entry(
         allowed_params=frozenset(allowed_params or set()),
         default_params=default_params or {},
         warmup=warmup,
+        instrument_class=instrument_class,
     )
 
 
@@ -213,7 +216,7 @@ SESSION_FEATURES = {
 }
 
 PORTFOLIO_FEATURES = {
-    name: _entry(name, FeatureNamespace.PORTFOLIO, FeatureScope.PORTFOLIO, "portfolio", description)
+    name: _entry(name, FeatureNamespace.PORTFOLIO, FeatureScope.PORTFOLIO, "portfolio", description, instrument_class="portfolio_state")
     for name, description in [
         ("gross_exposure_pct", "Portfolio gross exposure percentage"),
         ("net_exposure_pct", "Portfolio net exposure percentage"),
@@ -294,6 +297,7 @@ class FeatureRegistry:
                 "supported_timeframes": sorted(entry.supported_timeframes),
                 "supported_consumers": sorted(entry.supported_consumers),
                 "supported_modes": sorted(entry.supported_modes),
+                "instrument_class": entry.instrument_class,
                 "version": entry.version,
             }
             for entry in sorted(self._entries.values(), key=lambda item: item.kind)

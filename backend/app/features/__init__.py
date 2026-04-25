@@ -5,7 +5,14 @@ from .frames import FeatureAvailability, FeatureFrame, FeatureFrameSet, FeatureS
 from .incremental import FeatureCache, IncrementalFeatureEngine, IncrementalFeatureEngineError, IncrementalFeatureUpdate
 from .key import canonical_params_json, canonicalize_params, make_feature_key
 from .parser import FeatureParseError, parse_feature_expression, parse_params
-from .planner import FeaturePlan, FeaturePlanError, ResolvedProgramComponents, build_feature_plan, collect_feature_refs
+from .planner import (
+    FeatureDataRequirement,
+    FeaturePlan,
+    FeaturePlanError,
+    ResolvedProgramComponents,
+    build_feature_plan,
+    collect_feature_refs,
+)
 from .registry import FEATURE_REGISTRY, FeatureRegistry, FeatureRegistryEntry, registry
 from .spec import CANONICAL_TIMEFRAMES, FeatureNamespace, FeatureScope, FeatureSpec, FeatureValidationError
 
@@ -16,6 +23,7 @@ __all__ = [
     "BatchFeatureEngineError",
     "FeatureAvailability",
     "FeatureCache",
+    "FeatureDataRequirement",
     "FeatureFrame",
     "FeatureFrameSet",
     "FeatureNamespace",

@@ -3581,3 +3581,42 @@ Verification:
 
 Commit:
 - pending.
+
+## 2026-04-25 04:29 ET - Slice 1C: FeaturePlan.data_requirements (Phase 1 §11.1)
+
+Task:
+- Add per-FeatureKey ``FeatureDataRequirement`` projection to ``FeaturePlan`` so the resolver / FeatureEngine subscription manager can pick a pipeline per FeatureKey (not per Deployment) — multiple keys in one plan may resolve to different pipelines.
+
+Files changed:
+- backend/app/features/registry.py (instrument_class field on FeatureRegistryEntry; portfolio features → "portfolio_state")
+- backend/app/features/planner.py (FeatureDataRequirement model + _build_data_requirement; FeaturePlan.data_requirements tuple)
+- backend/app/features/__init__.py (export FeatureDataRequirement)
+- backend/tests/unit/features/test_feature_planner.py (10 new tests)
+
+Implemented:
+- ``FeatureDataRequirement`` per-FeatureKey: feature_key, timeframe, instrument_class, requires_streaming/realtime/intraday/historical/long_range_history, warmup_bars.
+- Consumer-driven derivation: live consumers (live/runtime/paper/sim_stream) get streaming+realtime; backtest/sim_replay get historical; chart_lab gets historical; portfolio_governor uses internal portfolio state (no market-data demand).
+- Daily/weekly/monthly + backtest → requires_long_range_history=True.
+- Portfolio features (instrument_class="portfolio_state") never demand streaming or historical market data.
+- data_requirements tuple is dedup-by-FeatureKey by construction (one row per unique key).
+
+Scope kept out:
+- SubscriptionManager wiring (1D).
+- Pipeline-per-FeatureKey resolver lookup (1D will accept FeatureSpec, not just Provider).
+
+Validation performed:
+- python -m compileall -q backend/app backend/tests
+- python -m pytest backend/tests -q
+- cd frontend && npm.cmd run build
+- cd frontend && npm.cmd test
+
+Result:
+- compileall clean. Backend: 599 passed, 1 skipped (+10 new planner tests). Frontend: 37 passed. Build clean.
+
+Verification:
+- Feature Engine still does not call external providers (no provider SDK imports added).
+- data_requirements derived deterministically from (FeatureSpec, consumer, registry entry).
+- No architecture boundaries violated.
+
+Commit:
+- pending.

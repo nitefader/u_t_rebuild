@@ -165,3 +165,131 @@ def test_feature_plan_rejects_invalid_timeframe() -> None:
 
     with pytest.raises(FeaturePlanError):
         build_feature_plan(components, consumer="chart_lab")
+
+
+# ---------------------------------------------------------------------------
+# data_requirements (Phase 1 §11 deliverable 1)
+# ---------------------------------------------------------------------------
+
+
+def test_feature_plan_exposes_one_data_requirement_per_feature_key() -> None:
+    components = _components(
+        strategy_feature_refs=["5m.close[0]", "5m.ema:length=20[0]"],
+        controls_regime_refs=["1d.prior_day_high[0]"],
+    )
+
+    plan = build_feature_plan(components, consumer="sim_replay")
+
+    assert len(plan.data_requirements) == len(plan.feature_keys)
+    assert {req.feature_key for req in plan.data_requirements} == set(plan.feature_keys)
+
+
+def test_data_requirements_match_per_feature_key_timeframe() -> None:
+    components = _components(
+        strategy_feature_refs=["5m.close[0]"],
+        controls_regime_refs=["1d.prior_day_high[0]"],
+    )
+
+    plan = build_feature_plan(components, consumer="sim_replay")
+    by_kind_timeframe = {(spec.kind, spec.timeframe): key for key, spec in zip(plan.feature_keys, plan.feature_specs)}
+    requirements_by_key = {req.feature_key: req for req in plan.data_requirements}
+
+    five_min_close_key = by_kind_timeframe[("close", "5m")]
+    daily_high_key = by_kind_timeframe[("prior_day_high", "1d")]
+    assert requirements_by_key[five_min_close_key].timeframe == "5m"
+    assert requirements_by_key[daily_high_key].timeframe == "1d"
+
+
+def test_data_requirement_marks_streaming_for_live_consumer() -> None:
+    components = _components(strategy_feature_refs=["5m.close[0]"])
+
+    plan = build_feature_plan(components, consumer="paper")
+
+    req = plan.data_requirements[0]
+    assert req.requires_streaming is True
+    assert req.requires_realtime is True
+    assert req.requires_intraday is True
+    assert req.requires_historical is False
+
+
+def test_data_requirement_marks_historical_for_backtest_consumer() -> None:
+    components = _components(strategy_feature_refs=["5m.close[0]"])
+
+    plan = build_feature_plan(components, consumer="backtest")
+
+    req = plan.data_requirements[0]
+    assert req.requires_streaming is False
+    assert req.requires_realtime is False
+    assert req.requires_historical is True
+
+
+def test_data_requirement_marks_long_range_for_daily_backtest() -> None:
+    components = _components(strategy_feature_refs=["1d.ema:length=50[0]"])
+
+    plan = build_feature_plan(components, consumer="backtest")
+
+    req = plan.data_requirements[0]
+    assert req.requires_long_range_history is True
+    assert req.requires_intraday is False
+
+
+def test_data_requirement_intraday_long_range_is_false_even_for_backtest() -> None:
+    components = _components(strategy_feature_refs=["5m.close[0]"])
+
+    plan = build_feature_plan(components, consumer="backtest")
+
+    req = plan.data_requirements[0]
+    assert req.requires_long_range_history is False
+
+
+def test_data_requirement_inherits_instrument_class_from_registry() -> None:
+    components = _components(strategy_feature_refs=["5m.close[0]"])
+
+    plan = build_feature_plan(components, consumer="paper")
+
+    assert plan.data_requirements[0].instrument_class == "equity"
+
+
+def test_data_requirements_carry_warmup_per_feature_key() -> None:
+    components = _components(strategy_feature_refs=["5m.ema:length=20[0]"])
+
+    plan = build_feature_plan(components, consumer="backtest")
+
+    requirements_by_kind = {
+        spec.kind: req
+        for spec, req in zip(plan.feature_specs, plan.data_requirements)
+    }
+    assert requirements_by_kind["ema"].warmup_bars >= 20
+    assert requirements_by_kind["atr"].warmup_bars >= 14
+
+
+def test_data_requirements_are_dedup_by_feature_key() -> None:
+    """Repeated canonical FeatureKey references produce one data_requirement."""
+    components = _components(
+        strategy_feature_refs=["5m.close[0]", "5m.close", "5m.close[0]"],
+    )
+
+    plan = build_feature_plan(components, consumer="paper")
+
+    # The three duplicate close refs collapse to a single canonical FeatureKey.
+    close_requirements = [
+        req for req, spec in zip(plan.data_requirements, plan.feature_specs)
+        if spec.kind == "close" and spec.timeframe == "5m"
+    ]
+    assert len(close_requirements) == 1
+    # And data_requirements count == feature_keys count (one row per unique key).
+    assert len(plan.data_requirements) == len(plan.feature_keys)
+
+
+def test_portfolio_feature_data_requirement_does_not_demand_market_data(monkeypatch) -> None:
+    """Portfolio features operate on internal portfolio state, not a feed."""
+    components = _components(controls_regime_refs=["5m.broker_sync_stale[0]"])
+
+    plan = build_feature_plan(components, consumer="portfolio_governor")
+
+    portfolio_reqs = [req for req in plan.data_requirements if req.instrument_class == "portfolio_state"]
+    assert portfolio_reqs, "expected at least one portfolio-state requirement"
+    for req in portfolio_reqs:
+        assert req.requires_streaming is False
+        assert req.requires_realtime is False
+        assert req.requires_historical is False
