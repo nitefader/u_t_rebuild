@@ -1,0 +1,3 @@
+- [Authority docs (read order)](authority_docs.md) — final_roadmap doc is authority alongside plan_review.md and overrides plan_review §G phase ordering when they conflict
+- [Per-task validation and logging discipline](validation_discipline.md) — §13 commands + §14 IMPLEMENTATION_LOG entry + §15 git contract are binding after every coding slice
+- [Default architectural choices when unsure](decision_defaults.md) — §16 tiebreakers (shared pipeline, fail-closed, enum-not-text, completed bars, account-isolated risk, etc.); apply without asking

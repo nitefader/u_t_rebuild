@@ -1,3 +1,10 @@
+"""Persistence shapes for market-data provider records.
+
+Per plan_review.md A1, market-data records do not carry a system mode. Mode
+(``TradingMode``) lives only on broker-side records (``BrokerAccount``); market
+data feeds are mode-neutral.
+"""
+
 from __future__ import annotations
 
 from datetime import datetime
@@ -9,11 +16,10 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from backend.app.domain._base import utc_now
 
 from .capability_profiles import provider_capability_profile
-from .service_resolver import (
+from .resolver import (
     MarketDataCapabilities,
     MarketDataServiceConfig,
     Provider,
-    ServiceMode,
     ServiceStatus,
     ServiceType,
 )
@@ -22,31 +28,10 @@ from .service_resolver import (
 MASKED_SECRET = "********"
 
 
-class AIProvider(StrEnum):
-    GROQ = "groq"
-    CLAUDE = "claude"
-    OPENAI = "openai"
-    CODEX = "codex"
-    FUTURE = "future"
-
-
-class AIServiceType(StrEnum):
-    AI = "ai"
-
-
-class AICapabilityLabel(StrEnum):
-    FAST = "fast"
-    REASONING = "reasoning"
-    CODING = "coding"
-    GENERAL = "general"
-    UNKNOWN = "unknown"
-
-
-class ServiceValidationStatus(StrEnum):
+class MarketDataValidationStatus(StrEnum):
     VALID = "valid"
     INVALID = "invalid"
     MISSING_CREDENTIALS = "missing_credentials"
-    MODE_MISMATCH = "mode_mismatch"
     PROVIDER_UNREACHABLE = "provider_unreachable"
     UNSUPPORTED_PROVIDER = "unsupported_provider"
     DISABLED = "disabled"
@@ -59,7 +44,6 @@ class MarketDataServiceRecord(BaseModel):
     name: str = Field(min_length=1)
     provider: Provider
     service_type: ServiceType = ServiceType.MARKET_DATA
-    mode: ServiceMode = ServiceMode.NONE
     status: ServiceStatus = ServiceStatus.DRAFT
     is_default: bool = False
     credentials_ref: str | None = None
@@ -72,7 +56,7 @@ class MarketDataServiceRecord(BaseModel):
     capability_notes: tuple[str, ...] = ()
     capability_updated_at: datetime | None = None
     capability_manual_override: bool = False
-    validation_status: ServiceValidationStatus | None = None
+    validation_status: MarketDataValidationStatus | None = None
     validation_message: str | None = None
     last_validated_at: datetime | None = None
     created_at: datetime = Field(default_factory=utc_now)
@@ -85,7 +69,6 @@ class MarketDataServiceRecord(BaseModel):
             service_name=self.name,
             provider=self.provider,
             service_type=self.service_type,
-            mode=self.mode,
             status=self.status,
             is_default=self.is_default,
             capabilities=self.capabilities,
@@ -101,32 +84,11 @@ class MarketDataServiceRecord(BaseModel):
         return provider_capability_profile(self.provider).notes
 
 
-class AIServiceRecord(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    id: UUID = Field(default_factory=uuid4)
-    name: str = Field(min_length=1)
-    provider: AIProvider
-    service_type: AIServiceType = AIServiceType.AI
-    status: ServiceStatus = ServiceStatus.DRAFT
-    is_default: bool = False
-    credentials_ref: str | None = None
-    has_api_key: bool = False
-    capability_label: AICapabilityLabel = AICapabilityLabel.UNKNOWN
-    validation_status: ServiceValidationStatus | None = None
-    validation_message: str | None = None
-    last_validated_at: datetime | None = None
-    created_at: datetime = Field(default_factory=utc_now)
-    updated_at: datetime = Field(default_factory=utc_now)
-    disabled_at: datetime | None = None
-
-
 class MarketDataServiceWrite(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     name: str = Field(min_length=1)
     provider: Provider
-    mode: ServiceMode = ServiceMode.NONE
     api_key: str | None = None
     api_secret: str | None = None
     capabilities: MarketDataCapabilities | None = None
@@ -140,29 +102,7 @@ class MarketDataServiceWrite(BaseModel):
         return value
 
 
-class AIServiceWrite(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    name: str = Field(min_length=1)
-    provider: AIProvider
-    api_key: str | None = None
-    capability_label: AICapabilityLabel = AICapabilityLabel.UNKNOWN
-
-    @field_validator("api_key")
-    @classmethod
-    def reject_masked_secret(cls, value: str | None) -> str | None:
-        if value is not None and value.strip() == MASKED_SECRET:
-            raise ValueError("masked credentials are not accepted as replacement secrets")
-        return value
-
-
 class MarketDataServiceList(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     services: tuple[MarketDataServiceRecord, ...]
-
-
-class AIServiceList(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    services: tuple[AIServiceRecord, ...]

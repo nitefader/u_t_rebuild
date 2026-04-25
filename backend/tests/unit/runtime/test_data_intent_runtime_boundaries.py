@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from backend.app.services import DataConsumer, DataIntent, DataIntentMode, DataPurpose, Timeframe
+from backend.app.market_data import DataConsumer, DataIntent, DataIntentMode, DataPurpose, Timeframe
 
 
 def test_sim_lab_live_intent_uses_market_data_requirements_not_broker_adapter() -> None:

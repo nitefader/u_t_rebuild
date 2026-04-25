@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from .service_resolver import CostClass, LatencyClass, MarketDataCapabilities, Provider
+from .resolver import CostClass, LatencyClass, MarketDataCapabilities, Provider
 
 
 @dataclass(frozen=True)

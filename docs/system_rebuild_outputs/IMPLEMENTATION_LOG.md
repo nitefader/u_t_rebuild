@@ -3321,3 +3321,203 @@ Validation results:
 - Compileall: passed.
 - Backend full suite: `446 passed, 1 skipped`.
 - Frontend build: passed.
+
+## 2026-04-24 23:28 ET
+
+Implemented a Services Resolver correction focused on capability-based compatibility.
+
+Implemented:
+- Resolver enforces intraday and streaming constraints before selecting a Market Data Service.
+- Incompatible providers are rejected instead of ranked as candidates.
+- Resolver output includes an explanation and rejected candidates with reason codes.
+- Added capability metadata fields and validation-driven updates as a direction toward dynamic capability learning; this is not a full online learning or provider-discovery system.
+
+Scope kept out:
+- No real streaming.
+- No multi-provider blending.
+- No full scoring engine.
+- No live trading behavior.
+- No frontend direct provider calls.
+
+Validation:
+- `python -m pytest backend/tests/unit/services -q`
+- `cd frontend && npm.cmd test`
+- `python -m compileall -q backend/app backend/tests`
+- `python -m pytest backend/tests -q`
+- `cd frontend && npm.cmd run build`
+
+Result:
+- Backend services tests: `20 passed`.
+- Frontend tests: `33 passed`.
+- Compileall: passed.
+- Backend full suite: `446 passed, 1 skipped`.
+- Frontend build: passed.
+
+## 2026-04-25 02:30 ET - Slice 1: Mode-naming-contract migration (plan_review §G Phase 1)
+
+Task:
+- Phase 1 from plan_review.md §G: add banned-name CI lint, migrate `backend/app/services/` into canonical `market_data/` and `ai/` buckets, eliminate `ServiceMode.PAPER/LIVE`, drop `mode` field from market-data records (per A1).
+
+Files changed:
+- backend/app/market_data/data_intent.py (new)
+- backend/app/market_data/resolver.py (new — was services/service_resolver.py; ServiceMode + mode field removed)
+- backend/app/market_data/capability_profiles.py (new)
+- backend/app/market_data/models.py (new — MarketDataServiceRecord; no mode field; MarketDataValidationStatus enum)
+- backend/app/market_data/validation.py (new — validator no longer takes mode)
+- backend/app/market_data/catalog.py (new — MarketDataServiceCatalog replaces ServicesCenterService market half)
+- backend/app/market_data/runtime.py (new)
+- backend/app/market_data/__init__.py (updated: 40 exports incl. catalog/resolver/data_intent)
+- backend/app/ai/__init__.py (new)
+- backend/app/ai/providers.py (new — AIProvider records; AIValidationStatus enum; AIProviderStatus enum)
+- backend/app/ai/validation.py (new — AIProviderValidator; no shared status with market-data)
+- backend/app/ai/catalog.py (new — AIProviderCatalog)
+- backend/app/ai/runtime.py (new)
+- backend/app/api/routes/__init__.py (updated: ai_router + market_data_router; services_router removed)
+- backend/app/api/routes/market_data.py (new — /api/v1/market-data/services{,/resolve,/{id}/...})
+- backend/app/api/routes/ai.py (new — /api/v1/ai/providers{,/{id}/...})
+- backend/app/api/routes/services.py (deleted)
+- backend/app/services/__init__.py (deleted)
+- backend/app/services/capability_profiles.py (deleted)
+- backend/app/services/data_intent.py (deleted)
+- backend/app/services/models.py (deleted)
+- backend/app/services/runtime_service.py (deleted)
+- backend/app/services/service.py (deleted)
+- backend/app/services/service_resolver.py (deleted)
+- backend/app/services/validation.py (deleted)
+- backend/tests/unit/lint/test_no_banned_mode_enums.py (new — AST scan; allowlist domain/trading_mode.py)
+- backend/tests/unit/market_data/test_resolver.py (new — was tests/unit/services/test_service_resolver.py)
+- backend/tests/unit/market_data/test_market_data_catalog.py (new — was tests/unit/services/test_services_center_service.py market half)
+- backend/tests/unit/ai/test_ai_catalog.py (new — was the AI half of test_services_center_service.py)
+- backend/tests/unit/services/test_service_resolver.py (deleted)
+- backend/tests/unit/services/test_services_center_service.py (deleted)
+- backend/tests/unit/runtime/test_data_intent_runtime_boundaries.py (updated import: app.services -> app.market_data)
+- frontend/src/api/services.js (updated: split into MARKET_DATA_PREFIX + AI_PREFIX; canonical paths)
+- frontend/src/servicesCenter.js (updated: removed mode picker on Alpaca form, removed Mode <dt> in card, removed mode flag chip; serviceModeLabel -> serviceCredentialLabel; normalizeMarketDataForSubmit drops mode; edit/show form state drops mode; provider-select handler drops mode)
+- frontend/tests/servicesCenter.test.mjs (updated: new test "Market data card no longer renders a Mode field"; new test "Market data create payload no longer carries a banned mode field"; assertions updated to canonical /api/v1/market-data/services and /api/v1/ai/providers paths)
+- memory/MEMORY.md (new)
+- memory/authority_docs.md (new)
+- memory/validation_discipline.md (new)
+- memory/decision_defaults.md (new)
+- docs/system_rebuild_outputs/IMPLEMENTATION_LOG.md (this entry)
+
+Implemented:
+- AST-based banned-name lint that fails CI when any `class *Mode*(*Enum*)` declares a member named exactly `PAPER` / `LIVE` or whose value is the bare string `"paper"`/`"live"`. Compound members like `LIVE_PREVIEW`/`LIVE_RUNTIME`/`BROKER_PAPER`/`BROKER_LIVE` are correctly skipped (verified via canary class).
+- Full migration of `backend/app/services/` into canonical `market_data/` and `ai/` packages. `app/services/` directory deleted in entirety.
+- `ServiceMode` enum removed; `mode` field removed from `MarketDataServiceRecord`, `MarketDataServiceConfig`, `MarketDataServiceWrite`. Market-data validators no longer accept a mode argument. Trading mode (`TradingMode`) is now owned exclusively by `BrokerAccount`.
+- Two independent validation status enums (`MarketDataValidationStatus`, `AIValidationStatus`) — no shared types between market-data and AI buckets, per §I "AI Services and Market Data are separate systems."
+- API split into two surfaces: `/api/v1/market-data/services{,/{id}{,/validate,/set-default,/disable},/resolve}` and `/api/v1/ai/providers{,/{id}{,/validate,/set-default,/disable}}`.
+- Frontend client updated to canonical paths; `mode` removed from market-data form, card, payload, and state.
+- Memory directory bootstrapped with authority-doc index, validation-discipline rule, and §16 decision defaults.
+
+Scope kept out:
+- Resolver `selection_mode` -> `selection_strategy` rename (defers to roadmap §11 Phase 1 work where the resolver becomes pipeline-aware).
+- Standalone Services Center page deletion (UI restructure under Providers → Market Data Pipelines is part of Phase 1 Data Flow Lock).
+- ProgramVersion `composition_hash` freeze and Evidence reproducibility extension (roadmap defers these to phases 4/5).
+- Any FeatureEngine / streaming / broker-account behavior change.
+
+Validation performed:
+- python -m compileall -q backend/app backend/tests
+- python -m pytest backend/tests -q
+- cd frontend && npm.cmd run build
+- cd frontend && npm.cmd test
+
+Result:
+- compileall: clean.
+- Backend full suite: 542 passed, 1 skipped.
+- Frontend tests: 35 passed.
+- Frontend build: passed (10 source files).
+- Lint canary verification: introduced a `class CanaryServiceMode(StrEnum): PAPER="paper"; LIVE="live"`; lint flagged both members with file/line/remediation; canary removed and lint re-ran clean.
+
+Verification:
+- Feature Engine did not call external providers.
+- Resolver output was not hardcoded.
+- No duplicate streaming path introduced.
+- No architecture boundaries violated.
+- Grep across backend/, frontend/src/, tools/ for `ServiceMode | backend.app.services | app/services | /api/v1/services` returns only history-marker docstrings — zero live code references to the deprecated bucket or path.
+
+Commit:
+- pending (working tree currently dirty with this slice; user has not yet requested commit).
+
+## 2026-04-25 02:51 ET - Slice 1A: Resolver contract refresh (Phase 1 Data Flow Lock — final_roadmap §11)
+
+Task:
+- Lock resolver contract per §9 + §J: `selection_strategy` replaces `selection_mode`, per-symbol resolution rows, frozen-enum rejection codes (§12 stop 7), `resolver_input_hash` for replay equality, visibility fields.
+
+Files changed:
+- backend/app/market_data/resolver.py
+- backend/app/market_data/catalog.py
+- backend/app/market_data/__init__.py
+- backend/tests/unit/market_data/test_resolver.py
+- backend/tests/unit/market_data/test_market_data_catalog.py
+- frontend/src/servicesCenter.js
+- frontend/tests/servicesCenter.test.mjs
+
+Implemented:
+- `SelectionStrategy {AUTO, DEFAULT_PREFERRED, MANUAL_OVERRIDE}` (banned `mode` wording removed).
+- `ResolverRejectionCode` 11-value frozen enum; `ResolverSelectionCode` 3-value enum; `InvocationContext` enum.
+- `PerSymbolResolution` row type and `ResolverResult` with per-symbol rows + visibility fields (`resolver_version`, `resolver_input_hash`, `invocation_context`, `decided_at`).
+- Deterministic `resolver_input_hash` over canonical JSON.
+
+Scope kept out:
+- `MarketDataPipeline` model (1B), `FeaturePlanner.data_requirements` (1C), SubscriptionManager (1D), real provider IO (Phase 2), Providers→Market Data Pipelines IA flip (1B).
+
+Validation performed:
+- python -m compileall -q backend/app backend/tests
+- python -m pytest backend/tests -q
+- cd frontend && npm.cmd run build
+- cd frontend && npm.cmd test
+
+Result:
+- compileall clean. Backend: 551 passed, 1 skipped. Frontend: 36 passed. Build clean.
+
+Verification:
+- Feature Engine did not call external providers.
+- Resolver output not hardcoded; `resolver_input_hash` deterministic.
+- No duplicate streaming path introduced.
+- No architecture boundaries violated (banned-name lint green).
+
+Commit:
+- pending (rolled into 1A-bis below before commit).
+
+## 2026-04-25 03:10 ET - Slice 1A-bis: Architect-driven contract repairs
+
+Task:
+- Architect review of 1A surfaced four bugs/gaps + three new findings. Fix all before moving to 1B.
+
+Files changed:
+- backend/app/market_data/resolver.py
+- backend/tests/unit/market_data/test_resolver.py
+- backend/tests/unit/market_data/test_market_data_catalog.py
+- frontend/src/servicesCenter.js
+- frontend/tests/servicesCenter.test.mjs
+
+Implemented:
+- Dropped top-level result mirror; callers iterate `per_symbol_rows`. Added `ResolverDecision.PARTIAL` for honest aggregate.
+- Added `ResolverRejectionCode.PROVIDER_NOT_VALIDATED` (12th code). Lossless `_VALIDATION_STATUS_TO_REJECTION` table covers all six `MarketDataValidationStatus` members; coverage guard test (`test_validation_status_to_rejection_table_covers_every_enum_member`) prevents drift.
+- `resolver_input_hash` now projects services to identity-stable subset; cosmetic prose (`service_name`, `validation_message`, `credentials_ref`) excluded from hash.
+- `MANUAL_OVERRIDE` with unknown service id now emits a synthetic `RejectedCandidate`.
+- DISABLED precedence over validation_status documented + tested.
+- Determinism contract documented in module docstring.
+- Frontend renders per-symbol table; reads only from `per_symbol_rows`. PARTIAL aggregate shows yellow banner. Lint-style guard test asserts no top-level mirror reads remain in source.
+- `RESOLVER_VERSION` bumped to `0.10.1`.
+
+Scope kept out:
+- `MarketDataPipeline` model (1B), Providers→Market Data Pipelines IA flip (1B), `FeaturePlanner.data_requirements` (1C), SubscriptionManager (1D).
+
+Validation performed:
+- python -m compileall -q backend/app backend/tests
+- python -m pytest backend/tests -q
+- cd frontend && npm.cmd run build
+- cd frontend && npm.cmd test
+
+Result:
+- compileall clean. Backend: 567 passed, 1 skipped (+16 contract tests vs. 1A). Frontend: 38 passed (+2 contract tests). Build clean.
+
+Verification:
+- Feature Engine did not call external providers.
+- Resolver `resolver_input_hash` is now identity-stable across cosmetic prose changes.
+- No duplicate streaming path introduced.
+- No architecture boundaries violated.
+
+Commit:
+- pending.

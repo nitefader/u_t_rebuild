@@ -2,16 +2,16 @@ import { createServicesApi } from "./api/services.js";
 
 const MASKED = "********";
 
-const RESOLVER_MODES = {
+const RESOLVER_STRATEGIES = {
   auto: "Auto (Recommended)",
-  default: "Default",
-  explicit: "Manual Selection"
+  default_preferred: "Default",
+  manual_override: "Manual Selection"
 };
 
-const MODE_COPY = {
+const STRATEGY_COPY = {
   auto: "System selects the best compatible service based on the request.",
-  default: "Use the configured default service only. If incompatible, fail clearly.",
-  explicit: "Use the selected service only. If incompatible, fail clearly."
+  default_preferred: "Use the configured default service only. If incompatible, fail clearly.",
+  manual_override: "Use the selected service only. If incompatible, fail clearly."
 };
 
 const SERVICE_ICONS = {
@@ -112,8 +112,11 @@ function serviceStatusClass(status) {
   return "";
 }
 
-function serviceModeLabel(service, type) {
-  if (type === "market") return service.mode || "none";
+function serviceCredentialLabel(service, type) {
+  if (type === "market") {
+    if (service.has_api_key || service.has_api_secret) return "keyed";
+    return "no credentials";
+  }
   return service.provider === "future" ? "none" : "keyed";
 }
 
@@ -176,7 +179,7 @@ function renderServiceFlags(service, type) {
   return `<div class="service-flags">
     <span class="service-flag flag-${type === "market" ? "market" : "ai"}">${escapeHtml(service.provider || "unknown")}</span>
     <span class="service-flag flag-${status}">${escapeHtml(status)}</span>
-    <span class="service-flag flag-mode">${escapeHtml(serviceModeLabel(service, type))}</span>
+    <span class="service-flag flag-credentials">${escapeHtml(serviceCredentialLabel(service, type))}</span>
     ${service.is_default ? `<span class="service-flag flag-default">default</span>` : ""}
   </div>`;
 }
@@ -247,7 +250,6 @@ function renderMarketDataRow(service) {
     ${renderServiceFlags(service, "market")}
     <dl class="detail-grid">
       <div><dt>Provider</dt><dd>${escapeHtml(service.provider || "unknown")}</dd></div>
-      <div><dt>Mode</dt><dd>${escapeHtml(service.mode || "none")}</dd></div>
       <div><dt>Default</dt><dd>${service.is_default ? "yes" : "no"}</dd></div>
       <div><dt>Credentials</dt><dd>${service.has_api_key || service.has_api_secret ? MASKED : "not required"}</dd></div>
       <div><dt>Validation</dt><dd>${escapeHtml(service.validation_status || "not validated")} - ${escapeHtml(service.validation_message || "pending verification")}</dd></div>
@@ -297,15 +299,13 @@ function renderAiRow(service) {
 
 function renderMarketDataForm(formState = {}) {
   const provider = (formState.provider || "alpaca").toLowerCase();
-  const mode = formState.mode || "paper";
   const isEditing = Boolean(formState.id);
   const providerBody =
     provider === "alpaca"
       ? `<div data-provider-body="alpaca" class="provider-body">
-          <label><span>Mode</span><select name="mode">${renderSelectOptions([["paper", "paper"], ["live", "live"]], mode)}</select></label>
           <label><span>API Key</span><input name="api_key" autocomplete="off" placeholder="${MASKED}" type="password"><small class="helper">${isEditing ? "Leave blank to keep existing key." : "Enter API key."}</small></label>
           <label><span>API Secret</span><input name="api_secret" autocomplete="off" placeholder="${MASKED}" type="password"><small class="helper">${isEditing ? "Leave blank to keep existing secret." : "Enter API secret."}</small></label>
-          <p class="helper provider-note">Alpaca supports historical bars and streaming when credentials and entitlement allow it. Required for Broker Runtime intraday streaming.</p>
+          <p class="helper provider-note">Alpaca market data uses the same credentials regardless of broker mode. Trading mode (paper or live) lives on the Broker Account, not on the data feed.</p>
         </div>`
       : provider === "yahoo"
         ? `<div data-provider-body="yahoo" class="provider-body">
@@ -360,19 +360,19 @@ function renderAiForm(formState = {}) {
 function DataIntentPanel(state) {
   const resolverPayload = state.resolutionPayload || {};
   const intent = normalizeIntent(resolverPayload.intent || {});
-  const selected = state.activeResolverMode || "auto";
+  const selected = state.activeResolverStrategy || "auto";
   const candidateServices = state.marketData?.services || [];
   const selectedServiceId = resolverPayload.selected_service_id || "";
   return `<section class="panel">
     <header>
       <h2>Data Source Decision</h2>
-      <div class="segmented-control" role="group" aria-label="Data Source Mode">
-        ${Object.entries(RESOLVER_MODES)
-          .map(([mode, label]) => `<button type="button" data-action="set-resolver-mode" data-mode="${mode}" class="${selected === mode ? "active" : ""}" aria-pressed="${selected === mode ? "true" : "false"}">${label}</button>`)
+      <div class="segmented-control" role="group" aria-label="Selection Strategy">
+        ${Object.entries(RESOLVER_STRATEGIES)
+          .map(([strategy, label]) => `<button type="button" data-action="set-resolver-strategy" data-strategy="${strategy}" class="${selected === strategy ? "active" : ""}" aria-pressed="${selected === strategy ? "true" : "false"}">${label}</button>`)
           .join("")}
       </div>
     </header>
-    <p class="helper">${escapeHtml(MODE_COPY[selected] || MODE_COPY.auto)}</p>
+    <p class="helper">${escapeHtml(STRATEGY_COPY[selected] || STRATEGY_COPY.auto)}</p>
     <form class="account-form service-form" data-form="resolver-intent">
       <label><span>Consumer</span><select name="consumer">${renderSelectOptions(CONSUMER_OPTIONS.map((value) => [value, value]), intent.consumer)}</select></label>
       <label><span>Timeframe</span><select name="timeframe">${renderSelectOptions(TIMEFRAME_OPTIONS.map((value) => [value, value]), intent.timeframe)}</select></label>
@@ -383,9 +383,9 @@ function DataIntentPanel(state) {
       <label><span>End Date/Time</span><input name="end_at" value="${escapeHtml(intent.end_at || "")}" placeholder="2026-01-01T00:00:00Z"></label>
       <label class="checkbox-label"><input type="checkbox" name="requires_streaming" ${intent.requires_streaming ? "checked" : ""}><span>Streaming required</span></label>
       <label class="checkbox-label"><input type="checkbox" name="requires_intraday" ${intent.requires_intraday ? "checked" : ""}><span>Intraday required</span></label>
-      <div class="service-mode-indicator"><strong>Mode:</strong> ${escapeHtml(RESOLVER_MODES[selected])}</div>
-      <div class="service-guard-text" style="${selected === "explicit" ? "display:grid" : "display:none"}">
-        <p><strong>Manual mode:</strong> choose a specific service from the current list.</p>
+      <div class="service-strategy-indicator"><strong>Strategy:</strong> ${escapeHtml(RESOLVER_STRATEGIES[selected])}</div>
+      <div class="service-guard-text" style="${selected === "manual_override" ? "display:grid" : "display:none"}">
+        <p><strong>Manual override:</strong> choose a specific service from the current list.</p>
         ${
           candidateServices.length
             ? `<label class="manual-service-select">
@@ -402,13 +402,60 @@ function DataIntentPanel(state) {
   </section>`;
 }
 
-function ResolverResultPanel(result, selectedMode, services = [], fallbackIntent = DEFAULT_INTENT) {
+function renderRowRejections(row) {
+  const rejected = Array.isArray(row.rejected_providers) ? row.rejected_providers : [];
+  if (!rejected.length) return `<span class="empty">none</span>`;
+  return `<details class="row-rejections"><summary>${rejected.length} rejected</summary><ul>${rejected
+    .map((candidate) => `<li><strong>${escapeHtml(candidate.service_name || candidate.service_id || "candidate")}</strong> &mdash; ${escapeHtml(candidate.reason_code || "not provided")}: ${escapeHtml(candidate.explanation || "")}</li>`)
+    .join("")}</ul></details>`;
+}
+
+function renderPerSymbolTable(rows) {
+  if (!rows.length) return `<p class="empty">No per-symbol resolution rows.</p>`;
+  const body = rows
+    .map((row) => {
+      const decisionClass = row.decision === "selected" ? "row-selected" : "row-rejected";
+      return `<tr class="${decisionClass}">
+        <td>${escapeHtml(row.symbol)}</td>
+        <td>${escapeHtml(row.decision)}</td>
+        <td>${escapeHtml(row.selected_service_name || "—")}</td>
+        <td>${escapeHtml(row.selected_provider || "—")}</td>
+        <td>${escapeHtml(row.pipeline_id || "—")}</td>
+        <td><code>${escapeHtml(row.reason || "—")}</code></td>
+        <td>${escapeHtml(row.explanation || "")}</td>
+        <td>${renderRowRejections(row)}</td>
+      </tr>`;
+    })
+    .join("");
+  return `<table class="per-symbol-table">
+    <thead><tr><th>Symbol</th><th>Decision</th><th>Service</th><th>Provider</th><th>Pipeline</th><th>Reason</th><th>Why</th><th>Rejected</th></tr></thead>
+    <tbody>${body}</tbody>
+  </table>`;
+}
+
+function ResolverResultPanel(result, selectedStrategy, services = [], fallbackIntent = DEFAULT_INTENT) {
   const resolution = result || {};
   const hasResolution = Object.keys(resolution).length > 0;
   const intent = normalizeIntent(resolution.intent || fallbackIntent);
-  const rejected = Array.isArray(resolution.rejected_candidates) ? resolution.rejected_candidates : [];
-  const isSelected = hasResolution && resolution.decision === "selected";
-  const explanation = resolution.explanation || "No resolver explanation returned. This is a backend contract issue.";
+  const rows = Array.isArray(resolution.per_symbol_rows) ? resolution.per_symbol_rows : [];
+  const decision = resolution.decision || "unknown";
+  const partialBanner = decision === "partial"
+    ? `<div class="resolver-banner resolver-banner-partial"><strong>Mixed outcome:</strong> ${rows.filter((row) => row.decision === "selected").length} of ${rows.length} symbols resolved. Inspect each row.</div>`
+    : "";
+  const debugFields = hasResolution
+    ? `<details class="resolver-debug">
+        <summary>Resolver determinism (debug)</summary>
+        <dl>
+          <div><dt>Resolver Version</dt><dd>${escapeHtml(resolution.resolver_version || "unknown")}</dd></div>
+          <div><dt>Input Hash</dt><dd><code>${escapeHtml(resolution.resolver_input_hash || "n/a")}</code></dd></div>
+          <div><dt>Invocation Context</dt><dd>${escapeHtml(resolution.invocation_context || "n/a")}</dd></div>
+          <div><dt>Decided At</dt><dd>${escapeHtml(resolution.decided_at || "n/a")}</dd></div>
+          <div><dt>Selection Strategy</dt><dd>${escapeHtml(resolution.selection_strategy || selectedStrategy || "auto")}</dd></div>
+          <div><dt>Aggregate Decision</dt><dd>${escapeHtml(decision)}</dd></div>
+          <p class="helper">Compare two resolutions on <code>resolver_input_hash</code> only — <code>decided_at</code> is a wall-clock receipt and is non-deterministic by design.</p>
+        </dl>
+      </details>`
+    : "";
   return `<section class="panel data-intent-panel">
     <h3>Detected Intent</h3>
     <div class="resolver-grid">
@@ -422,37 +469,16 @@ function ResolverResultPanel(result, selectedMode, services = [], fallbackIntent
           <div><dt>Purpose</dt><dd>${escapeHtml(intent.purpose)}</dd></div>
         </dl>
       </section>
-      <section class="resolver-block ${hasResolution && !isSelected ? "resolver-error" : ""}">
-        <h4>${!hasResolution ? "Service Decision Preview" : isSelected ? "Selected Service" : "No Compatible Service Found"}</h4>
+      <section class="resolver-block ${hasResolution && decision === "rejected" ? "resolver-error" : ""}">
+        <h4>${!hasResolution ? "Service Decision Preview" : `Per-Symbol Resolution (${decision})`}</h4>
         ${
           !hasResolution
             ? `<p class="empty">${services.length ? "Preview service selection to see the resolver decision." : "No services available for selection. Create and validate a Market Data Service before using Auto, Default, or Manual selection."}</p>`
-            : isSelected
-              ? `<dl>
-                  <div><dt>Service</dt><dd>${escapeHtml(resolution.selected_service_name || "No service name returned")}</dd></div>
-                  <div><dt>Provider</dt><dd>${escapeHtml(resolution.provider || "No provider returned")}</dd></div>
-                  <div><dt>Selection Mode</dt><dd>${escapeHtml(resolution.selection_mode || selectedMode || "auto")}</dd></div>
-                  <div><dt>Reason Code</dt><dd>${escapeHtml(resolution.reason_code || "not provided")}</dd></div>
-                  <div><dt>Why Selected</dt><dd>${escapeHtml(explanation)}</dd></div>
-                  <div><dt>Decision</dt><dd>${escapeHtml(resolution.decision || "unknown")}</dd></div>
-                </dl>`
-              : `<p><strong>Why:</strong> ${escapeHtml(explanation)}</p>
-                <dl>
-                  <div><dt>Reason Code</dt><dd>${escapeHtml(resolution.reason_code || "not provided")}</dd></div>
-                  <div><dt>Decision</dt><dd>${escapeHtml(resolution.decision || "unknown")}</dd></div>
-                </dl>
-                <p class="helper"><strong>What to do:</strong> Adjust timeframe or request mode, validate or enable a compatible service, or use manual selection only if compatible.</p>`
+            : `${partialBanner}${renderPerSymbolTable(rows)}`
         }
       </section>
     </div>
-    <details class="rejected-services">
-      <summary>Rejected Services (${rejected.length})</summary>
-      ${
-        rejected.length
-          ? `<ul>${rejected.map((candidate) => `<li><strong>${escapeHtml(candidate.service_name || candidate.service_id || "candidate")}</strong><span>Reason: ${escapeHtml(candidate.reason_code || "not provided")}</span><span>${escapeHtml(candidate.explanation || "No resolver explanation returned. This is a backend contract issue.")}</span></li>`).join("")}</ul>`
-          : `<p class="empty">No rejected candidates.</p>`
-      }
-    </details>
+    ${debugFields}
   </section>`;
 }
 
@@ -469,17 +495,15 @@ function renderLogs(marketData, ai) {
 
 function normalizeMarketDataForSubmit(data) {
   const provider = (data.get("provider") || "").toLowerCase();
-  const mode = provider === "alpaca" ? data.get("mode") || "paper" : "none";
   if (provider === "alpaca") {
     return compactPayload({
       name: data.get("name"),
       provider,
-      mode,
       api_key: data.get("api_key"),
       api_secret: data.get("api_secret")
     });
   }
-  return compactPayload({ name: data.get("name"), provider, mode });
+  return compactPayload({ name: data.get("name"), provider });
 }
 
 function normalizeAiForSubmit(data) {
@@ -491,13 +515,16 @@ function normalizeAiForSubmit(data) {
   });
 }
 
-function normalizeResolverPayload(formData, mode, services) {
+function normalizeResolverPayload(formData, strategy, services) {
   const symbols = String(formData.get("symbols") || "")
     .split(",")
     .map((value) => value.trim())
     .filter(Boolean);
+  const normalizedStrategy =
+    strategy === "default_preferred" ? "default_preferred" : strategy === "manual_override" ? "manual_override" : "auto";
   const payload = {
-    selection_mode: mode === "default" ? "default" : mode === "explicit" ? "explicit" : "auto",
+    selection_strategy: normalizedStrategy,
+    invocation_context: "operations_preview",
     intent: {
       consumer: formData.get("consumer") || DEFAULT_INTENT.consumer,
       mode: formData.get("mode") || DEFAULT_INTENT.mode,
@@ -513,7 +540,7 @@ function normalizeResolverPayload(formData, mode, services) {
       requires_realtime: formData.has("requires_streaming")
     }
   };
-  if (mode === "explicit") {
+  if (normalizedStrategy === "manual_override") {
     payload.selected_service_id = formData.get("selected_service_id") || (services[0] ? services[0].id : undefined);
   }
   return payload;
@@ -565,7 +592,7 @@ export function renderServicesCenter(state = {}) {
     ${activeTab === "ai" ? ServiceTable(ai, "ai", state.aiFormState || null) : activeTab === "logs" ? renderLogs(marketData, ai) : ServiceTable(marketData, "market", state.marketDataFormState || null)}
   </section>
   ${DataIntentPanel({ ...state, resolutionPayload: { ...(state.resolutionPayload || {}), intent: resolverIntent } })}
-  ${ResolverResultPanel(state.resolution || {}, state.activeResolverMode || "auto", marketData, resolverIntent)}`;
+  ${ResolverResultPanel(state.resolution || {}, state.activeResolverStrategy || "auto", marketData, resolverIntent)}`;
 }
 
 export async function mountServicesCenter(root, client = createServicesApi()) {
@@ -575,7 +602,7 @@ export async function mountServicesCenter(root, client = createServicesApi()) {
     activeTab: "market-data",
     marketDataFormState: null,
     aiFormState: null,
-    activeResolverMode: "auto",
+    activeResolverStrategy: "auto",
     resolutionPayload: { intent: DEFAULT_INTENT, selected_service_id: null },
     resolution: null
   };
@@ -589,8 +616,7 @@ export async function mountServicesCenter(root, client = createServicesApi()) {
           id: service.id,
           visible: true,
           name: service.name || "",
-          provider: service.provider || "alpaca",
-          mode: service.mode || "paper"
+          provider: service.provider || "alpaca"
         };
       }
       return;
@@ -624,7 +650,7 @@ export async function mountServicesCenter(root, client = createServicesApi()) {
     const form = root.querySelector("form[data-form='resolver-intent']");
     if (!form) return;
     const data = new FormData(form);
-    const payload = normalizeResolverPayload(data, state.activeResolverMode || "auto", state.marketData.services);
+    const payload = normalizeResolverPayload(data, state.activeResolverStrategy || "auto", state.marketData.services);
     state.resolutionPayload = payload;
     state.resolution = await client.resolveMarketData(payload);
     await refresh();
@@ -644,8 +670,8 @@ export async function mountServicesCenter(root, client = createServicesApi()) {
       return;
     }
 
-    if (action === "set-resolver-mode") {
-      state.activeResolverMode = button.dataset.mode || "auto";
+    if (action === "set-resolver-strategy") {
+      state.activeResolverStrategy = button.dataset.strategy || "auto";
       root.innerHTML = renderServicesCenter(state);
       return;
     }
@@ -655,7 +681,7 @@ export async function mountServicesCenter(root, client = createServicesApi()) {
       return;
     }
 
-    if (action === "show-market-data-form") state.marketDataFormState = { visible: true, provider: "alpaca", mode: "paper", name: "", id: null };
+    if (action === "show-market-data-form") state.marketDataFormState = { visible: true, provider: "alpaca", name: "", id: null };
     if (action === "show-ai-form") state.aiFormState = { visible: true, provider: "groq", capability_label: "fast", name: "", id: null };
     if (action === "edit-market-data") syncEditStateFromServices("market", id);
     if (action === "edit-ai") syncEditStateFromServices("ai", id);
@@ -700,7 +726,6 @@ export async function mountServicesCenter(root, client = createServicesApi()) {
         visible: true,
         id: sanitizePayloadEntry(data.get("service_id")) || null,
         name: data.get("name") || "",
-        mode: data.get("mode") || "paper",
         provider: event.target.value
       };
       root.innerHTML = renderServicesCenter(state);

@@ -1,10 +1,11 @@
-const API_PREFIX = "/api/v1/services";
+const MARKET_DATA_PREFIX = "/api/v1/market-data";
+const AI_PREFIX = "/api/v1/ai";
 
-async function requestJson(path, options = {}, fetchImpl = globalThis.fetch) {
+async function requestJson(url, options = {}, fetchImpl = globalThis.fetch) {
   if (typeof fetchImpl !== "function") {
     throw new Error("Services API unavailable: fetch is not configured");
   }
-  const response = await fetchImpl(`${API_PREFIX}${path}`, {
+  const response = await fetchImpl(url, {
     headers: {
       "Content-Type": "application/json",
       Accept: "application/json",
@@ -26,20 +27,23 @@ async function requestJson(path, options = {}, fetchImpl = globalThis.fetch) {
 }
 
 export function createServicesApi(fetchImpl = globalThis.fetch) {
-  const post = (path) => requestJson(path, { method: "POST" }, fetchImpl);
+  const md = (path, options) => requestJson(`${MARKET_DATA_PREFIX}${path}`, options, fetchImpl);
+  const ai = (path, options) => requestJson(`${AI_PREFIX}${path}`, options, fetchImpl);
+  const mdPost = (path) => md(path, { method: "POST" });
+  const aiPost = (path) => ai(path, { method: "POST" });
   return {
-    listMarketData: () => requestJson("/market-data", {}, fetchImpl),
-    createMarketData: (payload) => requestJson("/market-data", { method: "POST", body: JSON.stringify(payload) }, fetchImpl),
-    updateMarketData: (id, payload) => requestJson(`/market-data/${id}`, { method: "PUT", body: JSON.stringify(payload) }, fetchImpl),
-    validateMarketData: (id) => post(`/market-data/${id}/validate`),
-    setDefaultMarketData: (id) => post(`/market-data/${id}/set-default`),
-    disableMarketData: (id) => post(`/market-data/${id}/disable`),
-    resolveMarketData: (payload) => requestJson("/market-data/resolve", { method: "POST", body: JSON.stringify(payload) }, fetchImpl),
-    listAi: () => requestJson("/ai", {}, fetchImpl),
-    createAi: (payload) => requestJson("/ai", { method: "POST", body: JSON.stringify(payload) }, fetchImpl),
-    updateAi: (id, payload) => requestJson(`/ai/${id}`, { method: "PUT", body: JSON.stringify(payload) }, fetchImpl),
-    validateAi: (id) => post(`/ai/${id}/validate`),
-    setDefaultAi: (id) => post(`/ai/${id}/set-default`),
-    disableAi: (id) => post(`/ai/${id}/disable`)
+    listMarketData: () => md("/services"),
+    createMarketData: (payload) => md("/services", { method: "POST", body: JSON.stringify(payload) }),
+    updateMarketData: (id, payload) => md(`/services/${id}`, { method: "PUT", body: JSON.stringify(payload) }),
+    validateMarketData: (id) => mdPost(`/services/${id}/validate`),
+    setDefaultMarketData: (id) => mdPost(`/services/${id}/set-default`),
+    disableMarketData: (id) => mdPost(`/services/${id}/disable`),
+    resolveMarketData: (payload) => md("/services/resolve", { method: "POST", body: JSON.stringify(payload) }),
+    listAi: () => ai("/providers"),
+    createAi: (payload) => ai("/providers", { method: "POST", body: JSON.stringify(payload) }),
+    updateAi: (id, payload) => ai(`/providers/${id}`, { method: "PUT", body: JSON.stringify(payload) }),
+    validateAi: (id) => aiPost(`/providers/${id}/validate`),
+    setDefaultAi: (id) => aiPost(`/providers/${id}/set-default`),
+    disableAi: (id) => aiPost(`/providers/${id}/disable`)
   };
 }
