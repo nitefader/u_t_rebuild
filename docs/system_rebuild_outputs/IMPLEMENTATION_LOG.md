@@ -3093,3 +3093,23 @@ Validation results:
 - `python -m pytest backend/tests -q`: `425 passed, 1 skipped`.
 - `cd frontend && npm.cmd run build`: Vite production build passed; frontend check passed.
 - `cd frontend && npm.cmd test`: `21 passed`; frontend check passed.
+## 2026-04-24 20:36 ET
+
+- Implemented Data Intent and Market Data Service Resolver for Services Center routing.
+- Created `backend/app/services/data_intent.py`, `backend/app/services/service_resolver.py`, and `backend/app/services/__init__.py`.
+- Added capability models, provider defaults for Alpaca/Yahoo, auto/default/explicit selection modes, UI-ready resolver explanations, and rejected-candidate reasons.
+- Added frontend Data Source resolver panel rendering in `frontend/src/operationsCenter.js` with supporting styles in `frontend/src/styles.css`.
+- Created `docs/architecture/services_architecture.md` covering Data Intent, resolver behavior, capability model, stream separation, selection modes, and non-goals.
+- Added backend tests in `backend/tests/unit/services/test_service_resolver.py` and `backend/tests/unit/runtime/test_data_intent_runtime_boundaries.py`.
+- Added frontend test coverage for displaying detected intent, selected service, and rejected services.
+- Scope kept out: real Alpaca streaming, provider fallback/A-B testing, per-account data-provider overrides, Broker Accounts-as-Services, frontend provider calls, and changes to FeatureEngine, SignalEngine, PortfolioGovernor, OrderManager, BrokerAdapter, or BrokerSync.
+- Validation commands run:
+  - `python -m compileall -q backend/app backend/tests`
+  - `python -m pytest backend/tests/unit/services -q`
+  - `python -m pytest backend/tests/unit/runtime -q`
+  - `python -m pytest backend/tests -q`
+  - `cd frontend && npm run build` attempted; blocked by local PowerShell `npm.ps1` execution policy.
+  - `cd frontend && npm.cmd run build`
+  - `cd frontend && npm test` attempted; blocked by local PowerShell `npm.ps1` execution policy.
+  - `cd frontend && npm.cmd test`
+- Test results: compile passed; backend service tests passed `12 passed`; backend runtime tests passed `32 passed`; full backend tests passed `438 passed, 1 skipped`; frontend build passed; frontend tests passed `22 passed`.

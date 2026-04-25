@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { createOperationsApi } from "../src/api/operations.js";
 import {
   executeOperationAction,
+  renderDataSourceResolverPanel,
   renderAccountDetail,
   renderDeploymentDetail,
   renderDetailPanel,
@@ -69,6 +70,42 @@ test("overview renders recovery, kill, sync, deployment, order, and position sta
   assert.match(html, /Active deployments/);
   assert.match(html, /Latest Governor Decisions/);
   assert.match(html, /SPY/);
+});
+
+test("data source resolver panel displays detected intent, selection mode, selected service, and rejected services", () => {
+  const html = renderDataSourceResolverPanel({
+    selection_mode: "auto",
+    intent: {
+      consumer: "backtest",
+      timeframe: "1d",
+      start_at: "2023-01-01T00:00:00Z",
+      end_at: "2026-01-01T00:00:00Z",
+      requires_streaming: false,
+      requires_intraday: false
+    },
+    selected_service: {
+      service_name: "Yahoo Historical",
+      provider: "yahoo",
+      explanation: "Selected because request uses daily long-range historical data and does not require streaming."
+    },
+    rejected_candidates: [
+      {
+        service_id: "alpaca-main-data",
+        reason_code: "selected_auto_best_fit",
+        explanation: "Alpaca Main Data is compatible, but Yahoo Historical is a better fit for this intent."
+      }
+    ]
+  });
+
+  assert.match(html, /Data Source/);
+  assert.match(html, /Auto Recommended/);
+  assert.match(html, /Detected Intent/);
+  assert.match(html, /backtest/);
+  assert.match(html, /Streaming required/);
+  assert.match(html, /Yahoo Historical/);
+  assert.match(html, /Selected because request uses daily long-range historical data/);
+  assert.match(html, /Rejected services \(1\)/);
+  assert.match(html, /Alpaca Main Data is compatible/);
 });
 
 test("stale broker sync warning renders visibly", () => {

@@ -128,6 +128,18 @@ h4 {
   gap: 8px;
 }
 
+.segmented-control {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.segmented-control button.active {
+  border-color: #316b83;
+  background: #e8f4f8;
+  color: #174f65;
+}
+
 .account-form {
   display: grid;
   gap: 12px;
@@ -247,6 +259,37 @@ dd {
 
 .detail-section {
   margin-top: 18px;
+}
+
+.resolver-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+}
+
+.resolver-block {
+  border: 1px solid #e0e6e9;
+  border-radius: 8px;
+  padding: 12px;
+}
+
+.rejected-services {
+  border-top: 1px solid #e3e8eb;
+  margin-top: 12px;
+  padding-top: 12px;
+}
+
+.rejected-services ul {
+  display: grid;
+  gap: 8px;
+  list-style: none;
+  margin: 10px 0 0;
+  padding: 0;
+}
+
+.rejected-services li {
+  display: grid;
+  gap: 4px;
 }
 
 .record-list {

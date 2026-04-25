@@ -51,6 +51,67 @@ function renderJsonValue(value) {
   return escapeHtml(value);
 }
 
+function formatDateRange(intent = {}) {
+  const start = intent.start_at ? formatTimestamp(intent.start_at) : "open start";
+  const end = intent.end_at ? formatTimestamp(intent.end_at) : "open end";
+  if (!intent.start_at && !intent.end_at) return "live or latest available";
+  return `${start} to ${end}`;
+}
+
+export function renderDataSourceResolverPanel(resolution = {}) {
+  const intent = resolution.intent || {};
+  const selected = resolution.selected_service || {
+    service_name: resolution.selected_service_name,
+    provider: resolution.provider,
+    explanation: resolution.explanation
+  };
+  const rejected = resolution.rejected_candidates || [];
+  const selectionMode = resolution.selection_mode || "auto";
+  return `<section class="panel data-intent-panel">
+    <header>
+      <h2>Data Source</h2>
+      <div class="segmented-control" role="group" aria-label="Data Source Mode">
+        ${["auto", "default", "explicit"]
+          .map((mode) => {
+            const label = mode === "auto" ? "Auto Recommended" : mode === "default" ? "Use Default" : "Choose Manually";
+            return `<button type="button" class="${selectionMode === mode ? "active" : ""}" aria-pressed="${selectionMode === mode ? "true" : "false"}">${label}</button>`;
+          })
+          .join("")}
+      </div>
+    </header>
+    <div class="resolver-grid">
+      <section class="resolver-block">
+        <h3>Detected Intent</h3>
+        <dl>
+          <div><dt>Consumer</dt><dd>${escapeHtml(intent.consumer || "unknown")}</dd></div>
+          <div><dt>Timeframe</dt><dd>${escapeHtml(intent.timeframe || "unknown")}</dd></div>
+          <div><dt>Date range</dt><dd>${escapeHtml(formatDateRange(intent))}</dd></div>
+          <div><dt>Streaming required</dt><dd>${escapeHtml(boolLabel(intent.requires_streaming, "yes", "no"))}</dd></div>
+          <div><dt>Intraday required</dt><dd>${escapeHtml(boolLabel(intent.requires_intraday, "yes", "no"))}</dd></div>
+        </dl>
+      </section>
+      <section class="resolver-block">
+        <h3>Selected Service</h3>
+        <dl>
+          <div><dt>Service</dt><dd>${escapeHtml(selected.service_name || "No compatible service")}</dd></div>
+          <div><dt>Provider</dt><dd>${escapeHtml(selected.provider || "none")}</dd></div>
+          <div><dt>Why selected</dt><dd>${escapeHtml(selected.explanation || resolution.explanation || "No resolver explanation reported.")}</dd></div>
+        </dl>
+      </section>
+    </div>
+    <details class="rejected-services">
+      <summary>Rejected services (${rejected.length})</summary>
+      ${
+        rejected.length
+          ? `<ul>${rejected
+              .map((candidate) => `<li><strong>${escapeHtml(candidate.service_id)}</strong><span>${escapeHtml(candidate.explanation || candidate.reason_code || "not selected")}</span></li>`)
+              .join("")}</ul>`
+          : `<p class="empty">No rejected services.</p>`
+      }
+    </details>
+  </section>`;
+}
+
 function renderRecordList(title, records = [], emptyText, fields = []) {
   if (!records.length) {
     return `<section class="detail-section"><h3>${title}</h3><p class="empty">${emptyText}</p></section>`;
@@ -241,6 +302,7 @@ export function renderOperationsCenterOverview(overview, detailState = {}) {
     </article>
   </section>
   ${renderStaleSyncWarnings(overview.stale_sync_accounts || [])}
+  ${overview.market_data_resolution ? renderDataSourceResolverPanel(overview.market_data_resolution) : ""}
   ${renderAccountSetupPanel(detailState)}
   <section class="panel">
     <header><h2>Broker Accounts</h2></header>
