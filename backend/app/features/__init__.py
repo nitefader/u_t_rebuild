@@ -2,10 +2,20 @@
 
 from .bar_builder import (
     INPUT_TIMEFRAME,
+    INTRADAY_SUPPORTED,
+    SESSION_SUPPORTED,
     SUPPORTED_TIMEFRAMES,
     BarBuilder,
     BarBuilderError,
     BarBuilderRegistry,
+)
+from .calendar import (
+    FixtureCalendar,
+    MarketCalendar,
+    NYSECalendar,
+    SessionWindow,
+    half_day_session,
+    regular_session,
 )
 from .batch import BatchFeatureEngine, BatchFeatureEngineError, UnsupportedBatchFeatureError
 from .frames import FeatureAvailability, FeatureFrame, FeatureFrameSet, FeatureSnapshot, FeatureValue, NormalizedBar
@@ -34,10 +44,18 @@ __all__ = [
     "CANONICAL_TIMEFRAMES",
     "FEATURE_REGISTRY",
     "INPUT_TIMEFRAME",
+    "INTRADAY_SUPPORTED",
+    "SESSION_SUPPORTED",
     "SUPPORTED_TIMEFRAMES",
     "BarBuilder",
     "BarBuilderError",
     "BarBuilderRegistry",
+    "FixtureCalendar",
+    "MarketCalendar",
+    "NYSECalendar",
+    "SessionWindow",
+    "half_day_session",
+    "regular_session",
     "BatchFeatureEngine",
     "BatchFeatureEngineError",
     "FeatureAvailability",

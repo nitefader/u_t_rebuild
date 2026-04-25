@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
 import pytest
 
@@ -9,7 +9,12 @@ from backend.app.features import (
     BarBuilder,
     BarBuilderError,
     BarBuilderRegistry,
+    FixtureCalendar,
+    NYSECalendar,
     NormalizedBar,
+    SessionWindow,
+    half_day_session,
+    regular_session,
 )
 
 
@@ -181,14 +186,29 @@ def test_rejects_non_strictly_increasing_timestamps() -> None:
         builder.on_bar(_bar("SPY", start))  # same timestamp
 
 
-def test_rejects_unsupported_timeframe_in_2a() -> None:
-    """Slice 2A supports {3m, 5m, 15m, 30m, 1h}; 4h/1d/1w are 2B."""
-    with pytest.raises(BarBuilderError, match="2B"):
-        BarBuilder(symbol="SPY", timeframes=("4h",))
-    with pytest.raises(BarBuilderError, match="2B"):
+def test_rejects_session_timeframes_without_calendar() -> None:
+    """1d / 1w require a MarketCalendar (2B)."""
+    with pytest.raises(BarBuilderError, match="MarketCalendar"):
         BarBuilder(symbol="SPY", timeframes=("1d",))
-    with pytest.raises(BarBuilderError, match="2B"):
+    with pytest.raises(BarBuilderError, match="MarketCalendar"):
         BarBuilder(symbol="SPY", timeframes=("1w",))
+
+
+def test_4h_works_without_calendar_using_utc_wall_clock() -> None:
+    """4h is intraday and uses UTC wall-clock floor; calendar is only required
+    for true session-bounded timeframes (1d / 1w)."""
+    builder = BarBuilder(symbol="SPY", timeframes=("4h",))
+    start = datetime(2026, 4, 25, 12, 0, tzinfo=timezone.utc)
+    emitted: list[NormalizedBar] = []
+    # 8 hours of bars = two 4h buckets (12:00 and 16:00). The 16:00 bucket is
+    # forming when input ends.
+    for bar in _stream_minutes("SPY", start, 8 * 60 + 1):
+        emitted.extend(builder.on_bar(bar))
+    assert len(emitted) == 2
+    assert [b.timestamp for b in emitted] == [
+        datetime(2026, 4, 25, 12, 0, tzinfo=timezone.utc),
+        datetime(2026, 4, 25, 16, 0, tzinfo=timezone.utc),
+    ]
 
 
 def test_rejects_empty_timeframes() -> None:
@@ -258,3 +278,199 @@ def test_registry_per_symbol_state_is_isolated() -> None:
     registry.feed(_bar("AAPL", start))
     registry.feed(_bar("AAPL", start + timedelta(minutes=1)))
     # No exceptions → independent state.
+
+
+# ---------------------------------------------------------------------------
+# Slice 2B — Calendar-aware aggregation (1d, 1w) + active flush_at
+# ---------------------------------------------------------------------------
+
+
+def _feed_full_session(builder: BarBuilder, session: SessionWindow, *, bar_count: int | None = None) -> list[NormalizedBar]:
+    """Feed every minute of the session into the builder. Returns emitted bars
+    (excluding the flush)."""
+    if bar_count is None:
+        seconds = (session.close_utc - session.open_utc).total_seconds()
+        bar_count = int(seconds // 60)
+    emitted: list[NormalizedBar] = []
+    for index in range(bar_count):
+        ts = session.open_utc + timedelta(minutes=index)
+        bar = NormalizedBar(
+            symbol=builder.symbol, timeframe="1m", timestamp=ts,
+            open=100 + index, high=100 + index + 0.5, low=100 + index - 0.3,
+            close=100 + index + 0.2, volume=1000,
+        )
+        emitted.extend(builder.on_bar(bar))
+    return emitted
+
+
+def test_daily_aggregation_emits_one_bar_per_session() -> None:
+    calendar = NYSECalendar()
+    builder = BarBuilder(symbol="SPY", timeframes=("1d",), calendar=calendar)
+    session = calendar.session_window(date(2026, 4, 23))
+    assert session is not None
+
+    in_session = _feed_full_session(builder, session)
+    flushed = builder.flush_at(session.close_utc)
+
+    # No emit during the session; flush emits the daily bar.
+    daily_during_session = [b for b in in_session if b.timeframe == "1d"]
+    assert daily_during_session == []
+    assert len(flushed) == 1
+    assert flushed[0].timeframe == "1d"
+    assert flushed[0].timestamp == session.open_utc
+    assert flushed[0].volume > 0
+
+
+def test_daily_bar_volume_is_sum_of_session_minutes() -> None:
+    calendar = NYSECalendar()
+    builder = BarBuilder(symbol="SPY", timeframes=("1d",), calendar=calendar)
+    session = calendar.session_window(date(2026, 4, 23))
+    assert session is not None
+
+    _feed_full_session(builder, session)
+    flushed = builder.flush_at(session.close_utc)
+
+    expected_minutes = int((session.close_utc - session.open_utc).total_seconds() // 60)
+    assert flushed[0].volume == expected_minutes * 1000
+
+
+def test_half_day_daily_bar_volume_is_shorter_than_regular_session() -> None:
+    calendar = NYSECalendar()
+    builder = BarBuilder(symbol="SPY", timeframes=("1d",), calendar=calendar)
+    session = calendar.session_window(date(2026, 12, 24))  # Christmas Eve half-day
+    assert session is not None and session.is_half_day is True
+
+    _feed_full_session(builder, session)
+    flushed = builder.flush_at(session.close_utc)
+
+    # 09:30 to 13:00 ET = 3.5 hours = 210 minutes.
+    assert flushed[0].volume == 210 * 1000
+
+
+def test_holiday_skip_no_session_window() -> None:
+    """Holiday days return None from session_window — caller must not feed bars."""
+    calendar = NYSECalendar()
+    assert calendar.session_window(date(2026, 1, 1)) is None  # NYD
+    assert calendar.session_window(date(2026, 11, 26)) is None  # Thanksgiving
+
+
+def test_weekly_aggregation_groups_sessions_by_iso_week() -> None:
+    """Mon-Fri sessions in the same ISO week aggregate to one weekly bar."""
+    calendar = NYSECalendar()
+    builder = BarBuilder(symbol="SPY", timeframes=("1w",), calendar=calendar)
+
+    for day in (date(2026, 4, 20), date(2026, 4, 21), date(2026, 4, 22), date(2026, 4, 23), date(2026, 4, 24)):
+        session = calendar.session_window(day)
+        assert session is not None
+        _feed_full_session(builder, session, bar_count=5)
+        builder.flush_at(session.close_utc)
+    next_session = calendar.session_window(date(2026, 4, 27))
+    assert next_session is not None
+    next_bar = NormalizedBar(
+        symbol="SPY", timeframe="1m", timestamp=next_session.open_utc,
+        open=200, high=200.5, low=199.5, close=200.2, volume=1000,
+    )
+    emitted_on_cross = builder.on_bar(next_bar)
+
+    weekly_emissions = [b for b in emitted_on_cross if b.timeframe == "1w"]
+    assert len(weekly_emissions) == 1
+    monday_session_open = calendar.session_window(date(2026, 4, 20)).open_utc
+    assert weekly_emissions[0].timestamp == monday_session_open
+
+
+def test_weekly_bucket_handles_thanksgiving_short_week() -> None:
+    """A 4-session week (holiday Thursday + half-day Friday) still aggregates to one weekly bar."""
+    calendar = NYSECalendar()
+    builder = BarBuilder(symbol="SPY", timeframes=("1w",), calendar=calendar)
+
+    for day in (date(2025, 11, 24), date(2025, 11, 25), date(2025, 11, 26), date(2025, 11, 28)):
+        session = calendar.session_window(day)
+        assert session is not None
+        _feed_full_session(builder, session, bar_count=5)
+        builder.flush_at(session.close_utc)
+    next_session = calendar.session_window(date(2025, 12, 1))
+    assert next_session is not None
+    next_bar = NormalizedBar(
+        symbol="SPY", timeframe="1m", timestamp=next_session.open_utc,
+        open=200, high=200.5, low=199.5, close=200.2, volume=1000,
+    )
+    emitted = builder.on_bar(next_bar)
+
+    weekly_emissions = [b for b in emitted if b.timeframe == "1w"]
+    assert len(weekly_emissions) == 1
+    monday_session_open = calendar.session_window(date(2025, 11, 24)).open_utc
+    assert weekly_emissions[0].timestamp == monday_session_open
+
+
+def test_flush_at_is_active_when_calendar_present() -> None:
+    """With a calendar, flush_at emits all forming bars."""
+    calendar = NYSECalendar()
+    builder = BarBuilder(symbol="SPY", timeframes=("1h", "1d"), calendar=calendar)
+    session = calendar.session_window(date(2026, 4, 23))
+    assert session is not None
+
+    feed_until = session.close_utc - timedelta(minutes=30)
+    minute_count = int((feed_until - session.open_utc).total_seconds() // 60)
+    _feed_full_session(builder, session, bar_count=minute_count)
+
+    flushed = builder.flush_at(session.close_utc)
+    timeframes_flushed = {bar.timeframe for bar in flushed}
+    assert "1h" in timeframes_flushed
+    assert "1d" in timeframes_flushed
+
+
+def test_flush_at_emits_each_forming_bar_at_most_once() -> None:
+    """Calling flush_at twice in a row returns nothing the second time."""
+    calendar = NYSECalendar()
+    builder = BarBuilder(symbol="SPY", timeframes=("1d",), calendar=calendar)
+    session = calendar.session_window(date(2026, 4, 23))
+    assert session is not None
+    _feed_full_session(builder, session, bar_count=10)
+
+    first = builder.flush_at(session.close_utc)
+    second = builder.flush_at(session.close_utc + timedelta(seconds=1))
+    assert len(first) == 1
+    assert second == ()
+
+
+def test_registry_flush_at_returns_per_symbol_emitted_bars() -> None:
+    calendar = NYSECalendar()
+    registry = BarBuilderRegistry(timeframes=("1d",), calendar=calendar)
+    session = calendar.session_window(date(2026, 4, 23))
+    assert session is not None
+
+    for symbol in ("SPY", "AAPL"):
+        for index in range(5):
+            ts = session.open_utc + timedelta(minutes=index)
+            bar = NormalizedBar(
+                symbol=symbol, timeframe="1m", timestamp=ts,
+                open=100, high=101, low=99, close=100.5, volume=1000,
+            )
+            registry.feed(bar)
+
+    flushed = registry.flush_at(session.close_utc)
+    assert set(flushed.keys()) == {"SPY", "AAPL"}
+    for symbol_bars in flushed.values():
+        assert len(symbol_bars) == 1
+        assert symbol_bars[0].timeframe == "1d"
+
+
+def test_fixture_calendar_drives_daily_bucket_for_unit_tests() -> None:
+    """FixtureCalendar lets unit tests synthesize sessions deterministically."""
+    monday = date(2026, 4, 20)
+    sessions = {monday: regular_session(monday)}
+    cal = FixtureCalendar(sessions)
+    builder = BarBuilder(symbol="SPY", timeframes=("1d",), calendar=cal)
+
+    session = cal.session_window(monday)
+    assert session is not None
+    for index in range(60):
+        ts = session.open_utc + timedelta(minutes=index)
+        builder.on_bar(NormalizedBar(
+            symbol="SPY", timeframe="1m", timestamp=ts,
+            open=100, high=100.5, low=99.5, close=100.2, volume=1000,
+        ))
+    flushed = builder.flush_at(session.close_utc)
+    daily = [b for b in flushed if b.timeframe == "1d"]
+    assert len(daily) == 1
+    assert daily[0].timestamp == session.open_utc

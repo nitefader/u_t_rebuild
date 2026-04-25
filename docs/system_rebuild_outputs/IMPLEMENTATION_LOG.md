@@ -3707,3 +3707,49 @@ Verification:
 
 Commit:
 - pending.
+
+## 2026-04-25 12:58 ET - Slice 2B: Calendar-aware aggregation (Phase 2 §11.2)
+
+Task:
+- Phase 2 §11.2 calendar-aware aggregation: introduce a MarketCalendar Protocol with NYSECalendar and FixtureCalendar implementations; extend BarBuilder to support 4h, 1d, 1w with session-bounded bucketing; make flush_at active when calendar present.
+
+Files changed:
+- backend/app/features/calendar.py (new — MarketCalendar Protocol, NYSECalendar 2024-2026 holiday/half-day table, FixtureCalendar, regular_session/half_day_session helpers)
+- backend/app/features/bar_builder.py (4h via UTC wall-clock; 1d session-bounded; 1w ISO-week bucketing; active flush_at; weekly bars persist across session close)
+- backend/app/features/__init__.py (exports)
+- backend/tests/unit/features/test_calendar.py (new — 12 calendar tests)
+- backend/tests/unit/features/test_bar_builder.py (10 new 2B tests + adjusted 2A tests)
+
+Implemented:
+- MarketCalendar Protocol with is_session_day / session_window / previous_session / next_session.
+- NYSECalendar: hand-rolled 2024-2026 NYSE holidays + half-days. DST handled via explicit transition table (no zoneinfo / tzdata dependency on Windows). EDT ⇄ EST switches applied per-session: 09:30 ET → 13:30 UTC (EDT) or 14:30 UTC (EST); half-days close 13:00 ET.
+- FixtureCalendar: explicit date → SessionWindow map for unit-test determinism.
+- BarBuilder accepts optional calendar. 4h is intra-day (UTC wall-clock); 1d / 1w require calendar. Session timeframes raise BarBuilderError when calendar omitted.
+- 1d bucket = session_date; bar timestamp = session_open_utc. Daily volume = sum of in-session minutes (390 for full RTH, 210 for half-day).
+- 1w bucket = (iso_year, iso_week) of the session date; bar timestamp = first session_open_utc of the week. Bucket spans 4-session weeks (Thanksgiving short week verified).
+- flush_at(ts) emits forming intraday + 1d bars; weekly bars persist across session close and emit on bucket cross when next ISO week's first 1m bar arrives. Idempotent — second flush returns ().
+- BarBuilderRegistry.flush_at returns per-symbol emitted bars dict.
+
+Scope kept out:
+- Broker event stream + BrokerSync TradeLedger (slice 2C — money-path; review-gated).
+- Wiring BarBuilder output into IncrementalFeatureEngine.update (integration slice).
+- Calendar coverage past 2026 — swap to pandas_market_calendars / exchange_calendars when needed; the Protocol seam keeps that swap one-file.
+
+Validation performed:
+- python -m compileall -q backend/app backend/tests
+- python -m pytest backend/tests -q
+- cd frontend && npm.cmd run build
+- cd frontend && npm.cmd test
+
+Result:
+- compileall clean. Backend: 672 passed, 1 skipped (+26 vs 2A). Frontend: 37 passed. Build clean.
+
+Verification:
+- Feature Engine still does not call external providers.
+- Architecture-isolation lint stays green — calendar imports nothing from broker / market_data.alpaca / provider SDKs.
+- §16 "completed bars over forming bars" still mechanically enforced (forming accumulator never exposed publicly).
+- §11.2 calendar-aware aggregation: holiday skip, half-day handling, DST transitions, ISO-week boundaries all verified by tests.
+- No architecture boundaries violated.
+
+Commit:
+- pending.
