@@ -3130,3 +3130,71 @@ Validation results:
   - `cd frontend && npm.cmd run build`
   - `cd frontend && npm.cmd test`
 - Test results: compile passed; backend service tests passed `17 passed`; backend runtime tests passed `32 passed`; full backend tests passed `443 passed, 1 skipped`; frontend build passed; frontend tests passed `27 passed`.
+
+## 2026-04-24 22:42 ET
+
+Implemented the next Services Center UX pass requested for resolver-first decision visibility and safer service management interaction patterns.
+
+Files updated:
+- `frontend/services.html`
+- `frontend/src/api/services.js`
+- `frontend/src/servicesCenter.js`
+- `frontend/src/styles.css`
+- `frontend/tests/servicesCenter.test.mjs`
+- `docs/architecture/services_architecture.md` (no schema or backend routing changes in this pass)
+- `docs/system_rebuild_outputs/IMPLEMENTATION_LOG.md`
+
+Implementation:
+
+- Added decision-oriented service mode labels:
+  - `Auto (Recommended)`
+  - `Default (system default)`
+  - `Manual (explicit selection)`
+- Added an explicit Data Intent panel showing:
+  - consumer
+  - timeframe
+  - date range
+  - streaming required
+  - intraday required
+- Added resolver result rendering with:
+  - selected service summary
+  - human-readable explanation
+  - reason code
+  - rejected candidates (collapsible with per-candidate reasons)
+- Refined provider-aware service forms:
+  - Alpaca form shows mode, key, secret
+  - Yahoo form omits credential inputs and shows historical-only context
+  - AI form shows key input plus capability label (where applicable)
+- Added visible service decision context:
+  - status and validation metadata in cards
+  - last validated timestamp
+  - capability summary chips
+  - clear disabled-state styling and action prompts
+- Strengthened action safety messaging:
+  - confirmation for set-default replacement and default-disable warnings
+  - explicit explanation for blank versus replacement credential behavior
+- Updated resolver UX tests to cover selected/rejected display, mode labels, intent visibility, provider-aware field behavior, and no raw secret rendering.
+
+Scope kept out:
+
+- No live market-data streaming wiring.
+- No runtime trading wiring from Services Center.
+- No Broker Accounts merged into Services.
+- No frontend provider direct calls.
+- No FeatureEngine, SignalEngine, PortfolioGovernor, OrderManager, BrokerAdapter, or BrokerSync changes in this pass.
+- No runtime provider fallback / A/B routing.
+- No live trading behavior.
+
+Validation commands run:
+- `cd frontend && npm.cmd run build`
+- `cd frontend && npm.cmd test`
+- `python -m pytest backend/tests/unit/services -q`
+- `python -m pytest backend/tests -q`
+- `python -m compileall -q backend/app backend/tests`
+
+Validation results:
+- Frontend build: passed
+- Frontend tests: `29 passed`
+- Backend services tests: `17 passed`
+- Backend full suite: `443 passed, 1 skipped`
+- `python -m compileall -q backend/app backend/tests`: passed

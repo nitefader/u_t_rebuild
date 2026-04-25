@@ -304,6 +304,268 @@ dd {
   padding: 12px;
 }
 
+.services-shell {
+  --services-bg: #0b1020;
+  --services-elev: #121b2e;
+  --services-card: #151f34;
+  --services-border: #24314f;
+  --services-text: #dce4f5;
+  --services-subtle: #8a98b1;
+}
+
+.services-shell main,
+.services-shell .page-heading,
+.services-shell .state-strip,
+.services-shell .panel,
+.services-shell .detail-panel,
+.services-shell .alert-panel,
+.services-shell .loading-shell,
+.services-shell .record-card {
+  border-color: var(--services-border);
+}
+
+.services-shell {
+  background:
+    radial-gradient(circle at 20% -5%, #19335d 0%, transparent 28%),
+    radial-gradient(circle at 85% -8%, #152a53 0%, transparent 20%),
+    linear-gradient(180deg, #090d16, #0d1420 36%, #0b1020);
+  min-height: 100%;
+  color: var(--services-text);
+  padding-bottom: 36px;
+}
+
+.services-shell h1,
+.services-shell h2,
+.services-shell h3,
+.services-shell p,
+.services-shell dt,
+.services-shell dd {
+  color: var(--services-text);
+}
+
+.services-shell .eyebrow,
+.services-shell .state-strip span,
+.services-shell dt,
+.services-shell .empty,
+.services-shell .helper {
+  color: var(--services-subtle) !important;
+}
+
+.services-shell .panel,
+.services-shell .detail-panel,
+.services-shell .alert-panel,
+.services-shell .record-card,
+.services-shell .loading-shell {
+  background: var(--services-card);
+  border: 1px solid var(--services-border);
+  border-radius: 10px;
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.25);
+}
+
+.services-shell .state-strip article {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.03), rgba(255, 255, 255, 0.01));
+  border: 1px solid var(--services-border);
+  border-radius: 10px;
+}
+
+.services-shell .status {
+  background: rgba(255, 255, 255, 0.03);
+  border-color: rgba(255, 255, 255, 0.14);
+}
+
+.services-shell .service-form {
+  border: 1px dashed #304066;
+  border-radius: 10px;
+  padding: 10px;
+  margin-bottom: 12px;
+  animation: fadeIn 220ms ease;
+}
+
+.services-shell .service-row {
+  padding: 14px;
+  border-left: 3px solid transparent;
+}
+
+.services-shell .service-card {
+  margin-top: 0;
+  padding: 14px;
+}
+
+.services-shell .service-card.service-default {
+  border-left: 4px solid #4f8cff;
+}
+
+.services-shell .service-card.service-disabled {
+  border-color: rgba(255, 163, 99, 0.5);
+  opacity: 0.9;
+}
+
+.services-shell .service-card header {
+  gap: 8px;
+}
+
+.services-shell .service-row .status {
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  background: rgba(15, 20, 35, 0.45);
+  color: #e8efff;
+}
+
+.services-shell .service-row header {
+  align-items: flex-start;
+}
+
+.services-shell .service-header {
+  align-items: center;
+  display: flex;
+  gap: 10px;
+}
+
+.services-shell .service-icon {
+  align-items: center;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  display: inline-flex;
+  font-size: 12px;
+  gap: 6px;
+  padding: 5px 10px;
+  white-space: nowrap;
+}
+
+.services-shell .service-icon-market {
+  background: rgba(54, 133, 255, 0.18);
+}
+
+.services-shell .service-icon-ai {
+  background: rgba(114, 92, 255, 0.18);
+}
+
+.services-shell .service-flags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 8px 0 4px;
+}
+
+.services-shell .service-flag {
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 999px;
+  color: #e8efff;
+  font-size: 11px;
+  padding: 3px 9px;
+  text-transform: capitalize;
+}
+
+.services-shell .service-flag.flag-market,
+.services-shell .service-flag.flag-ai {
+  border-color: rgba(255, 255, 255, 0.22);
+}
+
+.services-shell .service-flag.flag-valid {
+  border-color: rgba(58, 184, 120, 0.5);
+  background: rgba(58, 184, 120, 0.14);
+  color: #9bf0bf;
+}
+
+.services-shell .service-flag.flag-invalid {
+  border-color: rgba(238, 95, 95, 0.5);
+  background: rgba(238, 95, 95, 0.12);
+  color: #ffcdcd;
+}
+
+.services-shell .service-flag.flag-disabled {
+  border-color: rgba(255, 163, 99, 0.5);
+  background: rgba(255, 163, 99, 0.12);
+  color: #ffd0a0;
+}
+
+.services-shell .service-flag.flag-default {
+  border-color: rgba(127, 191, 255, 0.5);
+  background: rgba(127, 191, 255, 0.13);
+  color: #bde0ff;
+}
+
+.services-shell .service-flag.flag-mode {
+  color: #d1f2ff;
+  border-color: rgba(255, 255, 255, 0.16);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.services-shell .service-workspace {
+  display: grid;
+  gap: 12px;
+}
+
+.services-shell .service-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.services-shell .service-mode-indicator {
+  border: 1px dashed rgba(255, 255, 255, 0.22);
+  border-radius: 8px;
+  color: var(--services-subtle);
+  padding: 10px;
+}
+
+.services-shell .service-guard-text {
+  display: grid;
+  gap: 8px;
+}
+
+.services-shell .manual-service-select {
+  display: grid;
+  gap: 6px;
+}
+
+.services-shell .manual-service-select select {
+  max-width: 520px;
+}
+
+.services-shell .service-form[data-visible="false"] {
+  display: none;
+}
+
+.services-shell .helper {
+  color: var(--services-subtle);
+  font-size: 11px;
+  margin-top: 2px;
+}
+
+.services-shell .segmented-control button,
+.services-shell button {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.17);
+  color: var(--services-text);
+}
+
+.services-shell .segmented-control button.active {
+  background: rgba(79, 140, 255, 0.2);
+  border-color: rgba(79, 140, 255, 0.7);
+  color: #dce9ff;
+}
+
+.services-shell .resolver-block,
+.services-shell .rejected-services,
+.services-shell .rejected-services ul {
+  background: rgba(11, 18, 34, 0.85);
+  border-color: var(--services-border);
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0.75;
+    transform: translateY(4px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
 .service-table,
 .chip-row {
   display: grid;

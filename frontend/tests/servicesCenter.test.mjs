@@ -72,6 +72,42 @@ test("Services Center renders summary cards, market data table, capabilities, an
   assert.doesNotMatch(html, /gsk_|new-secret|api-secret-value/);
 });
 
+test("Resolver panel shows decision modes and detected intent", () => {
+  const html = renderServicesCenter(
+    state({
+      activeResolverMode: "auto",
+      resolution: {
+        selection_mode: "auto",
+        intent: {
+          consumer: "backtest",
+          timeframe: "1d",
+          start_at: "2024-01-01T00:00:00Z",
+          end_at: "2025-01-01T00:00:00Z",
+          requires_streaming: false,
+          requires_intraday: false
+        },
+        selected_service_name: "Yahoo Historical",
+        provider: "yahoo",
+        reason_code: "selected_auto_best_fit",
+        explanation: "Selected because long-range historical data does not require streaming.",
+        rejected_candidates: [{ service_id: "alpaca-main", explanation: "compatible but not cheapest" }]
+      }
+    })
+  );
+
+  assert.match(html, /Auto \(Recommended\)/);
+  assert.match(html, /Default \(system default\)/);
+  assert.match(html, /Manual \(explicit selection\)/);
+  assert.match(html, /Detected Intent/);
+  assert.match(html, /consumer/i);
+  assert.match(html, /timeframe/i);
+  assert.match(html, /streaming required/i);
+  assert.match(html, /Selected Service/);
+  assert.match(html, /Yahoo Historical/);
+  assert.match(html, /selected_auto_best_fit/);
+  assert.match(html, /Rejected candidates \(1\)/);
+});
+
 test("Services Center renders AI table and provider-aware fields", () => {
   const html = renderServicesCenter(state({ activeTab: "ai" }));
 
@@ -82,14 +118,14 @@ test("Services Center renders AI table and provider-aware fields", () => {
   assert.match(html, /Set default/);
 });
 
-test("provider dropdown includes Alpaca credential fields and Yahoo option", () => {
-  const html = renderServicesCenter(state());
+test("provider dropdown supports context-aware market fields", () => {
+  const html = renderServicesCenter(state({ marketDataFormState: { provider: "yahoo", mode: "none", name: "", id: null } }));
 
   assert.match(html, /data-provider-select="market-data"/);
   assert.match(html, /option value="alpaca"/);
   assert.match(html, /option value="yahoo"/);
-  assert.match(html, /name="api_key"/);
-  assert.match(html, /name="api_secret"/);
+  assert.match(html, /historical data only \(no streaming\)/i);
+  assert.match(html, /option value="future"/);
 });
 
 test("Data Source Resolver panel displays selected service and rejected candidates", () => {
@@ -106,7 +142,34 @@ test("Data Source Resolver panel displays selected service and rejected candidat
 
   assert.match(html, /Selected Service/);
   assert.match(html, /Yahoo Historical/);
-  assert.match(html, /Rejected services \(1\)/);
+  assert.match(html, /Rejected candidates \(1\)/);
+});
+
+test("Disabled services are marked as disabled", () => {
+  const html = renderServicesCenter(
+    state({
+      marketData: {
+        services: [
+          {
+            id: marketId,
+            name: "Disabled Service",
+            provider: "alpaca",
+            mode: "paper",
+            status: "disabled",
+            is_default: false,
+            has_api_key: true,
+            has_api_secret: true,
+            capabilities: {},
+            validation_status: "disabled",
+            validation_message: "disabled by operator"
+          }
+        ]
+      }
+    })
+  );
+
+  assert.match(html, /service-disabled/);
+  assert.match(html, /disabled/);
 });
 
 test("Services API calls backend routes for validate, default, disable, and resolve", async () => {
