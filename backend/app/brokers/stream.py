@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 from collections.abc import Callable, Iterable
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
@@ -45,14 +46,27 @@ class AlpacaAccountStreamAdapter:
         self._normalizer = normalizer
 
     def subscribe(self, emit: Callable[[BrokerStreamEvent], None]) -> None:
+        """Subscribe to alpaca-py's TradingStream trade-update channel.
+
+        TradingStream exposes a single ``subscribe_trade_updates(handler)``
+        method and calls the handler as a coroutine. The trade-update
+        payload is the unified channel for order events, fills, and
+        embedded position/account snapshots — there are no separate
+        ``subscribe_account_updates`` / ``subscribe_position_updates``
+        hooks on alpaca-py.
+        """
         if self._stream_client is None:
             raise AlpacaBrokerError("missing_stream_client", "Alpaca stream client is required for streaming")
-        if hasattr(self._stream_client, "subscribe_trade_updates"):
-            self._stream_client.subscribe_trade_updates(lambda payload: self._emit_normalized(payload, emit))
-        if hasattr(self._stream_client, "subscribe_account_updates"):
-            self._stream_client.subscribe_account_updates(lambda payload: self._emit_normalized(payload, emit))
-        if hasattr(self._stream_client, "subscribe_position_updates"):
-            self._stream_client.subscribe_position_updates(lambda payload: self._emit_normalized(payload, emit))
+        if not hasattr(self._stream_client, "subscribe_trade_updates"):
+            raise AlpacaBrokerError(
+                "stream_client_missing_trade_updates",
+                "Alpaca stream client does not expose subscribe_trade_updates",
+            )
+
+        async def _handler(payload: object) -> None:
+            self._emit_normalized(payload, emit)
+
+        self._stream_client.subscribe_trade_updates(_handler)
 
     def normalize(self, payload: object) -> tuple[BrokerStreamEvent, ...]:
         data = self._response_to_dict(payload)
@@ -232,3 +246,40 @@ class BrokerStreamRouter:
 
     def attach(self, stream_adapter: AlpacaAccountStreamAdapter) -> None:
         stream_adapter.subscribe(self.route)
+
+
+class BrokerStreamRunner:
+    """Run an alpaca-py ``TradingStream`` in a background thread.
+
+    The synchronous orchestrator processes bars on the main thread; the
+    stream client runs its own asyncio event loop via ``run()`` (blocking).
+    This runner spawns the stream in a daemon thread so events flow into
+    ``BrokerStreamRouter.route`` while the main thread keeps working.
+    """
+
+    def __init__(self, stream_client: Any, *, name: str = "alpaca-trading-stream") -> None:
+        if not hasattr(stream_client, "run"):
+            raise BrokerAdapterError("stream_client_missing_run", "stream client must expose run()")
+        self._client = stream_client
+        self._name = name
+        self._thread: threading.Thread | None = None
+
+    def start(self) -> None:
+        if self._thread is not None:
+            return
+        self._thread = threading.Thread(target=self._client.run, daemon=True, name=self._name)
+        self._thread.start()
+
+    def stop(self, *, timeout: float = 5.0) -> None:
+        if hasattr(self._client, "stop"):
+            try:
+                self._client.stop()
+            except Exception:  # noqa: BLE001 - best-effort shutdown
+                pass
+        if self._thread is not None:
+            self._thread.join(timeout=timeout)
+            self._thread = None
+
+    @property
+    def is_running(self) -> bool:
+        return self._thread is not None and self._thread.is_alive()

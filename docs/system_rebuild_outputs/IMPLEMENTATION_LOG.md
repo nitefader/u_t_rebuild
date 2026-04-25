@@ -3849,3 +3849,48 @@ Verification:
 
 Commit:
 - pending.
+
+---
+
+## 2026-04-25 19:05 ET - Slice 2C-followup #2: Real Alpaca trade-update stream wiring
+
+Task:
+- Make the slice 2C BrokerStreamRouter pipe actually drivable by alpaca-py's TradingStream. Today's AlpacaAccountStreamAdapter.subscribe was shaped against an imagined SDK (subscribe_account_updates / subscribe_position_updates do not exist on TradingStream); fix it to register a single async trade-update handler. Add a TradingStream factory on AlpacaBrokerAdapter, an async-loop runner that drives the stream from a daemon thread, and an opt-in Saturday-driven paper-crypto integration test that exercises the full pipe.
+
+Files changed:
+- backend/app/brokers/stream.py (AlpacaAccountStreamAdapter.subscribe now registers one async handler on subscribe_trade_updates; added BrokerStreamRunner that runs the stream's blocking run() in a daemon thread)
+- backend/app/brokers/alpaca.py (added TradingStream import; refactored credential resolution into _resolve_credentials so build_trading_stream can reuse them; added build_trading_stream() factory)
+- backend/app/brokers/__init__.py (exports BrokerStreamRunner)
+- backend/tests/unit/brokers/test_broker_stream_router.py (5 new tests: trade-updates-only registration, missing-method rejection, async handler routing, build_trading_stream wiring, runner start/stop in daemon thread, runner rejects clients without run())
+- backend/tests/integration/test_alpaca_paper_crypto_stream.py (new — opt-in paper BTC/USD market-order → TradingStream → TradeLedger smoke test)
+
+Implemented:
+- AlpacaAccountStreamAdapter.subscribe collapsed from three subscriptions to one. Registers an async handler that forwards through self._emit_normalized; raises AlpacaBrokerError if the stream client does not expose subscribe_trade_updates.
+- AlpacaBrokerAdapter._resolve_credentials extracted; AlpacaBrokerAdapter now stores the resolved api_key/secret_key on the instance so build_trading_stream() can reuse them. Adapters constructed with a trading_client only (test fixture path) skip credential resolution; build_trading_stream() raises if no credentials are present.
+- AlpacaBrokerAdapter.build_trading_stream() returns alpaca.trading.stream.TradingStream(api_key, secret_key, paper=...). Always paper for BROKER_PAPER mode.
+- BrokerStreamRunner wraps a stream client (anything with run() and optional stop()) and drives it in a daemon thread. start() / stop() / is_running. stop() is best-effort and joins with a configurable timeout.
+- backend/tests/integration/test_alpaca_paper_crypto_stream.py is gated behind RUN_ALPACA_PAPER_CRYPTO_STREAM=1 plus the existing ALPACA_API_KEY / ALPACA_SECRET_KEY / ALPACA_BASE_URL env vars. It builds the full stack (OrderManager + BrokerSync + BrokerSyncService + TradeLedger + AlpacaAccountStreamAdapter + BrokerStreamRouter + BrokerStreamRunner), submits a tiny BTC/USD market-GTC order, waits up to 15 s for the fill event to arrive via the stream, and asserts the Trade landed in TradeLedger by client_order_id. Crypto chosen because it trades 24/7 — the test runs on weekends without waiting for equity hours.
+
+Scope kept out:
+- Equity stream-driven smoke test — paper SPY needs market hours; the same plumbing works against equities, the test just deliberately picks crypto so it can run any time.
+- Connecting BrokerStreamRunner to RuntimeOrchestrator lifecycle (orchestrator does not yet expose a "running" lifecycle that owns thread cleanup). Today the runner is started by whatever owns the orchestrator. A subsequent slice can move that ownership in.
+- Live (non-paper) wiring. AlpacaBrokerAdapter still rejects BROKER_LIVE.
+- Crypto-aware time_in_force translation in translate_order_request — for now, the integration test passes TimeInForce.GTC explicitly. Auto-promoting DAY → GTC on a crypto symbol is a follow-up if/when crypto becomes a first-class strategy target.
+
+Validation performed:
+- python -m compileall -q backend
+- python -m pytest backend/
+- cd frontend && npm.cmd run build
+- cd frontend && npm.cmd test
+
+Result:
+- compileall clean. Backend: 705 passed, 2 skipped (+6 unit tests vs the prior wiring pass; the 2 skips are this slice's opt-in crypto test plus the pre-existing read-only paper integration test). Frontend: 37 passed. Build clean.
+
+Verification:
+- AlpacaAccountStreamAdapter source still has no BrokerSync / BrokerSyncService / OrderLedger / TradeLedger references (slice 2C contract intact).
+- OrderManager source still has no submit_order token (slice 2C contract intact).
+- BrokerStreamRunner runs the stream client in a daemon thread; stop() invokes client.stop() best-effort and joins.
+- TradingStream is importable from alpaca.trading.stream (alpaca-py >= 0.13). adapter.build_trading_stream() returns one with paper=True for BROKER_PAPER.
+
+Commit:
+- pending.

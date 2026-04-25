@@ -163,7 +163,7 @@ def test_router_rejects_unknown_event() -> None:
 
 
 def test_router_can_attach_to_alpaca_stream_adapter() -> None:
-    """Adapter still emits via subscribe; router subscribes as the emit callback."""
+    """Stream adapter registers exactly one trade-updates handler with TradingStream."""
     service, router, manager = _service_and_router()
     manager.create_order(account_id=ACCOUNT_ID, execution_intent=_execution_intent())
 
@@ -173,13 +173,142 @@ def test_router_can_attach_to_alpaca_stream_adapter() -> None:
         def subscribe_trade_updates(self, cb):
             captured.append(cb)
 
-        def subscribe_account_updates(self, cb):
-            captured.append(cb)
-
-        def subscribe_position_updates(self, cb):
-            captured.append(cb)
-
     stream_adapter = AlpacaAccountStreamAdapter(account_id=ACCOUNT_ID, stream_client=FakeStream())
     router.attach(stream_adapter)
 
-    assert len(captured) == 3
+    assert len(captured) == 1
+    assert callable(captured[0])
+
+
+def test_stream_adapter_rejects_client_without_trade_updates() -> None:
+    import pytest as _pytest
+    from backend.app.brokers import AlpacaBrokerError
+
+    class IncompatibleStream:
+        pass
+
+    adapter = AlpacaAccountStreamAdapter(account_id=ACCOUNT_ID, stream_client=IncompatibleStream())
+    with _pytest.raises(AlpacaBrokerError):
+        adapter.subscribe(lambda event: None)
+
+
+def test_build_trading_stream_uses_adapter_credentials_and_paper_flag() -> None:
+    """build_trading_stream constructs a TradingStream with the same paper creds."""
+    import backend.app.brokers.alpaca as alpaca_module
+
+    captured: dict[str, object] = {}
+
+    class FakeTradingStream:
+        def __init__(self, *, api_key, secret_key, paper):  # type: ignore[no-untyped-def]
+            captured["api_key"] = api_key
+            captured["secret_key"] = secret_key
+            captured["paper"] = paper
+
+    class FakeTradingClient:
+        def __init__(self, *args, **kwargs) -> None:  # type: ignore[no-untyped-def]
+            pass
+
+    original_stream = alpaca_module.TradingStream
+    original_client = alpaca_module.TradingClient
+    alpaca_module.TradingStream = FakeTradingStream  # type: ignore[assignment]
+    alpaca_module.TradingClient = FakeTradingClient  # type: ignore[assignment]
+    try:
+        adapter = alpaca_module.AlpacaBrokerAdapter(api_key="K", secret_key="S", load_env=False)
+        stream = adapter.build_trading_stream()
+    finally:
+        alpaca_module.TradingStream = original_stream
+        alpaca_module.TradingClient = original_client
+
+    assert isinstance(stream, FakeTradingStream)
+    assert captured == {"api_key": "K", "secret_key": "S", "paper": True}
+
+
+def test_build_trading_stream_requires_credentials() -> None:
+    """A trading_client-only adapter (used in tests) cannot build a stream."""
+    from backend.app.brokers import AlpacaBrokerError
+    import backend.app.brokers.alpaca as alpaca_module
+    import pytest as _pytest
+
+    class FakeTradingClient:
+        pass
+
+    adapter = alpaca_module.AlpacaBrokerAdapter(trading_client=FakeTradingClient(), load_env=False)
+    with _pytest.raises(AlpacaBrokerError):
+        adapter.build_trading_stream()
+
+
+def test_broker_stream_runner_starts_and_stops_in_background_thread() -> None:
+    import time
+    from backend.app.brokers import BrokerStreamRunner
+
+    class BlockingStream:
+        def __init__(self) -> None:
+            self._stop = False
+            self.run_called = False
+            self.stop_called = False
+
+        def run(self) -> None:
+            self.run_called = True
+            while not self._stop:
+                time.sleep(0.005)
+
+        def stop(self) -> None:
+            self.stop_called = True
+            self._stop = True
+
+    stream = BlockingStream()
+    runner = BrokerStreamRunner(stream)
+
+    runner.start()
+    time.sleep(0.05)  # let the background thread enter run()
+    assert runner.is_running is True
+    assert stream.run_called is True
+
+    runner.stop(timeout=1.0)
+    assert stream.stop_called is True
+    assert runner.is_running is False
+
+
+def test_broker_stream_runner_rejects_clients_without_run() -> None:
+    import pytest as _pytest
+    from backend.app.brokers import BrokerAdapterError, BrokerStreamRunner
+
+    class IncompatibleClient:
+        pass
+
+    with _pytest.raises(BrokerAdapterError):
+        BrokerStreamRunner(IncompatibleClient())
+
+
+def test_stream_adapter_routes_async_handler_through_emit() -> None:
+    """The handler registered with TradingStream is async and forwards to emit."""
+    import asyncio
+
+    received: list[object] = []
+    stored: list = []
+
+    class FakeStream:
+        def subscribe_trade_updates(self, cb):
+            stored.append(cb)
+
+    adapter = AlpacaAccountStreamAdapter(account_id=ACCOUNT_ID, stream_client=FakeStream())
+    adapter.subscribe(received.append)
+
+    fake_payload = {
+        "event": "fill",
+        "price": "101.25",
+        "qty": "5",
+        "order": {
+            "id": "alpaca-1",
+            "client_order_id": "client-1",
+            "symbol": "BTC/USD",
+            "side": "buy",
+            "status": "filled",
+            "filled_qty": "5",
+            "filled_avg_price": "101.25",
+        },
+    }
+    handler = stored[0]
+    asyncio.run(handler(fake_payload))
+
+    assert len(received) == 2  # order_event + fill_event

@@ -41,6 +41,12 @@ except ImportError:  # pragma: no cover
     AlpacaTimeInForce = None  # type: ignore[assignment]
 
 
+try:  # pragma: no cover - TradingStream is part of alpaca-py too.
+    from alpaca.trading.stream import TradingStream
+except ImportError:  # pragma: no cover
+    TradingStream = None  # type: ignore[assignment]
+
+
 class AlpacaBrokerErrorDetails(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -110,7 +116,10 @@ class AlpacaBrokerAdapter:
         self.mode = mode
         self.base_url = self.endpoint_for_mode(mode)
         self.capabilities = AlpacaBrokerCapabilities()
-        self._client = trading_client or self._build_trading_client(api_key=api_key, secret_key=secret_key, load_env=load_env)
+        self._api_key, self._secret_key = self._resolve_credentials(
+            api_key=api_key, secret_key=secret_key, load_env=load_env, allow_missing=trading_client is not None
+        )
+        self._client = trading_client or self._build_trading_client()
 
     @classmethod
     def endpoint_for_mode(cls, mode: TradingMode) -> str:
@@ -358,17 +367,45 @@ class AlpacaBrokerAdapter:
             timestamp=self._optional_datetime(response.get("updated_at")) or utc_now(),
         )
 
-    def _build_trading_client(self, *, api_key: str | None = None, secret_key: str | None = None, load_env: bool) -> Any:
+    def _resolve_credentials(
+        self,
+        *,
+        api_key: str | None,
+        secret_key: str | None,
+        load_env: bool,
+        allow_missing: bool = False,
+    ) -> tuple[str | None, str | None]:
         if load_env:
             load_dotenv()
         api_key = api_key or os.getenv("ALPACA_API_KEY")
         secret_key = secret_key or os.getenv("ALPACA_SECRET_KEY")
-        if not api_key or not secret_key:
+        if not (api_key and secret_key) and not allow_missing:
             raise AlpacaBrokerError("missing_credentials", "ALPACA_API_KEY and ALPACA_SECRET_KEY are required")
+        return api_key, secret_key
+
+    def _build_trading_client(self) -> Any:
         if TradingClient is None:
             raise AlpacaBrokerError("missing_sdk", "alpaca-py is required for Alpaca BROKER_PAPER execution")
         kwargs: dict[str, object] = {"paper": self.mode == TradingMode.BROKER_PAPER}
-        return TradingClient(api_key, secret_key, **kwargs)  # type: ignore[misc,operator]
+        return TradingClient(self._api_key, self._secret_key, **kwargs)  # type: ignore[misc,operator]
+
+    def build_trading_stream(self) -> Any:
+        """Construct an alpaca-py ``TradingStream`` for this account.
+
+        TradingStream is a 24/7 push channel that emits trade-update events
+        whenever this account has order activity (accepted, fills, cancels,
+        replacements). It does not depend on equity market hours — paper
+        crypto orders submitted on a Saturday produce events immediately.
+        """
+        if TradingStream is None:
+            raise AlpacaBrokerError("missing_sdk", "alpaca-py is required for streaming")
+        if not (self._api_key and self._secret_key):
+            raise AlpacaBrokerError("missing_credentials", "API key and secret are required for TradingStream")
+        return TradingStream(  # type: ignore[misc,operator]
+            api_key=self._api_key,
+            secret_key=self._secret_key,
+            paper=self.mode == TradingMode.BROKER_PAPER,
+        )
 
     def _get_existing_order(self, order: InternalOrder) -> BrokerOrderResult | None:
         try:
