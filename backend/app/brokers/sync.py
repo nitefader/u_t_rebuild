@@ -183,19 +183,8 @@ class BrokerSync:
         *,
         max_stale_seconds: int = 30,
     ) -> BrokerSyncState:
-        snapshot_timestamp = _aware(account_snapshot.timestamp)
-        age = datetime.now(timezone.utc) - snapshot_timestamp
-        is_stale = age > timedelta(seconds=max_stale_seconds)
-        state = BrokerSyncState(
-            account_id=account_snapshot.account_id,
-            last_sync_at=snapshot_timestamp,
-            last_poll_sync_at=snapshot_timestamp,
-            last_successful_sync_at=None if is_stale else snapshot_timestamp,
-            is_stale=is_stale,
-            stale_reason=f"broker_snapshot_age_exceeded_{max_stale_seconds}s" if is_stale else None,
-        )
-        if self._runtime_store is not None and hasattr(self._runtime_store, "save_broker_sync_freshness"):
-            self._runtime_store.save_broker_sync_freshness(state)
+        state = _snapshot_freshness_state(account_snapshot, max_stale_seconds=max_stale_seconds)
+        _persist_sync_freshness(self._runtime_store, state)
         return state
 
     def mark_missing_broker_order(self, order: InternalOrder, *, reason: str = "recovery_missing_broker_order") -> InternalOrder:
@@ -593,9 +582,7 @@ class BrokerSyncService:
         self._runtime_store.save_broker_account_snapshot(snapshot)
 
     def _persist_sync_state(self, state: BrokerSyncState) -> None:
-        if self._runtime_store is None or not hasattr(self._runtime_store, "save_broker_sync_freshness"):
-            return
-        self._runtime_store.save_broker_sync_freshness(state)
+        _persist_sync_freshness(self._runtime_store, state)
 
     def _order_by_client_order_id(self, account_id: UUID, client_order_id: str) -> InternalOrder:
         for order in self._order_ledger.by_account(account_id):
@@ -634,3 +621,35 @@ def _aware(value: datetime) -> datetime:
     if value.tzinfo is None:
         return value.replace(tzinfo=timezone.utc)
     return value
+
+
+def _snapshot_freshness_state(
+    account_snapshot: BrokerAccountSnapshot,
+    *,
+    max_stale_seconds: int,
+) -> BrokerSyncState:
+    """Compute a ``BrokerSyncState`` for a one-shot snapshot freshness check.
+
+    Used by ``BrokerSync.record_sync_freshness`` for paths that do not own a
+    ``BrokerSyncService`` (initial broker validation, recovery orchestrator).
+    The reason format matches what ``BrokerSyncService.sync_state`` produces
+    when the snapshot is the latest truth, so downstream consumers see a
+    single ``broker_snapshot_age_exceeded_<n>s`` taxonomy.
+    """
+    snapshot_timestamp = _aware(account_snapshot.timestamp)
+    age = datetime.now(timezone.utc) - snapshot_timestamp
+    is_stale = age > timedelta(seconds=max_stale_seconds)
+    return BrokerSyncState(
+        account_id=account_snapshot.account_id,
+        last_sync_at=snapshot_timestamp,
+        last_poll_sync_at=snapshot_timestamp,
+        last_successful_sync_at=None if is_stale else snapshot_timestamp,
+        is_stale=is_stale,
+        stale_reason=f"broker_snapshot_age_exceeded_{max_stale_seconds}s" if is_stale else None,
+    )
+
+
+def _persist_sync_freshness(runtime_store: object | None, state: BrokerSyncState) -> None:
+    if runtime_store is None or not hasattr(runtime_store, "save_broker_sync_freshness"):
+        return
+    runtime_store.save_broker_sync_freshness(state)

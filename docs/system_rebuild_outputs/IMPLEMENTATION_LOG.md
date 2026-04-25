@@ -3753,3 +3753,56 @@ Verification:
 
 Commit:
 - pending.
+
+---
+
+## 2026-04-25 17:30 ET - Slice 2C: Broker truth (money path) (Phase 2 §11.4-5)
+
+Task:
+- Phase 2 §11.4-5 money-path slice: introduce a canonical TradeLedger / Trade model; route broker stream events into BrokerSyncService via a BrokerStreamRouter; gate OrderManager.create_order on stale broker sync for OPEN intents; consolidate the duplicated record_sync_freshness math.
+
+Files changed:
+- backend/app/orders/trade_ledger.py (new — Trade model + TradeLedger; idempotent by broker_execution_id; lookups by account/symbol/client_order_id/order_id)
+- backend/app/orders/__init__.py (exports Trade, TradeLedger)
+- backend/app/orders/manager.py (broker_sync_service kwarg; _enforce_broker_sync_freshness gates OPEN intents only; CLOSE/protective bypass)
+- backend/app/brokers/stream.py (new BrokerStreamRouter — single bridge from emit callback to BrokerSyncService.handle_*; AlpacaAccountStreamAdapter remains a pure normalizer)
+- backend/app/brokers/__init__.py (exports BrokerStreamRouter)
+- backend/app/brokers/sync.py (extract _snapshot_freshness_state and _persist_sync_freshness module helpers; BrokerSync.record_sync_freshness and BrokerSyncService._persist_sync_state share them)
+- backend/tests/unit/orders/test_trade_ledger.py (new — 6 tests)
+- backend/tests/unit/brokers/test_broker_stream_router.py (new — 5 tests)
+- backend/tests/unit/orders/test_order_manager.py (5 stale-sync gating tests appended)
+- backend/tests/unit/brokers/test_broker_sync_reconciliation.py (cumulative partial-fill test + per-execution trade ledger test appended)
+- backend/tests/integration/test_broker_truth_money_path_e2e.py (new — 3 tests pinning the money-path contract end-to-end)
+- backend/tests/unit/persistence/test_sqlite_persistence.py (test asserts on module source, not class source, since the persist call is now in a module helper)
+
+Implemented:
+- Trade is a frozen Pydantic model: trade_id, account_id, symbol, qty, price, side, client_order_id, broker_order_id, broker_execution_id, executed_at, optional internal order_id.
+- TradeLedger.record_fill(BrokerFillUpdateEvent, *, order_id=None) → Trade. Idempotent: when broker_execution_id is present, re-delivered events return the existing Trade unchanged.
+- BrokerStreamRouter.route(event) dispatches by event type to BrokerSyncService.handle_order_update / handle_fill_update / handle_position_update / handle_account_update; raises BrokerAdapterError on unsupported types. .attach(stream_adapter) subscribes the router as the stream's emit callback.
+- OrderManager.create_order accepts a broker_sync_service. When set and the resolved intent is OPEN, the manager checks current_sync_state(account_id).is_stale and raises OrderManagerError("broker_sync_stale:<reason>") before any ledger write. CLOSE / TAKE_PROFIT / STOP_LOSS / SCALE intents bypass the gate so positions remain exitable under sync loss.
+- Cumulative-fill semantics: PARTIAL_FILL stream events carry cumulative filled_quantity from the broker; BrokerSync.apply_result mirrors that progression onto the InternalOrder without double-counting.
+- record_sync_freshness math is now in one place: _snapshot_freshness_state for snapshot-only freshness and _persist_sync_freshness for the optional runtime-store write. Both BrokerSync.record_sync_freshness (initial validation, recovery orchestrator) and BrokerSyncService._persist_sync_state delegate.
+
+Scope kept out:
+- Connecting a real Alpaca trade-update WebSocket to the router in production wiring (still gated behind broker_accounts onboarding work).
+- Persisting trades through SQLiteTradeLedger in the broker stream path — that wiring lands when the runtime composition root migrates from the duck-typed slot.
+- Linking trades back to InternalOrder via order_id automatically — record_fill accepts order_id but the stream path currently passes None; resolution via BrokerOrderMapping is a follow-up.
+
+Validation performed:
+- python -m compileall -q backend
+- python -m pytest backend/
+- cd frontend && npm.cmd run build
+- cd frontend && npm.cmd test
+
+Result:
+- compileall clean. Backend: 694 passed, 1 skipped (+22 vs 2B). Frontend: 37 passed. Build clean.
+
+Verification:
+- AlpacaAccountStreamAdapter source still does not contain "OrderLedger", "TradeLedger", "BrokerSyncService", or "BrokerSync(" — stream adapter remains a pure normalizer (test_no_stream_adapter_direct_mutation_outside_broker_sync_service still green).
+- OrderManager source still does not contain "submit_order" — gate sits on create_order (test_no_external_calls still green).
+- §11.4 stale-sync block-gate: stale broker sync blocks new opens; CLOSE/protective intents pass through.
+- §11.4 cumulative partial fills: 0 → 4 → 7 → 10 progression on InternalOrder.filled_quantity, one Trade per broker_execution_id.
+- BrokerSync persistence-write authority preserved: only the brokers/sync.py module references save_broker_sync_freshness / save_broker_account_snapshot.
+
+Commit:
+- pending.

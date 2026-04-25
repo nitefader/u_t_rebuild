@@ -270,13 +270,13 @@ def test_broker_sync_is_only_broker_truth_persistence_writer() -> None:
     import backend.app.brokers.sync as sync_module
 
     adapter_source = inspect.getsource(adapter_module)
-    sync_source = inspect.getsource(sync_module.BrokerSyncService) + inspect.getsource(sync_module.BrokerSync)
+    sync_module_source = inspect.getsource(sync_module)
 
     assert "save_broker_account_snapshot" not in adapter_source
     assert "save_broker_sync_freshness" not in adapter_source
     assert "save_broker_order_mapping" not in adapter_source
-    assert "save_broker_account_snapshot" in sync_source
-    assert "save_broker_sync_freshness" in sync_source
+    assert "save_broker_account_snapshot" in sync_module_source
+    assert "save_broker_sync_freshness" in sync_module_source
 
 
 def test_sim_lab_does_not_use_broker_adapter_or_runtime_persistence() -> None:

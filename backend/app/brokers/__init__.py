@@ -23,7 +23,7 @@ from .models import (
     BrokerReconciliationReport,
     BrokerSyncState,
 )
-from .stream import AlpacaAccountStreamAdapter, BrokerStreamEvent
+from .stream import AlpacaAccountStreamAdapter, BrokerStreamEvent, BrokerStreamRouter
 from .sync import BrokerSync, BrokerSyncService
 
 __all__ = [
@@ -51,5 +51,6 @@ __all__ = [
     "BrokerSyncService",
     "BrokerSyncState",
     "BrokerStreamEvent",
+    "BrokerStreamRouter",
     "FakeBrokerAdapter",
 ]

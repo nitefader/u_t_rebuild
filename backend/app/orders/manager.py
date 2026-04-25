@@ -35,12 +35,14 @@ class OrderManager:
         ledger: OrderLedger | None = None,
         broker_adapter: Any | None = None,
         broker_sync: Any | None = None,
+        broker_sync_service: Any | None = None,
         control_plane: ControlPlane | None = None,
     ) -> None:
         self._ledger = ledger or OrderLedger()
         self._sequence_by_attribution: dict[tuple[UUID, UUID, UUID, InternalOrderIntent], int] = defaultdict(int)
         self._broker_adapter = broker_adapter
         self._broker_sync = broker_sync
+        self._broker_sync_service = broker_sync_service
         self._control_plane = control_plane or ControlPlane()
 
     @property
@@ -59,6 +61,7 @@ class OrderManager:
         if self._control_plane.system_recovery_active:
             raise OrderManagerError("system recovery is active; new order creation is blocked")
         intent = self._resolve_order_intent(execution_intent, order_intent)
+        self._enforce_broker_sync_freshness(account_id=account_id, intent=intent)
         sequence = self._next_sequence(
             account_id=account_id,
             deployment_id=execution_intent.deployment_id,
@@ -161,6 +164,22 @@ class OrderManager:
         synced = self._apply_broker_result(result)
         replaced = synced.model_copy(update={**updates, "updated_at": utc_now()})
         return self._ledger.replace(replaced)
+
+    def _enforce_broker_sync_freshness(
+        self,
+        *,
+        account_id: UUID,
+        intent: InternalOrderIntent,
+    ) -> None:
+        if self._broker_sync_service is None:
+            return
+        if intent != InternalOrderIntent.OPEN:
+            return
+        state = self._broker_sync_service.current_sync_state(account_id)
+        if not state.is_stale:
+            return
+        reason = state.stale_reason or "broker_sync_stale"
+        raise OrderManagerError(f"broker_sync_stale:{reason}")
 
     def _resolve_order_intent(
         self,

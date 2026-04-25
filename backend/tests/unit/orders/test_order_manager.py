@@ -273,3 +273,89 @@ def test_global_cancel_scope_affects_all_accounts() -> None:
     canceled = manager.request_cancel_scope(account_id=ACCOUNT_ID, scope="global")
 
     assert {order.order_id for order in canceled} == {first.order_id, second.order_id}
+
+
+# ---------------------------------------------------------------------------
+# Stale broker-sync gating (Phase 2 §11.4)
+# ---------------------------------------------------------------------------
+
+
+class _StubBrokerSyncService:
+    """Minimal duck-typed stand-in for BrokerSyncService.current_sync_state."""
+
+    def __init__(self, *, is_stale: bool, reason: str | None = None) -> None:
+        self._is_stale = is_stale
+        self._reason = reason
+        self.calls: list[UUID] = []
+
+    def current_sync_state(self, account_id: UUID):
+        self.calls.append(account_id)
+
+        class _State:
+            is_stale = self._is_stale
+            stale_reason = self._reason
+
+        return _State()
+
+
+def test_create_order_is_blocked_when_broker_sync_is_stale() -> None:
+    service = _StubBrokerSyncService(is_stale=True, reason="broker_truth_age_exceeded_30s")
+    manager = OrderManager(broker_sync_service=service)
+
+    with pytest.raises(OrderManagerError) as excinfo:
+        manager.create_order(account_id=ACCOUNT_ID, execution_intent=_execution_intent())
+
+    assert "broker_sync_stale" in str(excinfo.value)
+    assert "broker_truth_age_exceeded_30s" in str(excinfo.value)
+    assert service.calls == [ACCOUNT_ID]
+    assert manager.ledger.all() == ()
+
+
+def test_create_order_is_allowed_when_broker_sync_is_fresh() -> None:
+    service = _StubBrokerSyncService(is_stale=False)
+    manager = OrderManager(broker_sync_service=service)
+
+    order = manager.create_order(account_id=ACCOUNT_ID, execution_intent=_execution_intent())
+
+    assert order.intent == InternalOrderIntent.OPEN
+    assert service.calls == [ACCOUNT_ID]
+
+
+def test_stale_broker_sync_does_not_block_close_intents() -> None:
+    """Closes must remain available so positions can be exited under sync loss."""
+    service = _StubBrokerSyncService(is_stale=True, reason="broker_truth_age_exceeded_30s")
+    manager = OrderManager(broker_sync_service=service)
+
+    closed = manager.create_order(
+        account_id=ACCOUNT_ID,
+        execution_intent=_execution_intent(intent_type=IntentType.EXIT),
+    )
+
+    assert closed.intent == InternalOrderIntent.CLOSE
+
+
+def test_stale_broker_sync_does_not_block_protective_intents() -> None:
+    service = _StubBrokerSyncService(is_stale=True, reason="broker_truth_age_exceeded_30s")
+    manager = OrderManager(broker_sync_service=service)
+
+    sl = manager.create_order(
+        account_id=ACCOUNT_ID,
+        execution_intent=_execution_intent(),
+        order_intent=InternalOrderIntent.STOP_LOSS,
+    )
+    tp = manager.create_order(
+        account_id=ACCOUNT_ID,
+        execution_intent=_execution_intent(),
+        order_intent=InternalOrderIntent.TAKE_PROFIT,
+    )
+
+    assert sl.intent == InternalOrderIntent.STOP_LOSS
+    assert tp.intent == InternalOrderIntent.TAKE_PROFIT
+
+
+def test_create_order_skips_sync_check_when_no_service_provided() -> None:
+    manager = OrderManager()
+
+    order = manager.create_order(account_id=ACCOUNT_ID, execution_intent=_execution_intent())
+
+    assert order.intent == InternalOrderIntent.OPEN

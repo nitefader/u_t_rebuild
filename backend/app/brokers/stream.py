@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable
 from datetime import datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
 from backend.app.domain import TradingMode
@@ -11,12 +11,16 @@ from backend.app.domain._base import utc_now
 from .alpaca import AlpacaBrokerAdapter, AlpacaBrokerError
 from .models import (
     BrokerAccountSnapshot,
+    BrokerAdapterError,
     BrokerFillUpdateEvent,
     BrokerOrderStatus,
     BrokerOrderUpdateEvent,
     BrokerPositionSide,
     BrokerPositionSnapshot,
 )
+
+if TYPE_CHECKING:
+    from .sync import BrokerSyncService
 
 
 BrokerStreamEvent = BrokerOrderUpdateEvent | BrokerFillUpdateEvent | BrokerPositionSnapshot | BrokerAccountSnapshot
@@ -193,3 +197,38 @@ class AlpacaAccountStreamAdapter:
         if value is None:
             return None
         return str(value)
+
+
+class BrokerStreamRouter:
+    """Dispatch normalized broker stream events into ``BrokerSyncService``.
+
+    The stream adapter normalizes provider payloads into typed events and
+    emits them via ``subscribe(emit)``. The router is the single bridge
+    between that emit callback and ``BrokerSyncService.handle_*`` — keeping
+    stream adapters free of any reference to the sync service so the
+    AlpacaAccountStreamAdapter remains a pure normalizer.
+    """
+
+    def __init__(self, sync_service: "BrokerSyncService") -> None:
+        self._sync_service = sync_service
+
+    def __call__(self, event: BrokerStreamEvent) -> None:
+        self.route(event)
+
+    def route(self, event: BrokerStreamEvent) -> None:
+        if isinstance(event, BrokerOrderUpdateEvent):
+            self._sync_service.handle_order_update(event)
+            return
+        if isinstance(event, BrokerFillUpdateEvent):
+            self._sync_service.handle_fill_update(event)
+            return
+        if isinstance(event, BrokerPositionSnapshot):
+            self._sync_service.handle_position_update(event)
+            return
+        if isinstance(event, BrokerAccountSnapshot):
+            self._sync_service.handle_account_update(event)
+            return
+        raise BrokerAdapterError(f"unsupported broker stream event: {type(event).__name__}")
+
+    def attach(self, stream_adapter: AlpacaAccountStreamAdapter) -> None:
+        stream_adapter.subscribe(self.route)

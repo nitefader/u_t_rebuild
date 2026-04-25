@@ -495,3 +495,86 @@ def test_no_stream_adapter_direct_mutation_outside_broker_sync_service() -> None
     assert "TradeLedger" not in source
     assert "BrokerSyncService" not in source
     assert "BrokerSync(" not in source
+
+
+def test_partial_fill_stream_events_accumulate_filled_quantity() -> None:
+    """Two partial fills then a full fill move filled_quantity 0 → 4 → 7 → 10.
+
+    The broker delivers cumulative ``filled_quantity`` on each
+    ``BrokerOrderUpdateEvent`` and the internal order must mirror that
+    progression, never decreasing or double-counting.
+    """
+    manager, order = _manager_and_order()
+    service = BrokerSyncService(
+        adapter=ReconciliationAdapter(),
+        broker_sync=BrokerSync(ledger=manager.ledger),
+        order_ledger=manager.ledger,
+    )
+
+    progress: list[float] = []
+    for cumulative_filled, status in (
+        (4.0, BrokerOrderStatus.PARTIAL_FILL),
+        (7.0, BrokerOrderStatus.PARTIAL_FILL),
+        (10.0, BrokerOrderStatus.FILLED),
+    ):
+        service.handle_order_update(
+            BrokerOrderUpdateEvent(
+                account_id=ACCOUNT_ID,
+                client_order_id=order.client_order_id,
+                status=status,
+                broker_order_id=f"broker-{order.client_order_id}",
+                broker_status=status.value,
+                filled_quantity=cumulative_filled,
+                filled_avg_price=100,
+                remaining_quantity=order.quantity - cumulative_filled,
+            )
+        )
+        progress.append(manager.ledger.get(order.order_id).filled_quantity)
+
+    assert progress == [4.0, 7.0, 10.0]
+    final = manager.ledger.get(order.order_id)
+    assert final.status == InternalOrderStatus.FILLED
+    assert final.filled_quantity == order.quantity
+
+
+def test_partial_fill_stream_events_record_each_execution_in_trade_ledger() -> None:
+    """Each fill stream event lands as one ``Trade`` entry, idempotent by execution id."""
+    from backend.app.orders import TradeLedger
+
+    trade_ledger = TradeLedger()
+    service = BrokerSyncService(
+        adapter=ReconciliationAdapter(),
+        broker_sync=BrokerSync(ledger=OrderManager().ledger),
+        order_ledger=OrderManager().ledger,
+        trade_ledger=trade_ledger,
+    )
+
+    fills = [
+        BrokerFillUpdateEvent(
+            account_id=ACCOUNT_ID,
+            client_order_id="client-1",
+            symbol="SPY",
+            qty=4,
+            price=100,
+            side="buy",
+            broker_execution_id="exec-1",
+        ),
+        BrokerFillUpdateEvent(
+            account_id=ACCOUNT_ID,
+            client_order_id="client-1",
+            symbol="SPY",
+            qty=3,
+            price=101,
+            side="buy",
+            broker_execution_id="exec-2",
+        ),
+    ]
+    for fill in fills:
+        service.handle_fill_update(fill)
+    # Re-deliver to verify idempotency.
+    service.handle_fill_update(fills[0])
+
+    trades = trade_ledger.all()
+    assert len(trades) == 2
+    assert {trade.broker_execution_id for trade in trades} == {"exec-1", "exec-2"}
+    assert sum(trade.qty for trade in trades) == 7
