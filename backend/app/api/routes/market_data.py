@@ -181,79 +181,101 @@ class BootstrapFromEnvResponse(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     created_service: bool
-    created_pipeline: bool
     skipped_reason: str | None = None
     service: MarketDataServiceRecord | None = None
-    pipeline: MarketDataPipeline | None = None
 
 
 @router.post("/bootstrap-from-env", response_model=BootstrapFromEnvResponse)
 def bootstrap_from_env(
     catalog: CatalogDependency,
-    pipelines: PipelineDependency,
 ) -> BootstrapFromEnvResponse:
+    """Register the Alpaca env credentials as a Market Data Service.
+
+    Per DE round-2 verdict: bootstrap-from-env now only creates the
+    *credential* (Service). Pipeline creation is an explicit operator
+    action (POST ``/pipelines/from-service``) so the operator chooses
+    feed and trading mode for each stream they want to subscribe to,
+    rather than getting an opaque default pipeline as a side-effect.
+    """
     api_key = os.getenv("ALPACA_API_KEY")
     api_secret = os.getenv("ALPACA_SECRET_KEY")
     if not api_key or not api_secret:
         return BootstrapFromEnvResponse(
             created_service=False,
-            created_pipeline=False,
             skipped_reason="missing_credentials",
         )
 
-    # Dedup by (provider, credentials hash). If the operator already has an
-    # Alpaca service registered with these exact env credentials (under any
-    # name), reuse it rather than creating a second record. The catalog
-    # itself enforces this; we mirror it here so the response correctly
-    # reports `created_service=False`.
     from backend.app.market_data.catalog import _credential_ref  # local helper
     candidate_ref = _credential_ref(api_key)
     existing_alpaca = catalog.find_by_credentials(Provider.ALPACA, candidate_ref)
     if existing_alpaca is not None:
-        service = existing_alpaca
-        created_service = False
-    else:
-        try:
-            service = catalog.create_service(
-                MarketDataServiceWrite(
-                    name="Alpaca (from .env)",
-                    provider=Provider.ALPACA,
-                    api_key=api_key,
-                    api_secret=api_secret,
-                )
-            )
-            created_service = True
-        except MarketDataCatalogError as exc:
-            raise _operator_error(str(exc)) from exc
+        return BootstrapFromEnvResponse(
+            created_service=False,
+            service=existing_alpaca,
+        )
 
-    existing_pipelines = pipelines.list_pipelines().pipelines
-    existing_alpaca_pipeline = next(
-        (p for p in existing_pipelines if p.provider == Provider.ALPACA),
-        None,
-    )
-    if existing_alpaca_pipeline is not None:
-        pipeline = existing_alpaca_pipeline
-        created_pipeline = False
-    else:
-        try:
-            pipeline = pipelines.create_pipeline(
-                MarketDataPipelineWrite(
-                    display_name="Alpaca paper market data",
-                    provider=Provider.ALPACA,
-                    trading_mode=TradingMode.BROKER_PAPER,
-                )
+    try:
+        service = catalog.create_service(
+            MarketDataServiceWrite(
+                name="Alpaca (from .env)",
+                provider=Provider.ALPACA,
+                api_key=api_key,
+                api_secret=api_secret,
             )
-            created_pipeline = True
-        except PipelineRegistryError as exc:
-            raise _operator_error(str(exc)) from exc
+        )
+    except MarketDataCatalogError as exc:
+        raise _operator_error(str(exc)) from exc
 
     return BootstrapFromEnvResponse(
-        created_service=created_service,
-        created_pipeline=created_pipeline,
-        skipped_reason=None,
+        created_service=True,
         service=service,
-        pipeline=pipeline,
     )
+
+
+# ---------------------------------------------------------------------------
+# Pipelines from a Service (R2-B explicit action)
+# ---------------------------------------------------------------------------
+
+
+class CreatePipelineFromServiceRequest(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    service_id: UUID
+    trading_mode: TradingMode | None = None
+    data_feed: str = "iex"
+    display_name: str | None = None
+
+
+@router.post("/pipelines/from-service", response_model=MarketDataPipeline)
+def create_pipeline_from_service(
+    request: CreatePipelineFromServiceRequest,
+    catalog: CatalogDependency,
+    pipelines: PipelineDependency,
+) -> MarketDataPipeline:
+    """Activate a Service as a streaming subscription (Pipeline).
+
+    Replaces the implicit Pipeline creation that bootstrap-from-env used
+    to do. The operator picks feed + mode explicitly. The
+    ``(service_id, trading_mode, data_feed)`` invariant in the registry
+    rejects creating a duplicate active pipeline for the same identity.
+    """
+    try:
+        service = catalog.get_service(request.service_id)
+    except KeyError as exc:
+        raise _operator_error(f"unknown service: {request.service_id}") from exc
+
+    display_name = request.display_name or f"{service.name} · {request.data_feed}"
+    write = MarketDataPipelineWrite(
+        display_name=display_name,
+        provider=service.provider,
+        service_id=request.service_id,
+        data_feed=request.data_feed,
+        trading_mode=request.trading_mode,
+    )
+    try:
+        return pipelines.create_pipeline(write)
+    except PipelineRegistryError as exc:
+        raise _operator_error(str(exc)) from exc
 
 
 def _operator_error(message: str) -> Exception:
