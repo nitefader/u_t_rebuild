@@ -3,7 +3,12 @@ import { fileURLToPath } from "node:url";
 import { join } from "node:path";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
-const forbiddenImportPattern = /from\s+["'][^"']*(backend|brokers?|alpaca|orderManager|OrderManager|brokerSync|BrokerSync|featureEngine|FeatureEngine|signalEngine|SignalEngine)[^"']*["']/;
+// Block frontend imports of backend Python modules. Requires a path
+// separator before the suspect word and a path separator or closing
+// quote after, so that local UI modules like ``./brokers.js`` and
+// ``./api/brokerAccounts.js`` (which are frontend code, not backend)
+// are not flagged.
+const forbiddenImportPattern = /from\s+["'][^"']*\/(backend|brokers?|alpaca|orderManager|OrderManager|brokerSync|BrokerSync|featureEngine|FeatureEngine|signalEngine|SignalEngine)[\/'"]/;
 
 async function collectFiles(dir) {
   const entries = await readdir(dir, { withFileTypes: true });

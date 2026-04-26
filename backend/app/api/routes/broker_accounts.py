@@ -6,8 +6,10 @@ from typing import Annotated
 from uuid import UUID
 
 from backend.app.broker_accounts.models import (
+    BrokerAccount,
     BrokerAccountCredentialUpdateResponse,
     BrokerAccountDeletionResponse,
+    BrokerAccountListResponse,
     BrokerAccountResponse,
     CreateAlpacaPaperBrokerAccountRequest,
     DeleteBrokerAccountRequest,
@@ -49,6 +51,12 @@ else:
 BrokerAccountServiceDependency = Annotated[Any, _dependency(get_broker_account_service)]
 
 
+@router.get("", response_model=BrokerAccountListResponse)
+def list_broker_accounts(service: BrokerAccountServiceDependency) -> BrokerAccountListResponse:
+    accounts = _list_accounts(service)
+    return BrokerAccountListResponse(accounts=tuple(accounts))
+
+
 @router.post("/alpaca-paper", response_model=BrokerAccountResponse)
 def create_alpaca_paper_broker_account(
     request: CreateAlpacaPaperBrokerAccountRequest,
@@ -62,7 +70,42 @@ def create_alpaca_paper_broker_account(
         )
     except BrokerAccountCreationError as exc:
         raise _operator_error(str(exc)) from exc
+    # Per the runtime architecture spec: every Account's Broker Trade
+    # Update Stream starts at boot OR right after creation, regardless
+    # of Deployments. Auto-start the dispatcher for the new account so
+    # the system doesn't wait for an operator restart.
+    _ensure_trade_stream_started(result.account.id)
     return BrokerAccountResponse(account=result.account, already_exists=result.already_exists)
+
+
+def _list_accounts(service: Any) -> tuple[BrokerAccount, ...]:
+    """Pull accounts from whichever surface is available on the service.
+
+    Real BrokerAccountService delegates to ``runtime_store.list_broker_accounts``;
+    test stubs may expose either method directly.
+    """
+    if hasattr(service, "list_broker_accounts"):
+        return tuple(service.list_broker_accounts())
+    runtime_store = getattr(service, "_runtime_store", None)
+    if runtime_store is not None and hasattr(runtime_store, "list_broker_accounts"):
+        return tuple(runtime_store.list_broker_accounts())
+    return ()
+
+
+def _ensure_trade_stream_started(account_id: UUID) -> None:
+    """Start a per-Account trade dispatcher, if one isn't already running.
+
+    Best-effort: failures during dispatcher construction are surfaced via
+    the dispatcher's ``last_error`` (visible on /api/v1/system/streams)
+    rather than crashing the create-account request.
+    """
+    try:
+        from backend.app.runtime.runtime_context import trade_dispatcher_registry
+
+        dispatcher = trade_dispatcher_registry().get_or_create(account_id)
+        dispatcher.start()
+    except Exception:  # noqa: BLE001 - best effort
+        pass
 
 
 @router.put("/{account_id}/alpaca-paper/credentials", response_model=BrokerAccountCredentialUpdateResponse)

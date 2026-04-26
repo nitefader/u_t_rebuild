@@ -146,42 +146,15 @@ function renderGovernorDecisions(decisions = []) {
     .join("")}</ul>`;
 }
 
-function renderAccountSetupPanel(detailState = {}) {
-  const status = detailState.accountSetup;
-  return `<section class="panel">
-    <header><h2>Add Alpaca Paper Account</h2></header>
-    <form class="account-form" data-form="alpaca-paper-account">
-      <label>
-        <span>Display name</span>
-        <input name="display_name" autocomplete="off" required>
-      </label>
-      <label>
-        <span>API key</span>
-        <input name="api_key" autocomplete="off" required>
-      </label>
-      <label>
-        <span>API secret</span>
-        <input name="api_secret" type="password" autocomplete="off" required>
-      </label>
-      <fieldset>
-        <legend>Account Type</legend>
-        <label class="checkbox-label">
-          <input type="checkbox" checked disabled>
-          <span>Paper (safe testing)</span>
-        </label>
-      </fieldset>
-      <button type="submit">Validate and add account</button>
-    </form>
-    ${status === "loading" ? `<p class="notice">Validating Alpaca paper credentials and syncing broker truth.</p>` : ""}
-    ${status === "error" ? `<p class="warning" role="alert">${escapeHtml(detailState.accountSetupError || "Account setup failed.")}</p>` : ""}
-    ${status === "success" ? `<p class="notice">Alpaca paper account added and synced.</p>` : ""}
-    ${status === "duplicate" ? `<p class="notice">This Alpaca paper account is already registered.</p>` : ""}
-  </section>`;
+function renderAccountSetupPanel(_detailState = {}) {
+  // Account creation lives on the dedicated Brokers page now —
+  // Operations Center only shows runtime state, not credential setup.
+  return "";
 }
 
 function renderAccounts(accounts = [], selection = null) {
   if (!accounts.length) {
-    return `<p class="empty">No broker accounts are registered in the Operations API.</p>`;
+    return `<p class="empty">No broker accounts registered. Go to <a href="./brokers.html">Brokers</a> to add one.</p>`;
   }
 
   return `<div class="summary-grid">${accounts

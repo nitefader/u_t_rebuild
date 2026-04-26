@@ -8,6 +8,7 @@ export default defineConfig({
         main: resolve(__dirname, "index.html"),
         providers: resolve(__dirname, "providers.html"),
         chart_lab: resolve(__dirname, "chart_lab.html"),
+        brokers: resolve(__dirname, "brokers.html"),
         settings: resolve(__dirname, "settings.html")
       }
     }

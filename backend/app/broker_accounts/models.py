@@ -63,6 +63,12 @@ class BrokerAccountResponse(BaseModel):
     already_exists: bool = False
 
 
+class BrokerAccountListResponse(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    accounts: tuple[BrokerAccount, ...] = ()
+
+
 class ReplaceAlpacaPaperBrokerAccountCredentialsRequest(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 

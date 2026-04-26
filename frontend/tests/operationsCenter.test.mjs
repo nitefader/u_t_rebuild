@@ -229,14 +229,15 @@ test("alpaca paper account creation uses broker account API without URL input", 
   assert.ok(!("base_url" in calls[0][2]));
 });
 
-test("account setup UI is paper only and does not ask for API URLs", () => {
+test("Operations Center no longer renders the account setup form", () => {
+  // Per the latest UI refinement, account creation is owned by the
+  // dedicated Brokers page (brokers.html). Operations Center shows
+  // runtime state only.
   const html = renderOperationsCenterOverview(overview());
 
-  assert.match(html, /Add Alpaca Paper Account/);
-  assert.match(html, /Paper \(safe testing\)/);
-  assert.match(html, /name="api_key"/);
-  assert.match(html, /name="api_secret"/);
-  assert.doesNotMatch(html, /base_url|base url|endpoint|environment URL|api endpoint/i);
+  assert.doesNotMatch(html, /Add Alpaca Paper Account/);
+  assert.doesNotMatch(html, /name="api_key"/);
+  assert.doesNotMatch(html, /name="api_secret"/);
 });
 
 test("credential replacement and account deletion use broker account API without exposing secrets", async () => {
@@ -257,9 +258,8 @@ test("credential replacement and account deletion use broker account API without
   assert.deepEqual(calls[1][2], { confirm_display_name: "Paper", confirm_mode: "BROKER_PAPER" });
 });
 
-test("duplicate account setup message renders while existing account is selected", () => {
+test("account selection still highlights the chosen card on Operations Center", () => {
   const html = renderOperationsCenterOverview(overview(), {
-    accountSetup: "duplicate",
     status: "loaded",
     selection: { type: "account", id: accountId },
     data: {
@@ -274,7 +274,6 @@ test("duplicate account setup message renders while existing account is selected
     }
   });
 
-  assert.match(html, /This Alpaca paper account is already registered\./);
   assert.match(html, /selected-card/);
   assert.equal((html.match(/data-select-type="account"/g) || []).length, 1);
 });
@@ -513,7 +512,10 @@ test("unknown broker state renders as unknown stale", () => {
 test("UI does not import broker, engine, or order internals", async () => {
   const root = fileURLToPath(new URL("../src", import.meta.url));
   const files = await collectSourceFiles(root);
-  const forbiddenImportPattern = /from\s+["'][^"']*(backend|brokers?|alpaca|OrderManager|BrokerSync|FeatureEngine|SignalEngine)[^"']*["']/;
+  // Pattern aligns with scripts/check-frontend.mjs — requires a path
+  // separator before the forbidden token so local UI modules like
+  // ./brokers.js (frontend) don't false-positive.
+  const forbiddenImportPattern = /from\s+["'][^"']*\/(backend|brokers?|alpaca|OrderManager|BrokerSync|FeatureEngine|SignalEngine)[\/'"]/;
 
   for (const file of files) {
     const source = await readFile(file, "utf8");

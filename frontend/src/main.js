@@ -1,3 +1,4 @@
+import { createBrokerAccountsApi } from "./api/brokerAccounts.js";
 import { createChartLabApi } from "./api/chartLab.js";
 import { createOperationsApi } from "./api/operations.js";
 import { createOperationsTradeStreamApi } from "./api/operationsTradeStream.js";
@@ -7,6 +8,7 @@ import { createSystemSettingsApi } from "./api/systemSettings.js";
 import { createSystemStatusApi } from "./api/systemStatus.js";
 import { createSystemStreamsApi } from "./api/systemStreams.js";
 import { mountSystemStatusBadge } from "./appShell.js";
+import { mountBrokers } from "./brokers.js";
 import { mountChartLab } from "./chartLab.js";
 import { mountOperationsCenter } from "./operationsCenter.js";
 import { mountOperationsTradeStream } from "./operationsTradeStream.js";
@@ -19,6 +21,7 @@ const operationsStreamsRoot = document.querySelector("#operations-streams");
 const operationsTradeStreamRoot = document.querySelector("#operations-trade-stream");
 const providersRoot = document.querySelector("#providers");
 const chartLabRoot = document.querySelector("#chart-lab");
+const brokersRoot = document.querySelector("#brokers");
 const settingsRoot = document.querySelector("#settings");
 const statusBadgeRoot = document.querySelector("[data-system-status]");
 
@@ -48,6 +51,10 @@ if (providersRoot) {
     servicesApi: createServicesApi(),
     systemStatusApi: createSystemStatusApi()
   });
+}
+
+if (brokersRoot) {
+  mountBrokers(brokersRoot, createBrokerAccountsApi());
 }
 
 if (chartLabRoot) {
