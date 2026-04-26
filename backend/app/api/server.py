@@ -22,6 +22,7 @@ from backend.app.api.routes import (
     ai,
     broker_accounts,
     chart_lab,
+    manual_trade,
     market_data,
     operations,
     operations_trade_stream,
@@ -43,7 +44,10 @@ def _bootstrap_streams() -> None:  # pragma: no cover
     - One Broker Trade Update Stream is started per configured Account,
       regardless of whether any Deployments have subscribed yet.
     """
-    from backend.app.runtime.runtime_context import bootstrap_streams
+    from backend.app.runtime.runtime_context import (
+        bootstrap_manual_trade_composition,
+        bootstrap_streams,
+    )
 
     result = bootstrap_streams()
     import logging
@@ -52,6 +56,13 @@ def _bootstrap_streams() -> None:  # pragma: no cover
         len(result["started_account_ids"]),
         len(result["skipped"]),
         result["total_accounts_seen"],
+    )
+    manual_result = bootstrap_manual_trade_composition()
+    logging.getLogger("backend.app.api.server").info(
+        "manual-trade bootstrap: registered=%d skipped=%d seen=%d",
+        len(manual_result["registered_account_ids"]),
+        len(manual_result["skipped"]),
+        manual_result["total_accounts_seen"],
     )
 
 
@@ -67,6 +78,7 @@ app.include_router(system_settings.router)
 app.include_router(system_streams.router)
 app.include_router(system_migration.router)
 app.include_router(broker_accounts.router)
+app.include_router(manual_trade.router)
 app.include_router(operations.router)
 app.include_router(operations_trade_stream.router)
 app.include_router(market_data.router)

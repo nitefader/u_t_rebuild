@@ -18,6 +18,7 @@ from backend.app.domain import (
     StrategyControlsVersion,
     StrategyVersion,
     TimeInForce,
+    TradingMode,
     UniverseSnapshot,
     UniverseSymbol,
 )
@@ -355,7 +356,7 @@ def test_full_pipeline_governor_order_manager_alpaca_adapter_broker_sync(monkeyp
     monkeypatch.setattr(alpaca_module, "MarketOrderRequest", FakeAlpacaOrderRequest)
     components = _components()
     client = PipelineAlpacaClient()
-    adapter = AlpacaBrokerAdapter(trading_client=client, load_env=False)
+    adapter = AlpacaBrokerAdapter(mode=TradingMode.BROKER_PAPER, trading_client=client)
     governor = CountingGovernor()
     pipeline = _orchestrator(components=components, governor=governor, broker_adapter=adapter)  # type: ignore[arg-type]
 
@@ -374,7 +375,7 @@ def test_full_pipeline_governor_order_manager_alpaca_adapter_broker_sync(monkeyp
 def test_full_pipeline_does_not_submit_when_governor_blocks_with_real_adapter(monkeypatch) -> None:
     monkeypatch.setattr(alpaca_module, "MarketOrderRequest", FakeAlpacaOrderRequest)
     client = PipelineAlpacaClient()
-    adapter = AlpacaBrokerAdapter(trading_client=client, load_env=False)
+    adapter = AlpacaBrokerAdapter(mode=TradingMode.BROKER_PAPER, trading_client=client)
     pipeline = _orchestrator(
         governor=PortfolioGovernor(GovernorPolicy(global_kill_active=True)),
         broker_adapter=adapter,  # type: ignore[arg-type]

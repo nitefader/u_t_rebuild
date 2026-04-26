@@ -44,19 +44,54 @@ function makeDocument() {
 
 
 function makeApi(accounts) {
-  const calls = { list: 0, create: 0 };
+  const calls = { list: 0, create: 0, pause: [], resume: [], flatten: [] };
   return {
     calls,
     async list() {
       calls.list++;
       return { accounts };
     },
-    async createAlpacaPaper(payload) {
+    async create(payload) {
       calls.create++;
       return { account: { ...payload, id: "new-id", mode: "BROKER_PAPER" }, already_exists: false };
     },
     async replaceAlpacaPaperCredentials() { return {}; },
-    async deleteAccount() { return { status: "ARCHIVED" }; }
+    async deleteAccount() { return { status: "ARCHIVED" }; },
+    async pauseAccount(id, reason) { calls.pause.push([id, reason]); return { accepted: true }; },
+    async resumeAccount(id, reason) { calls.resume.push([id, reason]); return { accepted: true }; },
+    async flattenAccount(id, reason) { calls.flatten.push([id, reason]); return { accepted: true, scope: "account" }; }
+  };
+}
+
+function makeManualTradeApi() {
+  const calls = { submit: [], cancel: [], list: [] };
+  return {
+    calls,
+    makeIdempotencyKey() { return "test-key-1234"; },
+    async submit(accountId, payload) {
+      calls.submit.push([accountId, payload]);
+      return {
+        order_id: "00000000-0000-4000-8000-aaaaaaaaaaaa",
+        client_order_id: `manual-${accountId.slice(0, 8)}-open-deadbeef`,
+        account_id: accountId,
+        symbol: payload.symbol,
+        side: payload.side,
+        quantity: payload.qty,
+        filled_quantity: 0,
+        status: "accepted",
+        intent: payload.intent || "open",
+        submitted_at: "2026-04-26T16:00:00Z",
+        duplicate: false
+      };
+    },
+    async cancel(accountId, orderId) {
+      calls.cancel.push([accountId, orderId]);
+      return { order_id: orderId, status: "canceled", no_op: false, filled_quantity: 0 };
+    },
+    async list(accountId) {
+      calls.list.push(accountId);
+      return { orders: [] };
+    }
   };
 }
 
@@ -111,12 +146,34 @@ test("Brokers page surfaces stale-sync flag", async () => {
 });
 
 
+test("Brokers page mounts manual trade API when provided", async () => {
+  setupGlobals();
+  const root = makeRoot();
+  const account = {
+    id: "11111111-2222-3333-4444-555555555555",
+    display_name: "Algo Paper",
+    provider: "alpaca",
+    mode: "BROKER_PAPER",
+    external_account_id: "PA1"
+  };
+  const api = makeApi([account]);
+  const manual = makeManualTradeApi();
+  const page = mountBrokers(root, api, { manualTradeApi: manual });
+  await Promise.resolve();
+  await Promise.resolve();
+  // The page state machine accepts the manual trade api without crashing.
+  assert.equal(page.state.accounts.length, 1);
+  assert.equal(page.state.activeQuickOrderFor, null);
+  assert.deepEqual(page.state.ordersByAccount, {});
+});
+
+
 test("Brokers page records error state on API failure", async () => {
   setupGlobals();
   const root = makeRoot();
   const api = {
     async list() { throw new Error("boom"); },
-    async createAlpacaPaper() {},
+    async create() {},
     async replaceAlpacaPaperCredentials() {},
     async deleteAccount() {}
   };

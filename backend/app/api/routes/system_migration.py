@@ -16,17 +16,10 @@ import json
 from pathlib import Path
 from typing import Annotated, Any
 
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, ConfigDict
 
 from backend.app.config.runtime_paths import get_runtime_db_path
-
-
-try:  # pragma: no cover - exercised when FastAPI is installed.
-    from fastapi import APIRouter, Depends, HTTPException
-except ModuleNotFoundError:  # pragma: no cover
-    APIRouter = None  # type: ignore[assignment]
-    Depends = None  # type: ignore[assignment]
-    HTTPException = None  # type: ignore[assignment]
 
 
 _MARKET_DATA_FIELDS = {
@@ -104,8 +97,6 @@ def migrate_legacy_catalog() -> MigrationResponse:
     try:
         legacy_payload = json.loads(legacy.read_text(encoding="utf-8"))
     except json.JSONDecodeError as exc:
-        if HTTPException is None:
-            raise ValueError(f"legacy services_catalog.json is not valid JSON: {exc}") from exc
         raise HTTPException(status_code=400, detail=f"legacy services_catalog.json is not valid JSON: {exc}") from exc
 
     legacy_market = list(legacy_payload.get("market_data_services", []))
@@ -156,12 +147,7 @@ def migrate_legacy_catalog() -> MigrationResponse:
     )
 
 
-if APIRouter is None:
-    from backend.app.api.routes.operations import FallbackRouter
-
-    router = FallbackRouter(prefix="/api/v1/system", tags=["system"])
-else:
-    router = APIRouter(prefix="/api/v1/system", tags=["system"])
+router = APIRouter(prefix="/api/v1/system", tags=["system"])
 
 
 @router.get("/migrate-legacy-catalog/preview", response_model=MigrationResponse)

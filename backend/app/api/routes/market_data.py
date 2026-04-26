@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-import os
 from typing import TYPE_CHECKING, Any
 from typing import Annotated
 from uuid import UUID
 
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict
 
 from backend.app.domain import TradingMode
@@ -19,21 +19,14 @@ from backend.app.market_data import (
     MarketDataServiceRecord,
     MarketDataServiceWrite,
     PipelineRegistryError,
-    Provider,
     ResolveMarketDataRequest,
     ResolverResult,
+    ServicePurpose,
 )
 from backend.app.market_data.pipeline import MarketDataPipelineEdit
 
 if TYPE_CHECKING:
     from backend.app.market_data import MarketDataPipelineRegistry, MarketDataServiceCatalog
-
-try:  # pragma: no cover
-    from fastapi import APIRouter, Depends, HTTPException
-except ModuleNotFoundError:  # pragma: no cover
-    APIRouter = None  # type: ignore[assignment]
-    Depends = None  # type: ignore[assignment]
-    HTTPException = None  # type: ignore[assignment]
 
 
 def get_market_data_catalog() -> "MarketDataServiceCatalog":
@@ -49,17 +42,10 @@ def get_pipeline_registry() -> "MarketDataPipelineRegistry":
 
 
 def _dependency(default: object) -> object:
-    if Depends is None:
-        return default
     return Depends(default)
 
 
-if APIRouter is None:
-    from backend.app.api.routes.operations import FallbackRouter
-
-    router = FallbackRouter(prefix="/api/v1/market-data", tags=["market-data"])
-else:
-    router = APIRouter(prefix="/api/v1/market-data", tags=["market-data"])
+router = APIRouter(prefix="/api/v1/market-data", tags=["market-data"])
 
 
 CatalogDependency = Annotated[Any, _dependency(get_market_data_catalog)]
@@ -114,6 +100,30 @@ def set_default_service(service_id: UUID, catalog: CatalogDependency) -> MarketD
     """
     try:
         return catalog.set_default(service_id)
+    except MarketDataCatalogError as exc:
+        raise _operator_error(str(exc)) from exc
+
+
+class SetDefaultForRequest(BaseModel):
+    """Replace the operator-driven ``default_for`` purpose tag set on a Service."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    purposes: tuple[ServicePurpose, ...] = ()
+
+
+@router.post("/services/{service_id}/default-for", response_model=MarketDataServiceRecord)
+def set_default_for_service(
+    service_id: UUID, request: SetDefaultForRequest, catalog: CatalogDependency
+) -> MarketDataServiceRecord:
+    """Replace the ``default_for`` purpose tags on a Service.
+
+    Single-canonical-default per purpose: any other Service holding one
+    of the requested tags loses it. Replaces env-driven role selection
+    (``ALPACA_USE_TEST_STREAM`` etc.) with operator-driven tagging.
+    """
+    try:
+        return catalog.set_default_for(service_id, request.purposes)
     except MarketDataCatalogError as exc:
         raise _operator_error(str(exc)) from exc
 
@@ -217,68 +227,6 @@ def disable_pipeline(pipeline_id: UUID, pipelines: PipelineDependency) -> Market
 
 
 # ---------------------------------------------------------------------------
-# Bootstrap from .env — register the env-based Alpaca creds as a catalog
-# entry + default pipeline so the operator doesn't have to re-enter them on
-# the Providers page just to populate the catalog.
-# ---------------------------------------------------------------------------
-
-
-class BootstrapFromEnvResponse(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    created_service: bool
-    skipped_reason: str | None = None
-    service: MarketDataServiceRecord | None = None
-
-
-@router.post("/bootstrap-from-env", response_model=BootstrapFromEnvResponse)
-def bootstrap_from_env(
-    catalog: CatalogDependency,
-) -> BootstrapFromEnvResponse:
-    """Register the Alpaca env credentials as a Market Data Service.
-
-    Per DE round-2 verdict: bootstrap-from-env now only creates the
-    *credential* (Service). Pipeline creation is an explicit operator
-    action (POST ``/pipelines/from-service``) so the operator chooses
-    feed and trading mode for each stream they want to subscribe to,
-    rather than getting an opaque default pipeline as a side-effect.
-    """
-    api_key = os.getenv("ALPACA_API_KEY")
-    api_secret = os.getenv("ALPACA_SECRET_KEY")
-    if not api_key or not api_secret:
-        return BootstrapFromEnvResponse(
-            created_service=False,
-            skipped_reason="missing_credentials",
-        )
-
-    from backend.app.market_data.catalog import _credential_ref  # local helper
-    candidate_ref = _credential_ref(api_key)
-    existing_alpaca = catalog.find_by_credentials(Provider.ALPACA, candidate_ref)
-    if existing_alpaca is not None:
-        return BootstrapFromEnvResponse(
-            created_service=False,
-            service=existing_alpaca,
-        )
-
-    try:
-        service = catalog.create_service(
-            MarketDataServiceWrite(
-                name="Alpaca (from .env)",
-                provider=Provider.ALPACA,
-                api_key=api_key,
-                api_secret=api_secret,
-            )
-        )
-    except MarketDataCatalogError as exc:
-        raise _operator_error(str(exc)) from exc
-
-    return BootstrapFromEnvResponse(
-        created_service=True,
-        service=service,
-    )
-
-
-# ---------------------------------------------------------------------------
 # Pipelines from a Service (R2-B explicit action)
 # ---------------------------------------------------------------------------
 
@@ -356,8 +304,6 @@ def create_pipeline_from_service(
 
 
 def _operator_error(message: str) -> Exception:
-    if HTTPException is None:
-        return MarketDataCatalogError(message)
     return HTTPException(status_code=400, detail=message)
 
 

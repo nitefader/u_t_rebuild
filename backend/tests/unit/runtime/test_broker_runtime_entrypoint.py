@@ -40,17 +40,78 @@ class _FakeTradingStream:
     def stop(self) -> None: ...
 
 
+def _fake_market_data_hub():
+    """Stand up a hub backed by a fake market-data adapter so the broker
+    entrypoint tests don't depend on market-data credentials. The next
+    slice (inline AI / market-data credentials) replaces the in-process
+    market-data adapter with one that resolves credentials from the
+    operator-driven Market Data Service catalog.
+    """
+    from backend.app.market_data import AlpacaMarketDataAdapter, MarketDataStreamHub
+
+    fake_stream = _FakeStockDataStream()
+    adapter = AlpacaMarketDataAdapter(stream_client=fake_stream, load_env=False)
+    return MarketDataStreamHub(market_data_adapter=adapter)
+
+
+def _seed_account_and_credentials(tmp_path: Path, sqlite_path: Path, *, monkeypatch) -> None:
+    """Pre-stage a registered broker account + persisted credentials.
+
+    The entrypoint resolves credentials from the encrypted store (no env
+    fallback). Tests must populate both the SQLite runtime store and the
+    encrypted credential store at the runtime dir before run_broker_runtime.
+    """
+    import base64
+    from datetime import datetime, timezone
+    from uuid import UUID
+
+    from backend.app.broker_accounts import BrokerCredentialStore
+    from backend.app.broker_accounts.models import BrokerAccount, BrokerAccountValidationStatus
+    from backend.app.brokers import BrokerSyncState
+    from backend.app.domain import TradingMode
+    from backend.app.persistence import SQLiteRuntimeStore
+
+    monkeypatch.setenv("OPERATIONS_RUNTIME_DB_PATH", str(sqlite_path))
+    monkeypatch.setenv("UTOS_CREDENTIAL_KEY", base64.b64encode(b"\x01" * 32).decode("ascii"))
+    monkeypatch.setenv("UTOS_ENVIRONMENT", "dev")
+
+    account_id = UUID("11111111-2222-3333-4444-555555555555")
+    store = SQLiteRuntimeStore(sqlite_path)
+    store.save_broker_account(
+        BrokerAccount(
+            id=account_id,
+            display_name="Paper",
+            provider="alpaca",
+            mode=TradingMode.BROKER_PAPER,
+            credentials_ref="test",
+            validation_status=BrokerAccountValidationStatus.VALID,
+        )
+    )
+    now = datetime.now(timezone.utc)
+    store.save_broker_sync_freshness(
+        BrokerSyncState(
+            account_id=account_id,
+            last_sync_at=now,
+            last_successful_sync_at=now,
+            is_stale=False,
+        )
+    )
+    creds = BrokerCredentialStore(store_path=sqlite_path.parent / "broker_credentials.enc")
+    creds.put(account_id, api_key="test-key", api_secret="test-secret")
+    return account_id
+
+
 def test_run_broker_runtime_with_no_active_deployments_returns_idle_supervisor(
     tmp_path: Path, monkeypatch
 ) -> None:
     monkeypatch.setattr(alpaca_module, "TradingClient", _FakeTradingClient)
     monkeypatch.setattr(market_data_alpaca_module, "StockDataStream", _FakeStockDataStream)
-    monkeypatch.setenv("ALPACA_API_KEY", "test-key")
-    monkeypatch.setenv("ALPACA_SECRET_KEY", "test-secret")
 
     sqlite_path = tmp_path / "empty.sqlite"
+    _seed_account_and_credentials(tmp_path, sqlite_path, monkeypatch=monkeypatch)
     supervisor, hub = broker_runtime_entrypoint.run_broker_runtime(
         sqlite_path=sqlite_path,
+        market_data_hub=_fake_market_data_hub(),
         block_until_signal=False,
     )
     try:
@@ -98,32 +159,11 @@ def test_run_broker_runtime_loads_explicit_deployments(tmp_path: Path, monkeypat
     monkeypatch.setattr(alpaca_module, "TradingClient", _FakeTradingClient)
     monkeypatch.setattr(alpaca_module, "TradingStream", _FakeTradingStream)
     monkeypatch.setattr(market_data_alpaca_module, "StockDataStream", _FakeStockDataStream)
-    monkeypatch.setenv("ALPACA_API_KEY", "test-key")
-    monkeypatch.setenv("ALPACA_SECRET_KEY", "test-secret")
 
-    account_id = UUID("11111111-2222-3333-4444-555555555555")
     deployment_id = UUID("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
     sqlite_path = tmp_path / "active.sqlite"
+    account_id = _seed_account_and_credentials(tmp_path, sqlite_path, monkeypatch=monkeypatch)
     store = SQLiteRuntimeStore(sqlite_path)
-    store.save_broker_account(
-        BrokerAccount(
-            id=account_id,
-            display_name="Paper",
-            provider="alpaca",
-            mode=TradingMode.BROKER_PAPER,
-            credentials_ref="test",
-            validation_status=BrokerAccountValidationStatus.VALID,
-        )
-    )
-    now = datetime.now(timezone.utc)
-    store.save_broker_sync_freshness(
-        BrokerSyncState(
-            account_id=account_id,
-            last_sync_at=now,
-            last_successful_sync_at=now,
-            is_stale=False,
-        )
-    )
     store.save_deployment_runtime_state(
         RuntimeState(deployment_id=deployment_id, status=RuntimeStatus.RECOVERED_READY)
     )
@@ -203,6 +243,7 @@ def test_run_broker_runtime_loads_explicit_deployments(tmp_path: Path, monkeypat
     supervisor, hub = broker_runtime_entrypoint.run_broker_runtime(
         sqlite_path=sqlite_path,
         deployments=(deployment,),
+        market_data_hub=_fake_market_data_hub(),
         block_until_signal=False,
     )
     try:

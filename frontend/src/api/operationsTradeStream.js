@@ -15,17 +15,18 @@ export function createOperationsTradeStreamApi({ fetchImpl = globalThis.fetch, w
       return response.json();
     },
 
-    streamUrl() {
+    streamUrl(accountId) {
       const protocol = globalThis.location && globalThis.location.protocol === "https:" ? "wss:" : "ws:";
       const host = globalThis.location ? globalThis.location.host : "localhost";
-      return `${protocol}//${host}${API_PREFIX}/trade-stream`;
+      const query = accountId ? `?account_id=${encodeURIComponent(accountId)}` : "";
+      return `${protocol}//${host}${API_PREFIX}/trade-stream${query}`;
     },
 
-    openStream() {
+    openStream(accountId) {
       if (typeof websocketImpl !== "function") {
         throw new Error("Operations trade-stream unavailable: WebSocket is not configured");
       }
-      return new websocketImpl(this.streamUrl());
+      return new websocketImpl(this.streamUrl(accountId));
     }
   };
 }

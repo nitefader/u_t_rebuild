@@ -138,7 +138,7 @@ def test_serialize_bar_emits_iso_timestamp_and_numeric_fields() -> None:
 
 
 def test_router_registers_health_endpoint() -> None:
-    """Health endpoint reachable on both real FastAPI and the FallbackRouter."""
+    """Health endpoint is registered on the FastAPI router."""
     paths_and_methods = []
     if hasattr(chart_lab.router, "routes"):
         for route in chart_lab.router.routes:

@@ -4,7 +4,7 @@ import json
 import sqlite3
 from pathlib import Path
 from typing import TypeVar
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from pydantic import BaseModel
 
@@ -49,10 +49,11 @@ class SQLiteRuntimeStore:
                 connection.execute(
                     """
                     INSERT INTO internal_orders
-                        (order_id, account_id, deployment_id, program_id, client_order_id, status, payload)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                        (order_id, account_id, origin, deployment_id, program_id, client_order_id, status, payload)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(order_id) DO UPDATE SET
                         account_id = excluded.account_id,
+                        origin = excluded.origin,
                         deployment_id = excluded.deployment_id,
                         program_id = excluded.program_id,
                         client_order_id = excluded.client_order_id,
@@ -62,8 +63,9 @@ class SQLiteRuntimeStore:
                     (
                         str(order.order_id),
                         str(order.account_id),
-                        str(order.deployment_id),
-                        str(order.program_id),
+                        order.origin.value,
+                        str(order.deployment_id) if order.deployment_id is not None else None,
+                        str(order.program_id) if order.program_id is not None else None,
                         order.client_order_id,
                         order.status.value,
                         _dump_model(order),
@@ -91,6 +93,133 @@ class SQLiteRuntimeStore:
     def list_orders(self) -> tuple[InternalOrder, ...]:
         rows = self._fetch_all("SELECT payload FROM internal_orders ORDER BY rowid")
         return tuple(_load_model(InternalOrder, row["payload"]) for row in rows)
+
+    def reserve_manual_idempotency_key(
+        self,
+        *,
+        account_id: UUID,
+        idempotency_key: str,
+        request_hash: str,
+        operator_session_id: str,
+    ) -> str | UUID:
+        now = utc_now().isoformat()
+        with self._connect() as connection:
+            try:
+                connection.execute(
+                    """
+                    INSERT INTO manual_order_idempotency
+                        (account_id, idempotency_key, order_id, status, request_hash, operator_session_id, created_at, updated_at)
+                    VALUES (?, ?, NULL, 'pending', ?, ?, ?, ?)
+                    """,
+                    (str(account_id), idempotency_key, request_hash, operator_session_id, now, now),
+                )
+                return "reserved"
+            except sqlite3.IntegrityError:
+                row = connection.execute(
+                    """
+                    SELECT order_id, status, request_hash
+                    FROM manual_order_idempotency
+                    WHERE account_id = ? AND idempotency_key = ?
+                    """,
+                    (str(account_id), idempotency_key),
+                ).fetchone()
+        if row is None:
+            return "in_flight"
+        if row["request_hash"] != request_hash:
+            return "conflict"
+        if row["status"] == "committed" and row["order_id"]:
+            return UUID(row["order_id"])
+        return "in_flight"
+
+    def commit_manual_idempotency_key(self, *, account_id: UUID, idempotency_key: str, order_id: UUID) -> None:
+        now = utc_now().isoformat()
+        with self._connect() as connection:
+            connection.execute(
+                """
+                UPDATE manual_order_idempotency
+                SET order_id = ?, status = 'committed', updated_at = ?
+                WHERE account_id = ? AND idempotency_key = ? AND status = 'pending'
+                """,
+                (str(order_id), now, str(account_id), idempotency_key),
+            )
+
+    def release_manual_idempotency_key(self, *, account_id: UUID, idempotency_key: str) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                """
+                DELETE FROM manual_order_idempotency
+                WHERE account_id = ? AND idempotency_key = ? AND status = 'pending'
+                """,
+                (str(account_id), idempotency_key),
+            )
+
+    def list_manual_idempotency_rows(self, account_id: UUID | None = None) -> tuple[dict[str, object], ...]:
+        if account_id is None:
+            rows = self._fetch_all("SELECT * FROM manual_order_idempotency ORDER BY created_at")
+        else:
+            rows = self._fetch_all(
+                "SELECT * FROM manual_order_idempotency WHERE account_id = ? ORDER BY created_at",
+                (str(account_id),),
+            )
+        return tuple(dict(row) for row in rows)
+
+    def record_manual_trade_audit_event(
+        self,
+        *,
+        event_code: str,
+        account_id: UUID,
+        operator_session_id: str,
+        payload: dict[str, object],
+        order_id: UUID | None = None,
+        client_order_id: str | None = None,
+        idempotency_key: str | None = None,
+    ) -> dict[str, object]:
+        event = {
+            "event_id": str(uuid4()),
+            "event_code": event_code,
+            "account_id": str(account_id),
+            "order_id": str(order_id) if order_id is not None else None,
+            "client_order_id": client_order_id,
+            "idempotency_key": idempotency_key,
+            "operator_session_id": operator_session_id,
+            "occurred_at": utc_now().isoformat(),
+            "payload": payload,
+        }
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO manual_trade_audit_events
+                    (event_id, event_code, account_id, order_id, client_order_id, idempotency_key, operator_session_id, occurred_at, payload)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    event["event_id"],
+                    event_code,
+                    str(account_id),
+                    event["order_id"],
+                    client_order_id,
+                    idempotency_key,
+                    operator_session_id,
+                    event["occurred_at"],
+                    json.dumps(payload, sort_keys=True, default=str),
+                ),
+            )
+        return event
+
+    def list_manual_trade_audit_events(self, account_id: UUID | None = None) -> tuple[dict[str, object], ...]:
+        if account_id is None:
+            rows = self._fetch_all("SELECT * FROM manual_trade_audit_events ORDER BY occurred_at")
+        else:
+            rows = self._fetch_all(
+                "SELECT * FROM manual_trade_audit_events WHERE account_id = ? ORDER BY occurred_at",
+                (str(account_id),),
+            )
+        events = []
+        for row in rows:
+            event = dict(row)
+            event["payload"] = json.loads(str(event["payload"]))
+            events.append(event)
+        return tuple(events)
 
     def list_deployment_runtime_states(self) -> tuple[RuntimeState, ...]:
         rows = self._fetch_all("SELECT payload FROM deployment_runtime_states ORDER BY rowid")
@@ -482,6 +611,43 @@ class SQLiteRuntimeStore:
         }
         if "external_account_id" not in broker_account_columns:
             connection.execute("ALTER TABLE broker_accounts ADD COLUMN external_account_id TEXT")
+        internal_order_columns = {
+            row["name"]
+            for row in connection.execute("PRAGMA table_info(internal_orders)").fetchall()
+        }
+        if "origin" not in internal_order_columns:
+            connection.execute("ALTER TABLE internal_orders ADD COLUMN origin TEXT NOT NULL DEFAULT 'program'")
+        internal_order_info = connection.execute("PRAGMA table_info(internal_orders)").fetchall()
+        nullable_lineage = {
+            row["name"]: row["notnull"]
+            for row in internal_order_info
+            if row["name"] in {"deployment_id", "program_id"}
+        }
+        if nullable_lineage.get("deployment_id") or nullable_lineage.get("program_id"):
+            connection.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS internal_orders_v2 (
+                    order_id TEXT PRIMARY KEY,
+                    account_id TEXT NOT NULL,
+                    origin TEXT NOT NULL DEFAULT 'program',
+                    deployment_id TEXT,
+                    program_id TEXT,
+                    client_order_id TEXT NOT NULL UNIQUE,
+                    status TEXT NOT NULL,
+                    payload TEXT NOT NULL
+                );
+                INSERT OR IGNORE INTO internal_orders_v2
+                    (order_id, account_id, origin, deployment_id, program_id, client_order_id, status, payload)
+                SELECT order_id, account_id, origin, deployment_id, program_id, client_order_id, status, payload
+                FROM internal_orders;
+                DROP TABLE internal_orders;
+                ALTER TABLE internal_orders_v2 RENAME TO internal_orders;
+                CREATE INDEX IF NOT EXISTS ix_internal_orders_account_id ON internal_orders(account_id);
+                CREATE INDEX IF NOT EXISTS ix_internal_orders_origin ON internal_orders(origin);
+                CREATE INDEX IF NOT EXISTS ix_internal_orders_deployment_id ON internal_orders(deployment_id);
+                CREATE INDEX IF NOT EXISTS ix_internal_orders_program_id ON internal_orders(program_id);
+                """
+            )
         connection.execute(
             """
             CREATE UNIQUE INDEX IF NOT EXISTS ux_broker_accounts_external_identity

@@ -218,7 +218,7 @@ def _paper_context(tmp_path, monkeypatch, *, broker_freshness: GovernorBrokerSyn
     ledger = SQLiteOrderLedger(db_path)
     manager = OrderManager(ledger=ledger, control_plane=control_plane)
     client = MockAlpacaClient()
-    adapter = AlpacaBrokerAdapter(trading_client=client, load_env=False)
+    adapter = AlpacaBrokerAdapter(mode=TradingMode.BROKER_PAPER, trading_client=client)
     broker_sync = BrokerSync(ledger=ledger, adapter=adapter, runtime_store=store, provider="alpaca")
     components = _components()
     deployment = _deployment(components)

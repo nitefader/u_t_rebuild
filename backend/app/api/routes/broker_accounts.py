@@ -1,9 +1,18 @@
+"""Unified broker-account REST surface.
+
+One create endpoint, one replace-credentials endpoint, one delete
+endpoint. Mode (paper/live) is operator-chosen at create time and pinned
+for the life of the account; the backend derives the broker base URL
+and streaming endpoint from ``(provider, mode)``.
+"""
+
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 from typing import Annotated
-
 from uuid import UUID
+
+from fastapi import APIRouter, Depends, HTTPException
 
 from backend.app.broker_accounts.models import (
     BrokerAccount,
@@ -11,41 +20,29 @@ from backend.app.broker_accounts.models import (
     BrokerAccountDeletionResponse,
     BrokerAccountListResponse,
     BrokerAccountResponse,
-    CreateAlpacaPaperBrokerAccountRequest,
+    CreateBrokerAccountRequest,
     DeleteBrokerAccountRequest,
-    ReplaceAlpacaPaperBrokerAccountCredentialsRequest,
+    ReplaceBrokerAccountCredentialsRequest,
 )
 from backend.app.broker_accounts.service import BrokerAccountCreationError
 
 if TYPE_CHECKING:
     from backend.app.broker_accounts import BrokerAccountService
 
-try:  # pragma: no cover - exercised only when FastAPI is installed.
-    from fastapi import APIRouter, Depends, HTTPException
-except ModuleNotFoundError:  # pragma: no cover
-    APIRouter = None  # type: ignore[assignment]
-    Depends = None  # type: ignore[assignment]
-    HTTPException = None  # type: ignore[assignment]
-
 
 def get_broker_account_service() -> "BrokerAccountService":
-    from backend.app.broker_accounts.runtime_service import create_broker_account_service_from_environment
+    from backend.app.broker_accounts.runtime_service import (
+        create_broker_account_service_from_environment,
+    )
 
     return create_broker_account_service_from_environment()
 
 
 def _dependency(default: object) -> object:
-    if Depends is None:
-        return default
     return Depends(default)
 
 
-if APIRouter is None:
-    from backend.app.api.routes.operations import FallbackRouter
-
-    router = FallbackRouter(prefix="/api/v1/broker-accounts", tags=["broker-accounts"])
-else:
-    router = APIRouter(prefix="/api/v1/broker-accounts", tags=["broker-accounts"])
+router = APIRouter(prefix="/api/v1/broker-accounts", tags=["broker-accounts"])
 
 
 BrokerAccountServiceDependency = Annotated[Any, _dependency(get_broker_account_service)]
@@ -57,33 +54,33 @@ def list_broker_accounts(service: BrokerAccountServiceDependency) -> BrokerAccou
     return BrokerAccountListResponse(accounts=tuple(accounts))
 
 
-@router.post("/alpaca-paper", response_model=BrokerAccountResponse)
-def create_alpaca_paper_broker_account(
-    request: CreateAlpacaPaperBrokerAccountRequest,
+@router.post("", response_model=BrokerAccountResponse)
+def create_broker_account(
+    request: CreateBrokerAccountRequest,
     service: BrokerAccountServiceDependency,
 ) -> BrokerAccountResponse:
+    """Unified create — operator picks provider + mode; backend derives URL."""
     try:
-        result = service.create_alpaca_paper_account(
+        result = service.create_account(
             display_name=request.display_name,
+            provider=request.provider,
+            mode=request.mode,
             api_key=request.api_key,
             api_secret=request.api_secret,
         )
     except BrokerAccountCreationError as exc:
         raise _operator_error(str(exc)) from exc
     # Per the runtime architecture spec: every Account's Broker Trade
-    # Update Stream starts at boot OR right after creation, regardless
-    # of Deployments. Auto-start the dispatcher for the new account so
-    # the system doesn't wait for an operator restart.
+    # Update Stream starts at boot OR right after creation.
     _ensure_trade_stream_started(result.account.id)
+    # And the manual-trade composition root needs an entry for this
+    # account so the operator can place orders without a service restart.
+    _ensure_manual_trade_composition_for_account(service, result.account)
     return BrokerAccountResponse(account=result.account, already_exists=result.already_exists)
 
 
 def _list_accounts(service: Any) -> tuple[BrokerAccount, ...]:
-    """Pull accounts from whichever surface is available on the service.
-
-    Real BrokerAccountService delegates to ``runtime_store.list_broker_accounts``;
-    test stubs may expose either method directly.
-    """
+    """Pull accounts from whichever surface is available on the service."""
     if hasattr(service, "list_broker_accounts"):
         return tuple(service.list_broker_accounts())
     runtime_store = getattr(service, "_runtime_store", None)
@@ -95,33 +92,63 @@ def _list_accounts(service: Any) -> tuple[BrokerAccount, ...]:
 def _ensure_trade_stream_started(account_id: UUID) -> None:
     """Start a per-Account trade dispatcher, if one isn't already running.
 
-    Best-effort: failures during dispatcher construction are surfaced via
-    the dispatcher's ``last_error`` (visible on /api/v1/system/streams)
-    rather than crashing the create-account request.
+    Failures are surfaced via ``TradeEventDispatcher.last_error`` (visible
+    on /api/v1/system/streams) rather than crashing the create-account
+    request — but they are not silently ignored.
     """
+    import logging
+
     try:
         from backend.app.runtime.runtime_context import trade_dispatcher_registry
 
         dispatcher = trade_dispatcher_registry().get_or_create(account_id)
         dispatcher.start()
-    except Exception:  # noqa: BLE001 - best effort
-        pass
+    except Exception as exc:  # noqa: BLE001 - log loudly, do not crash route
+        logging.getLogger(__name__).warning(
+            "trade dispatcher start failed for account %s: %s", account_id, exc, exc_info=True
+        )
 
 
-@router.put("/{account_id}/alpaca-paper/credentials", response_model=BrokerAccountCredentialUpdateResponse)
-def replace_alpaca_paper_broker_account_credentials(
+def _ensure_manual_trade_composition_for_account(service: Any, account: BrokerAccount) -> None:
+    """Register the per-account OrderManager + BrokerSync stack so the
+    manual-trade route works without a process restart.
+    """
+    import logging
+
+    try:
+        from backend.app.runtime.runtime_context import (
+            register_account_in_manual_trade_registry,
+        )
+
+        register_account_in_manual_trade_registry(service, account)
+    except Exception as exc:  # noqa: BLE001 - log loudly, do not crash route
+        logging.getLogger(__name__).warning(
+            "manual-trade registry wire-up failed for account %s: %s",
+            account.id,
+            exc,
+            exc_info=True,
+        )
+
+
+@router.put("/{account_id}/credentials", response_model=BrokerAccountCredentialUpdateResponse)
+def replace_broker_account_credentials(
     account_id: UUID,
-    request: ReplaceAlpacaPaperBrokerAccountCredentialsRequest,
+    request: ReplaceBrokerAccountCredentialsRequest,
     service: BrokerAccountServiceDependency,
 ) -> BrokerAccountCredentialUpdateResponse:
     try:
-        return service.replace_alpaca_paper_credentials(
+        response = service.replace_credentials(
             account_id=account_id,
             api_key=request.api_key,
             api_secret=request.api_secret,
         )
     except BrokerAccountCreationError as exc:
         raise _operator_error(str(exc)) from exc
+    # On a successful replace, refresh the per-account composition stack
+    # so the new credentials are picked up without a restart.
+    if response.account is not None and response.validation_status.value == "valid":
+        _ensure_manual_trade_composition_for_account(service, response.account)
+    return response
 
 
 @router.post("/{account_id}/delete", response_model=BrokerAccountDeletionResponse)
@@ -141,8 +168,6 @@ def delete_broker_account(
 
 
 def _operator_error(message: str) -> Exception:
-    if HTTPException is None:
-        return BrokerAccountCreationError(message)
     return HTTPException(status_code=400, detail=message)
 
 

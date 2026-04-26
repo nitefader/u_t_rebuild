@@ -14,8 +14,10 @@ from backend.app.market_data import (
     MarketDataServiceCatalog,
     MarketDataServiceWrite,
     MarketDataValidationStatus,
+    Provider,
     ResolveMarketDataRequest,
     SelectionStrategy,
+    ServicePurpose,
     ServiceStatus,
     Timeframe,
 )
@@ -157,6 +159,76 @@ def test_validation_learns_capabilities_and_resolver_hard_rejects_incompatible_s
     result = catalog.resolve(ResolveMarketDataRequest(intent=intent, selection_strategy=SelectionStrategy.AUTO))
     assert result.decision == "rejected"
     assert result.per_symbol_rows[0].rejected_providers[0].reason_code == "UNSUPPORTED_TIMEFRAME"
+
+
+def test_set_default_for_assigns_purpose_and_strips_from_other_services(tmp_path) -> None:
+    catalog = MarketDataServiceCatalog(store_path=tmp_path / "catalog.json", validator=FakeMarketDataValidator())
+    a = catalog.create_service(
+        MarketDataServiceWrite(name="A", provider="alpaca", api_key="aaaaaa", api_secret="aaaaaaaa")
+    )
+    b = catalog.create_service(
+        MarketDataServiceWrite(name="B", provider="alpaca", api_key="bbbbbb", api_secret="bbbbbbbb")
+    )
+    catalog.validate_service(a.id)
+    catalog.validate_service(b.id)
+
+    catalog.set_default_for(a.id, (ServicePurpose.LIVE_STREAMING, ServicePurpose.RUNTIME_TRADING))
+    catalog.set_default_for(b.id, (ServicePurpose.LIVE_STREAMING,))
+
+    a_after = catalog.get_service(a.id)
+    b_after = catalog.get_service(b.id)
+    # B took live_streaming away from A; A keeps runtime_trading.
+    assert ServicePurpose.LIVE_STREAMING not in a_after.default_for
+    assert ServicePurpose.RUNTIME_TRADING in a_after.default_for
+    assert b_after.default_for == (ServicePurpose.LIVE_STREAMING,)
+
+
+def test_create_service_with_initial_default_for_tags(tmp_path) -> None:
+    catalog = MarketDataServiceCatalog(store_path=tmp_path / "catalog.json", validator=FakeMarketDataValidator())
+    a = catalog.create_service(
+        MarketDataServiceWrite(name="A", provider="alpaca", api_key="aaaaaa", api_secret="aaaaaaaa")
+    )
+    b = catalog.create_service(
+        MarketDataServiceWrite(
+            name="B",
+            provider="alpaca",
+            api_key="bbbbbb",
+            api_secret="bbbbbbbb",
+            default_for=(ServicePurpose.TEST_STREAMING,),
+        )
+    )
+    assert ServicePurpose.TEST_STREAMING in catalog.get_service(b.id).default_for
+    # A still has no tags because B claimed test_streaming on creation.
+    assert ServicePurpose.TEST_STREAMING not in catalog.get_service(a.id).default_for
+
+
+def test_find_default_for_returns_tagged_service_and_skips_disabled(tmp_path) -> None:
+    catalog = MarketDataServiceCatalog(store_path=tmp_path / "catalog.json", validator=FakeMarketDataValidator())
+    a = catalog.create_service(
+        MarketDataServiceWrite(name="A", provider="alpaca", api_key="aaaaaa", api_secret="aaaaaaaa")
+    )
+    catalog.validate_service(a.id)
+    catalog.set_default_for(a.id, (ServicePurpose.BATCH_HISTORICAL,))
+
+    found = catalog.find_default_for(ServicePurpose.BATCH_HISTORICAL, provider=Provider.ALPACA)
+    assert found is not None and found.id == a.id
+    assert catalog.find_default_for(ServicePurpose.LIVE_STREAMING) is None
+
+    catalog.disable_service(a.id)
+    assert catalog.find_default_for(ServicePurpose.BATCH_HISTORICAL) is None
+
+
+def test_clear_default_for_removes_only_specified_purpose(tmp_path) -> None:
+    catalog = MarketDataServiceCatalog(store_path=tmp_path / "catalog.json", validator=FakeMarketDataValidator())
+    a = catalog.create_service(
+        MarketDataServiceWrite(name="A", provider="alpaca", api_key="aaaaaa", api_secret="aaaaaaaa")
+    )
+    catalog.validate_service(a.id)
+    catalog.set_default_for(a.id, (ServicePurpose.LIVE_STREAMING, ServicePurpose.BATCH_HISTORICAL))
+    catalog.clear_default_for(a.id, ServicePurpose.LIVE_STREAMING)
+    after = catalog.get_service(a.id)
+    assert ServicePurpose.LIVE_STREAMING not in after.default_for
+    assert ServicePurpose.BATCH_HISTORICAL in after.default_for
 
 
 def test_manual_capability_override_can_evolve_service_capabilities(tmp_path) -> None:

@@ -8,7 +8,6 @@ import { createOperationsApi } from "../src/api/operations.js";
 import {
   executeOperationAction,
   renderDataSourceResolverPanel,
-  renderAccountDetail,
   renderDeploymentDetail,
   renderDetailPanel,
   renderOrderDetail,
@@ -23,20 +22,6 @@ function overview(overrides = {}) {
     system_recovery_active: true,
     global_kill_active: false,
     control_state: {},
-    broker_accounts: [
-      {
-        account_id: accountId,
-        sync_state: {
-          account_id: accountId,
-          last_sync_at: "2026-04-24T15:00:00Z",
-          is_stale: false
-        },
-        open_orders_count: 2,
-        positions_count: 3,
-        is_paused: false,
-        is_killed: false
-      }
-    ],
     deployments: [
       {
         deployment_id: deploymentId,
@@ -58,7 +43,7 @@ function overview(overrides = {}) {
   };
 }
 
-test("overview renders recovery, kill, sync, deployment, order, and position state", () => {
+test("overview renders system runtime telemetry without broker account presence", () => {
   const html = renderOperationsCenterOverview(overview());
 
   assert.match(html, /Recovery/);
@@ -70,6 +55,14 @@ test("overview renders recovery, kill, sync, deployment, order, and position sta
   assert.match(html, /Active deployments/);
   assert.match(html, /Latest Governor Decisions/);
   assert.match(html, /SPY/);
+  assert.doesNotMatch(html, /<h2>Broker Accounts<\/h2>/);
+  assert.doesNotMatch(html, /data-action="account-detail"/);
+  assert.doesNotMatch(html, /data-action="pause-account"/);
+});
+
+test("overview links operators to the Brokers page for account state", () => {
+  const html = renderOperationsCenterOverview(overview());
+  assert.match(html, /href="\.\/brokers\.html"/);
 });
 
 test("data source resolver panel displays detected intent, selection mode, selected service, and rejected services", () => {
@@ -108,21 +101,8 @@ test("data source resolver panel displays detected intent, selection mode, selec
   assert.match(html, /Alpaca Main Data is compatible/);
 });
 
-test("stale broker sync warning renders visibly", () => {
+test("stale broker sync warning still surfaces as a runtime alert and links to Brokers", () => {
   const html = renderOperationsCenterOverview(overview({
-    broker_accounts: [
-      {
-        account_id: accountId,
-        sync_state: {
-          account_id: accountId,
-          last_sync_at: "2026-04-24T14:00:00Z",
-          is_stale: true,
-          stale_reason: "no sync for 10 minutes"
-        },
-        open_orders_count: 0,
-        positions_count: 0
-      }
-    ],
     stale_sync_accounts: [
       {
         account_id: accountId,
@@ -134,8 +114,8 @@ test("stale broker sync warning renders visibly", () => {
   }));
 
   assert.match(html, /Stale Broker Sync/);
-  assert.match(html, /danger-card/);
   assert.match(html, /no sync for 10 minutes/);
+  assert.match(html, /href="\.\/brokers\.html"/);
 });
 
 test("blocked_recovery renders as blocked", () => {
@@ -188,116 +168,40 @@ test("pause and resume deployment call correct API routes", async () => {
   assert.equal(calls[1][1], "POST");
 });
 
-test("account and deployment detail calls use Operations API routes", async () => {
+test("deployment and order detail calls use Operations API routes", async () => {
   const calls = [];
   const api = createOperationsApi(async (url, options = {}) => {
     calls.push([url, options.method || "GET"]);
     return { ok: true, json: async () => ({}) };
   });
 
-  await api.getAccount(accountId);
   await api.getDeployment(deploymentId);
   await api.getOrder("order-1");
 
   assert.deepEqual(calls, [
-    [`/api/v1/operations/accounts/${accountId}`, "GET"],
     [`/api/v1/operations/deployments/${deploymentId}`, "GET"],
     ["/api/v1/operations/orders/order-1", "GET"]
   ]);
 });
 
-test("alpaca paper account creation uses broker account API without URL input", async () => {
-  const calls = [];
-  const api = createOperationsApi(async (url, options = {}) => {
-    calls.push([url, options.method || "GET", JSON.parse(options.body)]);
-    return { ok: true, json: async () => ({ account: { id: accountId } }) };
-  });
-
-  await api.createAlpacaPaperAccount({
-    displayName: "Paper",
-    apiKey: "key",
-    apiSecret: "secret"
-  });
-
-  assert.equal(calls[0][0], "/api/v1/broker-accounts/alpaca-paper");
-  assert.equal(calls[0][1], "POST");
-  assert.deepEqual(calls[0][2], {
-    display_name: "Paper",
-    api_key: "key",
-    api_secret: "secret"
-  });
-  assert.ok(!("base_url" in calls[0][2]));
-});
-
-test("Operations Center no longer renders the account setup form", () => {
-  // Per the latest UI refinement, account creation is owned by the
-  // dedicated Brokers page (brokers.html). Operations Center shows
-  // runtime state only.
-  const html = renderOperationsCenterOverview(overview());
-
-  assert.doesNotMatch(html, /Add Alpaca Paper Account/);
-  assert.doesNotMatch(html, /name="api_key"/);
-  assert.doesNotMatch(html, /name="api_secret"/);
-});
-
-test("credential replacement and account deletion use broker account API without exposing secrets", async () => {
-  const calls = [];
-  const api = createOperationsApi(async (url, options = {}) => {
-    calls.push([url, options.method || "GET", options.body ? JSON.parse(options.body) : null]);
-    return { ok: true, json: async () => ({ validation_status: "valid", message: "ok" }) };
-  });
-
-  const replace = await api.replaceAlpacaPaperCredentials(accountId, { apiKey: "new-key", apiSecret: "new-secret" });
-  await api.deleteBrokerAccount(accountId, { confirmDisplayName: "Paper", confirmMode: "BROKER_PAPER" });
-
-  assert.equal(calls[0][0], `/api/v1/broker-accounts/${accountId}/alpaca-paper/credentials`);
-  assert.equal(calls[0][1], "PUT");
-  assert.deepEqual(calls[0][2], { api_key: "new-key", api_secret: "new-secret" });
-  assert.doesNotMatch(JSON.stringify(replace), /new-secret/);
-  assert.equal(calls[1][0], `/api/v1/broker-accounts/${accountId}/delete`);
-  assert.deepEqual(calls[1][2], { confirm_display_name: "Paper", confirm_mode: "BROKER_PAPER" });
-});
-
-test("account selection still highlights the chosen card on Operations Center", () => {
+test("Operations Center exposes only deployment selection, not account selection", () => {
   const html = renderOperationsCenterOverview(overview(), {
     status: "loaded",
-    selection: { type: "account", id: accountId },
+    selection: { type: "deployment", id: deploymentId },
     data: {
-      account_id: accountId,
-      is_paused: false,
-      is_killed: false,
-      broker_account_snapshot: null,
-      broker_sync_freshness: null,
-      open_broker_orders: [],
-      positions: [],
-      internal_order_ledger_summary: { open_count: 0 }
+      deployment_id: deploymentId,
+      runtime_status: "running",
+      open_orders: [],
+      trades: [],
+      fills: [],
+      latest_governor_decisions: []
     }
   });
 
-  assert.match(html, /selected-card/);
-  assert.equal((html.match(/data-select-type="account"/g) || []).length, 1);
-});
-
-test("overview cards are clickable and selected account is highlighted", () => {
-  const html = renderOperationsCenterOverview(overview(), {
-    status: "loaded",
-    selection: { type: "account", id: accountId },
-    data: {
-      account_id: accountId,
-      is_paused: false,
-      is_killed: false,
-      broker_account_snapshot: null,
-      broker_sync_freshness: null,
-      open_broker_orders: [],
-      positions: [],
-      internal_order_ledger_summary: { open_count: 0 }
-    }
-  });
-
-  assert.match(html, new RegExp(`data-select-type="account" data-id="${accountId}"`));
   assert.match(html, new RegExp(`data-select-type="deployment" data-id="${deploymentId}"`));
+  assert.doesNotMatch(html, /data-select-type="account"/);
   assert.match(html, /selected-card/);
-  assert.match(html, /Account Detail/);
+  assert.match(html, /Deployment Detail/);
 });
 
 test("detail panel never shows previous data while loading or erroring", () => {
@@ -308,7 +212,7 @@ test("detail panel never shows previous data while loading or erroring", () => {
   });
   const failed = renderDetailPanel({
     status: "error",
-    selection: { type: "account", id: accountId },
+    selection: { type: "deployment", id: deploymentId },
     error: new Error("detail failed")
   });
 
@@ -316,23 +220,7 @@ test("detail panel never shows previous data while loading or erroring", () => {
   assert.doesNotMatch(loading, new RegExp(deploymentId));
   assert.match(failed, /Detail unavailable/);
   assert.match(failed, /No previous detail data is shown/);
-  assert.doesNotMatch(failed, /Account Detail/);
-});
-
-test("pause and resume account call correct API routes", async () => {
-  const calls = [];
-  const api = createOperationsApi(async (url, options = {}) => {
-    calls.push([url, options.method, options.body]);
-    return { ok: true, json: async () => ({ accepted: true }) };
-  });
-
-  await api.pauseAccount(accountId, "risk");
-  await api.resumeAccount(accountId, "clear");
-
-  assert.equal(calls[0][0], `/api/v1/operations/accounts/${accountId}/pause`);
-  assert.equal(calls[0][1], "POST");
-  assert.equal(calls[1][0], `/api/v1/operations/accounts/${accountId}/resume`);
-  assert.equal(calls[1][1], "POST");
+  assert.doesNotMatch(failed, /Deployment Detail/);
 });
 
 test("global kill and resume call correct API routes", async () => {
@@ -363,66 +251,15 @@ test("destructive controls require confirmation", async () => {
   assert.deepEqual(result, { skipped: true });
 });
 
-test("flatten unsupported/not_ready is displayed safely", () => {
-  const html = renderAccountDetail(
-    {
-      account_id: accountId,
-      is_paused: false,
-      is_killed: false,
-      open_broker_orders: [],
-      positions: [],
-      internal_order_ledger_summary: { open_count: 0 },
-      broker_sync_freshness: null
-    },
-    {
-      accepted: false,
-      status: "unsupported_not_ready",
-      reason: "flatten_not_implemented_in_control_plane",
-      scope: "account",
-      target_id: accountId
-    }
+test("account-targeted actions are no longer dispatched from Operations Center", async () => {
+  await assert.rejects(
+    () => executeOperationAction("pause-account", accountId, {}),
+    /Unknown operations action: pause-account/
   );
-
-  assert.match(html, /unsupported_not_ready/);
-  assert.match(html, /flatten_not_implemented_in_control_plane/);
-  assert.match(html, /warning/);
-});
-
-test("account detail renders snapshot, positions, open orders, freshness, and controls", () => {
-  const html = renderAccountDetail({
-    account_id: accountId,
-    is_paused: false,
-    is_killed: false,
-    broker_account_snapshot: {
-      account_id: accountId,
-      provider: "fake",
-      mode: "broker_paper",
-      equity: 100000,
-      cash: 40000,
-      buying_power: 80000,
-      timestamp: "2026-04-24T15:00:00Z"
-    },
-    broker_sync_freshness: {
-      account_id: accountId,
-      last_sync_at: "2026-04-24T15:00:00Z",
-      last_poll_sync_at: "2026-04-24T15:00:00Z",
-      last_successful_sync_at: "2026-04-24T15:00:00Z",
-      is_stale: false
-    },
-    open_broker_orders: [{ symbol: "SPY", side: "buy", qty: 10, status: "accepted" }],
-    positions: [{ symbol: "SPY", side: "long", qty: 10, market_value: 4000 }],
-    internal_order_ledger_summary: { open_count: 1 }
-  });
-
-  assert.match(html, /Provider/);
-  assert.match(html, /Positions/);
-  assert.match(html, /Open Orders/);
-  assert.match(html, /Last successful sync/);
-  assert.match(html, /data-action="pause-account"/);
-  assert.match(html, /data-action="resume-account"/);
-  assert.match(html, /Paper Credential Replacement/);
-  assert.match(html, /data-action="delete-account"/);
-  assert.doesNotMatch(html, /secret-value/);
+  await assert.rejects(
+    () => executeOperationAction("flatten-account", accountId, {}),
+    /Unknown operations action: flatten-account/
+  );
 });
 
 test("deployment detail renders status, program, governor, orders, trades, fills, timestamps, and controls", () => {

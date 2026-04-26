@@ -213,7 +213,10 @@ def test_build_trading_stream_uses_adapter_credentials_and_paper_flag() -> None:
     alpaca_module.TradingStream = FakeTradingStream  # type: ignore[assignment]
     alpaca_module.TradingClient = FakeTradingClient  # type: ignore[assignment]
     try:
-        adapter = alpaca_module.AlpacaBrokerAdapter(api_key="K", secret_key="S", load_env=False)
+        from backend.app.domain import TradingMode
+        adapter = alpaca_module.AlpacaBrokerAdapter(
+            mode=TradingMode.BROKER_PAPER, api_key="K", secret_key="S"
+        )
         stream = adapter.build_trading_stream()
     finally:
         alpaca_module.TradingStream = original_stream
@@ -232,7 +235,10 @@ def test_build_trading_stream_requires_credentials() -> None:
     class FakeTradingClient:
         pass
 
-    adapter = alpaca_module.AlpacaBrokerAdapter(trading_client=FakeTradingClient(), load_env=False)
+    from backend.app.domain import TradingMode
+    adapter = alpaca_module.AlpacaBrokerAdapter(
+        mode=TradingMode.BROKER_PAPER, trading_client=FakeTradingClient()
+    )
     with _pytest.raises(AlpacaBrokerError):
         adapter.build_trading_stream()
 

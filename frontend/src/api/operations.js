@@ -1,5 +1,4 @@
 const API_PREFIX = "/api/v1/operations";
-const BROKER_ACCOUNTS_PREFIX = "/api/v1/broker-accounts";
 
 async function requestJson(path, options = {}, fetchImpl = globalThis.fetch, prefix = API_PREFIX) {
   if (typeof fetchImpl !== "function") {
@@ -40,46 +39,6 @@ export function createOperationsApi(fetchImpl = globalThis.fetch) {
     getAccount: (accountId) => requestJson(`/accounts/${accountId}`, {}, fetchImpl),
     getDeployment: (deploymentId) => requestJson(`/deployments/${deploymentId}`, {}, fetchImpl),
     getOrder: (orderId) => requestJson(`/orders/${orderId}`, {}, fetchImpl),
-    createAlpacaPaperAccount: ({ displayName, apiKey, apiSecret }) =>
-      requestJson(
-        "/alpaca-paper",
-        {
-          method: "POST",
-          body: JSON.stringify({
-            display_name: displayName,
-            api_key: apiKey,
-            api_secret: apiSecret
-          })
-        },
-        fetchImpl,
-        BROKER_ACCOUNTS_PREFIX
-      ),
-    replaceAlpacaPaperCredentials: (accountId, { apiKey, apiSecret }) =>
-      requestJson(
-        `/${accountId}/alpaca-paper/credentials`,
-        {
-          method: "PUT",
-          body: JSON.stringify({
-            api_key: apiKey,
-            api_secret: apiSecret
-          })
-        },
-        fetchImpl,
-        BROKER_ACCOUNTS_PREFIX
-      ),
-    deleteBrokerAccount: (accountId, { confirmDisplayName, confirmMode }) =>
-      requestJson(
-        `/${accountId}/delete`,
-        {
-          method: "POST",
-          body: JSON.stringify({
-            confirm_display_name: confirmDisplayName,
-            confirm_mode: confirmMode
-          })
-        },
-        fetchImpl,
-        BROKER_ACCOUNTS_PREFIX
-      ),
     pauseAccount: (accountId, reason) =>
       requestJson(`/accounts/${accountId}/pause`, { method: "POST", body: commandBody(reason) }, fetchImpl),
     resumeAccount: (accountId, reason) =>

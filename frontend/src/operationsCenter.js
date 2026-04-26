@@ -146,45 +146,6 @@ function renderGovernorDecisions(decisions = []) {
     .join("")}</ul>`;
 }
 
-function renderAccountSetupPanel(_detailState = {}) {
-  // Account creation lives on the dedicated Brokers page now —
-  // Operations Center only shows runtime state, not credential setup.
-  return "";
-}
-
-function renderAccounts(accounts = [], selection = null) {
-  if (!accounts.length) {
-    return `<p class="empty">No broker accounts registered. Go to <a href="./brokers.html">Brokers</a> to add one.</p>`;
-  }
-
-  return `<div class="summary-grid">${accounts
-    .map((account) => {
-      const sync = account.sync_state;
-      const stale = sync?.is_stale;
-      const selected = isSelected(selection, "account", account.account_id);
-      return `<article class="summary-card selectable-card ${stale ? "danger-card" : ""} ${selected ? "selected-card" : ""}" role="button" tabindex="0" data-select-type="account" data-id="${escapeHtml(account.account_id)}" aria-pressed="${selected ? "true" : "false"}">
-        <header>
-          <h3>${escapeHtml(account.account_id)}</h3>
-          <span class="${stale ? "status status-danger" : "status"}">${stale ? "stale sync" : "sync current"}</span>
-        </header>
-        <dl>
-          <div><dt>Open orders</dt><dd>${account.open_orders_count ?? 0}</dd></div>
-          <div><dt>Open positions</dt><dd>${account.positions_count ?? 0}</dd></div>
-          <div><dt>Latest broker sync</dt><dd>${escapeHtml(formatTimestamp(sync?.last_sync_at))}</dd></div>
-          <div><dt>Pause state</dt><dd>${escapeHtml(boolLabel(account.is_paused, "paused", "active"))}</dd></div>
-        </dl>
-        ${stale ? `<p class="warning">Stale broker sync: ${escapeHtml(sync?.stale_reason || "freshness check failed")}</p>` : ""}
-        <div class="button-row">
-          <button type="button" data-action="account-detail" data-id="${escapeHtml(account.account_id)}">Account detail</button>
-          <button type="button" data-action="pause-account" data-id="${escapeHtml(account.account_id)}">Pause</button>
-          <button type="button" data-action="resume-account" data-id="${escapeHtml(account.account_id)}">Resume</button>
-          <button type="button" class="danger" data-action="flatten-account" data-id="${escapeHtml(account.account_id)}">Flatten</button>
-        </div>
-      </article>`;
-    })
-    .join("")}</div>`;
-}
-
 function renderDeployments(deployments = [], selection = null) {
   if (!deployments.length) {
     return `<p class="empty">No deployments are registered in the Operations API.</p>`;
@@ -242,6 +203,7 @@ export function renderOperationsCenterOverview(overview, detailState = {}) {
     <div>
       <p class="eyebrow">Runtime visibility and operator controls</p>
       <h1>Operations Center</h1>
+      <p class="helper">Deployments, orders, and system-wide runtime state. Broker accounts live on the <a href="./brokers.html">Brokers</a> page.</p>
     </div>
     <div class="global-controls">
       <button type="button" class="danger" data-action="global-kill">Global kill</button>
@@ -276,11 +238,6 @@ export function renderOperationsCenterOverview(overview, detailState = {}) {
   </section>
   ${renderStaleSyncWarnings(overview.stale_sync_accounts || [])}
   ${overview.market_data_resolution ? renderDataSourceResolverPanel(overview.market_data_resolution) : ""}
-  ${renderAccountSetupPanel(detailState)}
-  <section class="panel">
-    <header><h2>Broker Accounts</h2></header>
-    ${renderAccounts(overview.broker_accounts || [], selection)}
-  </section>
   <section class="panel">
     <header><h2>Deployments</h2></header>
     ${renderDeployments(overview.deployments || [], selection)}
@@ -296,76 +253,11 @@ function renderStaleSyncWarnings(staleAccounts) {
   if (!staleAccounts.length) return "";
   return `<section class="alert-panel" role="alert">
     <h2>Stale Broker Sync</h2>
+    <p class="helper">Account-level staleness detected. Investigate from the <a href="./brokers.html">Brokers</a> page.</p>
     ${staleAccounts
       .map((sync) => `<p><strong>${escapeHtml(sync.account_id)}</strong>: ${escapeHtml(sync.stale_reason || "sync is stale")} Last sync ${escapeHtml(formatTimestamp(sync.last_sync_at))}.</p>`)
       .join("")}
   </section>`;
-}
-
-export function renderAccountDetail(account, flattenResult = null) {
-  const snapshot = account.broker_account_snapshot;
-  const freshness = account.broker_sync_freshness;
-  const flattenState = flattenResult
-    ? `<p class="${flattenResult.accepted ? "notice" : "warning"}">Flatten ${escapeHtml(flattenResult.status)}: ${escapeHtml(flattenResult.reason)}</p>`
-    : `<p class="notice">Flatten availability is determined by the Operations API. Unsupported or not_ready responses are shown here without retrying.</p>`;
-  return `<article>
-    <header>
-      <h2>Account Detail</h2>
-      <div class="button-row">
-        <button type="button" data-action="clear-detail">Clear</button>
-        <button type="button" data-action="pause-account" data-id="${escapeHtml(account.account_id)}">Pause</button>
-        <button type="button" data-action="resume-account" data-id="${escapeHtml(account.account_id)}">Resume</button>
-        <button type="button" data-action="show-credential-form" data-id="${escapeHtml(account.account_id)}">Replace paper credentials</button>
-        <button type="button" class="danger" data-action="delete-account" data-id="${escapeHtml(account.account_id)}" data-name="${escapeHtml(snapshot?.display_name || account.display_name || account.account_id)}" data-mode="${escapeHtml(snapshot?.mode || account.mode || "BROKER_PAPER")}">Delete account</button>
-        <span class="status">${escapeHtml(account.account_id)}</span>
-      </div>
-    </header>
-    <dl class="detail-grid">
-      <div><dt>Paused</dt><dd>${escapeHtml(boolLabel(account.is_paused, "yes", "no"))}</dd></div>
-      <div><dt>Killed</dt><dd>${escapeHtml(boolLabel(account.is_killed, "yes", "no"))}</dd></div>
-      <div><dt>Provider</dt><dd>${escapeHtml(snapshot?.provider || "None reported")}</dd></div>
-      <div><dt>Mode</dt><dd>${escapeHtml(snapshot?.mode || "None reported")}</dd></div>
-      <div><dt>Equity</dt><dd>${renderJsonValue(snapshot?.equity)}</dd></div>
-      <div><dt>Cash</dt><dd>${renderJsonValue(snapshot?.cash)}</dd></div>
-      <div><dt>Buying power</dt><dd>${renderJsonValue(snapshot?.buying_power)}</dd></div>
-      <div><dt>Open broker orders</dt><dd>${account.open_broker_orders?.length ?? 0}</dd></div>
-      <div><dt>Positions</dt><dd>${account.positions?.length ?? 0}</dd></div>
-      <div><dt>Latest broker sync</dt><dd>${escapeHtml(formatTimestamp(freshness?.last_sync_at))}</dd></div>
-      <div><dt>Last poll sync</dt><dd>${escapeHtml(formatTimestamp(freshness?.last_poll_sync_at))}</dd></div>
-      <div><dt>Last successful sync</dt><dd>${escapeHtml(formatTimestamp(freshness?.last_successful_sync_at))}</dd></div>
-      <div><dt>Internal open orders</dt><dd>${account.internal_order_ledger_summary?.open_count ?? 0}</dd></div>
-    </dl>
-    ${freshness?.is_stale ? `<p class="warning">Stale broker sync: ${escapeHtml(freshness.stale_reason || "freshness check failed")}</p>` : `<p class="notice">Sync freshness is current according to the Operations API.</p>`}
-    <section class="detail-section">
-      <h3>Paper Credential Replacement</h3>
-      <p class="notice">Alpaca paper only. Saved secrets are never displayed after validation.</p>
-      <form class="account-form" data-form="replace-paper-credentials" data-account-id="${escapeHtml(account.account_id)}">
-        <label><span>New API key</span><input name="api_key" autocomplete="off" required></label>
-        <label><span>New API secret</span><input name="api_secret" type="password" autocomplete="off" required></label>
-        <button type="submit">Validate and replace</button>
-      </form>
-    </section>
-    ${renderRecordList("Positions", account.positions || [], "No positions reported.", [
-      { label: "Symbol", value: (position) => position.symbol },
-      { label: "Side", value: (position) => position.side },
-      { label: "Quantity", value: (position) => position.qty },
-      { label: "Avg entry", value: (position) => position.avg_entry_price },
-      { label: "Market value", value: (position) => position.market_value },
-      { label: "Timestamp", value: (position) => formatTimestamp(position.timestamp) }
-    ])}
-    ${renderRecordList("Open Orders", account.open_broker_orders || [], "No open broker orders reported.", [
-      { label: "Symbol", value: (order) => order.symbol },
-      { label: "Side", value: (order) => order.side },
-      { label: "Quantity", value: (order) => order.qty },
-      { label: "Status", value: (order) => order.status },
-      { label: "Type", value: (order) => order.order_type },
-      { label: "Internal order", value: (order) => order.order_id },
-      { label: "Client order", value: (order) => order.client_order_id },
-      { label: "Broker order", value: (order) => order.broker_order_id },
-      { label: "Timestamp", value: (order) => formatTimestamp(order.timestamp) }
-    ])}
-    ${flattenState}
-  </article>`;
 }
 
 export function renderDeploymentDetail(deployment, flattenResult = null) {
@@ -487,7 +379,7 @@ export function renderDetailPanel(detailState = {}) {
     return detailState.html;
   }
   if (detailState.status === "loading") {
-    const label = detailState.selection?.type || "account";
+    const label = detailState.selection?.type || "deployment";
     return `<div class="detail-loading" role="status"><span class="spinner" aria-hidden="true"></span><p>Loading ${label} detail from the Operations API.</p></div>`;
   }
   if (detailState.status === "error") {
@@ -500,20 +392,17 @@ export function renderDetailPanel(detailState = {}) {
       <p class="warning">No previous detail data is shown because freshness could not be verified.</p>
     </article>`;
   }
-  if (detailState.status === "loaded" && detailState.selection?.type === "account") {
-    return renderAccountDetail(detailState.data, detailState.flattenResult);
-  }
   if (detailState.status === "loaded" && detailState.selection?.type === "deployment") {
     return renderDeploymentDetail(detailState.data, detailState.flattenResult);
   }
   if (detailState.status === "loaded" && detailState.selection?.type === "order") {
     return renderOrderDetail(detailState.data);
   }
-  return `<p class="empty">Select an account or deployment for detail.</p>`;
+  return `<p class="empty">Select a deployment for detail.</p>`;
 }
 
 export async function executeOperationAction(action, id, client, confirmImpl = globalThis.confirm) {
-  const destructiveActions = new Set(["global-kill", "flatten-account", "flatten-deployment"]);
+  const destructiveActions = new Set(["global-kill", "flatten-deployment"]);
   if (destructiveActions.has(action)) {
     const confirmed = typeof confirmImpl === "function" ? confirmImpl(`Confirm ${action.replaceAll("-", " ")}.`) : false;
     if (!confirmed) return { skipped: true };
@@ -521,10 +410,6 @@ export async function executeOperationAction(action, id, client, confirmImpl = g
 
   const reason = "operator_request";
   switch (action) {
-    case "pause-account":
-      return client.pauseAccount(id, reason);
-    case "resume-account":
-      return client.resumeAccount(id, reason);
     case "pause-deployment":
       return client.pauseDeployment(id, reason);
     case "resume-deployment":
@@ -533,8 +418,6 @@ export async function executeOperationAction(action, id, client, confirmImpl = g
       return client.globalKill(reason);
     case "global-resume":
       return client.globalResume(reason);
-    case "flatten-account":
-      return client.flattenAccount(id, reason);
     case "flatten-deployment":
       return client.flattenDeployment(id, reason);
     default:
@@ -568,7 +451,7 @@ export async function mountOperationsCenter(root, client = createOperationsApi()
     state.detail = { status: "loading", selection };
     render();
     try {
-      const data = type === "account" ? await client.getAccount(id) : type === "deployment" ? await client.getDeployment(id) : await client.getOrder(id);
+      const data = type === "deployment" ? await client.getDeployment(id) : await client.getOrder(id);
       if (itemKey(state.detail.selection?.type, state.detail.selection?.id) !== itemKey(type, id)) return;
       state.detail = { status: "loaded", selection, data, flattenResult };
       render();
@@ -599,10 +482,6 @@ export async function mountOperationsCenter(root, client = createOperationsApi()
           render();
           return;
         }
-        if (action === "account-detail") {
-          await loadSelectedDetail("account", id);
-          return;
-        }
         if (action === "deployment-detail") {
           await loadSelectedDetail("deployment", id);
           return;
@@ -611,26 +490,9 @@ export async function mountOperationsCenter(root, client = createOperationsApi()
           await loadSelectedDetail("order", id);
           return;
         }
-        if (action === "delete-account") {
-          const confirmed = window.confirm(`Delete or archive Alpaca paper account ${button.dataset.name || id} (${button.dataset.mode || "BROKER_PAPER"})?`);
-          if (!confirmed) return;
-          await client.deleteBrokerAccount(id, {
-            confirmDisplayName: button.dataset.name || id,
-            confirmMode: button.dataset.mode || "BROKER_PAPER"
-          });
-          await refreshSelection();
-          return;
-        }
         const result = await executeOperationAction(action, id, client);
         if (result?.skipped) {
           button.disabled = false;
-          return;
-        }
-        if (result?.scope === "account" && action === "flatten-account") {
-          state.detail = { status: "loading", selection: { type: "account", id: String(id) } };
-          render();
-          await refreshOverview();
-          await loadSelectedDetail("account", id, result);
           return;
         }
         if (result?.scope === "deployment" && action === "flatten-deployment") {
@@ -652,54 +514,6 @@ export async function mountOperationsCenter(root, client = createOperationsApi()
     const card = event.target.closest("[data-select-type][data-id]");
     if (card) {
       await loadSelectedDetail(card.dataset.selectType, card.dataset.id);
-    }
-  });
-
-  root.addEventListener("submit", async (event) => {
-    const form = event.target.closest("form[data-form='alpaca-paper-account']");
-    const replacementForm = event.target.closest("form[data-form='replace-paper-credentials']");
-    if (!form && !replacementForm) return;
-    event.preventDefault();
-    if (replacementForm) {
-      const data = new FormData(replacementForm);
-      try {
-        await client.replaceAlpacaPaperCredentials(replacementForm.dataset.accountId, {
-          apiKey: data.get("api_key"),
-          apiSecret: data.get("api_secret")
-        });
-        replacementForm.reset();
-        await refreshSelection();
-      } catch (error) {
-        state.detail = { status: "error", selection: state.detail.selection, error };
-        render();
-      }
-      return;
-    }
-    const data = new FormData(form);
-    state.detail = { ...state.detail, accountSetup: "loading" };
-    render();
-    try {
-      const result = await client.createAlpacaPaperAccount({
-        displayName: data.get("display_name"),
-        apiKey: data.get("api_key"),
-        apiSecret: data.get("api_secret")
-      });
-      const accountId = result?.account?.id;
-      const accountSetup = result?.already_exists ? "duplicate" : "success";
-      state.detail = { status: "empty", accountSetup };
-      await refreshOverview();
-      if (accountId) {
-        await loadSelectedDetail("account", accountId);
-        state.detail = { ...state.detail, accountSetup };
-        render();
-      }
-    } catch (error) {
-      state.detail = {
-        ...state.detail,
-        accountSetup: "error",
-        accountSetupError: error.message || String(error)
-      };
-      render();
     }
   });
 

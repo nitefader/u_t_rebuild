@@ -4111,5 +4111,58 @@ How to use:
   uvicorn backend.app.api.server:app --reload   # backend on :8000
   cd frontend && npm run dev                    # frontend on :5173
 
+---
+
+## 2026-04-26 - Manual Trade Production Hardening
+
+Task:
+- Reopen the manual Quick Order submit/cancel slice and remove temporary architecture before new feature work.
+
+Files changed:
+- backend/app/api/routes/manual_trade.py
+- backend/app/api/routes/operations_trade_stream.py
+- backend/app/api/routes/operations.py, ai.py, broker_accounts.py, chart_lab.py, market_data.py, system_migration.py, system_settings.py, system_status.py, system_streams.py
+- backend/app/orders/models.py, manager.py, ledger.py, __init__.py
+- backend/app/persistence/models.py, runtime_store.py
+- backend/app/runtime/runtime_context.py
+- backend/app/broker_accounts/service.py
+- backend/app/brokers/stream.py
+- frontend/src/api/manualTrade.js, operationsTradeStream.js
+- frontend/src/brokers.js, operationsTradeStream.js
+- backend/tests/integration/test_manual_trade_loop_e2e.py
+- backend/tests/unit/api/test_operations_trade_stream_route.py, test_chart_lab_route.py
+- frontend/tests/operationsTradeStream.test.mjs
+
+Architectural decisions:
+- Manual order idempotency is SQLite-backed in `manual_order_idempotency`, with durable pending/committed rows keyed by `(account_id, idempotency_key)`.
+- Manual audit is persisted in `manual_trade_audit_events` with stable event codes and account/time, event/time, and order indexes.
+- `InternalOrder` now carries `origin`; manual operator orders use `origin=manual_operator` and nullable deployment/program lineage instead of sentinel UUIDs.
+- Manual-trade errors return structured details: `{ code, message, recovery_hint, fields }`.
+- Mutating manual-trade routes require an operator session header.
+- Manual-trade composition uses BrokerAccount/provider credential configuration and SQLite-backed per-account ledgers; no single env Alpaca account path is used for manual orders.
+- Operations trade-stream WebSocket is account-scoped via `?account_id=...`; omitted account id is rejected.
+- FastAPI fallback routers were removed; FastAPI is a hard dependency for route modules.
+- Silent `except Exception: pass` paths in control/trade-stream shutdown and subscriber paths now record/log explicit failures.
+
+Tests added/updated:
+- Restart-safe duplicate submit after process registry reset.
+- Multi-account manual-trade isolation.
+- Structured error contract for missing operator session.
+- Durable audit persistence for submit/cancel.
+- Nullable manual-origin lineage.
+- Account-scoped trade-stream health and frontend WebSocket URL behavior.
+
+Verification:
+- `python -m pytest backend -q` -> 882 passed, 3 skipped.
+- `npm.cmd test --prefix frontend` -> 45 passed; frontend check passed for 27 files.
+- `npm.cmd run build --prefix frontend` -> Vite build clean; frontend check passed for 27 files.
+
+Known gaps:
+- Network-backed Alpaca integration tests remain opt-in and skipped unless credentials and run flags are provided.
+
+Commit:
+- Committed as `Harden manual trade runtime`.
+
 Open http://127.0.0.1:5173/chart_lab.html → Connect → bars stream into the chart.
 Open http://127.0.0.1:5173/index.html → bottom panel → Connect → submit/cancel a paper order from Alpaca's web UI → events appear in the log within seconds.
+ 

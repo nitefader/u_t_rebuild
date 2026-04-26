@@ -37,6 +37,25 @@ class MarketDataValidationStatus(StrEnum):
     DISABLED = "disabled"
 
 
+class ServicePurpose(StrEnum):
+    """Operator-driven role tags. Replaces .env bootstrap.
+
+    A Service tagged ``LIVE_STREAMING`` is the canonical credential the
+    runtime picks for a real broker stream; ``TEST_STREAMING`` is the
+    FAKEPACA / 24-7 synthetic stream credential; ``BATCH_HISTORICAL``
+    is the credential used for backtest / batch jobs. At most one
+    Service may carry each purpose tag (single-canonical-default per
+    purpose); set-default-for is unique-per-purpose like
+    ``Pipeline.is_default_for_provider``.
+    """
+
+    LIVE_STREAMING = "live_streaming"
+    TEST_STREAMING = "test_streaming"
+    BATCH_HISTORICAL = "batch_historical"
+    SIGNAL_PREVIEW = "signal_preview"
+    RUNTIME_TRADING = "runtime_trading"
+
+
 class MarketDataServiceRecord(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -46,6 +65,7 @@ class MarketDataServiceRecord(BaseModel):
     service_type: ServiceType = ServiceType.MARKET_DATA
     status: ServiceStatus = ServiceStatus.DRAFT
     is_default: bool = False
+    default_for: tuple[ServicePurpose, ...] = ()
     credentials_ref: str | None = None
     has_api_key: bool = False
     has_api_secret: bool = False
@@ -93,6 +113,7 @@ class MarketDataServiceWrite(BaseModel):
     api_secret: str | None = None
     capabilities: MarketDataCapabilities | None = None
     capability_notes: tuple[str, ...] = ()
+    default_for: tuple[ServicePurpose, ...] = ()
 
     @field_validator("api_key", "api_secret")
     @classmethod

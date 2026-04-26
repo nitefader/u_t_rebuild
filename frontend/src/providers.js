@@ -38,6 +38,17 @@ const TRADING_MODE_OPTIONS = [
 const TIMEFRAME_OPTIONS = ["1m", "5m", "15m", "30m", "1h", "4h", "1d", "1w", "1mo"];
 const CONSUMER_OPTIONS = ["chart_lab", "sim_lab", "backtest", "broker_runtime", "operations_preview"];
 const SERVICE_PURPOSES = ["warmup", "signal_preview", "simulation_replay", "backtest", "runtime_trading", "long_horizon_analysis"];
+
+// Operator-driven role tags on a Market Data Service. Replaces .env bootstrap.
+// Backend: backend/app/market_data/models.py::ServicePurpose. Keep these
+// in sync with the Python enum values.
+const SERVICE_PURPOSE_TAGS = [
+  ["live_streaming", "Live streaming", "Real-time streaming for production / live trading."],
+  ["test_streaming", "Test streaming", "FAKEPACA / 24-7 synthetic stream for off-hours dev."],
+  ["batch_historical", "Batch historical", "Bulk historical pulls for backtest / batch jobs."],
+  ["signal_preview", "Signal preview", "Operations Center previews and signal-plan rehearsal."],
+  ["runtime_trading", "Runtime trading", "Credentials the broker runtime picks up at boot."]
+];
 const DEFAULT_INTENT = {
   consumer: "backtest",
   mode: "replay",
@@ -222,8 +233,40 @@ function renderServiceFlags(service) {
   </div>`;
 }
 
-function renderMarketDataRow(service) {
+function renderServicePurposeChips(service) {
+  const tags = Array.isArray(service.default_for) ? service.default_for : [];
+  if (!tags.length) {
+    return `<p class="helper">Not tagged for any purpose. Click "Configure purposes" to mark this service as default for live, test, or batch context.</p>`;
+  }
+  return `<div class="chip-row" aria-label="Default for purposes">${tags
+    .map((tag) => {
+      const meta = SERVICE_PURPOSE_TAGS.find(([value]) => value === tag);
+      const label = meta ? meta[1] : tag;
+      return `<span class="status">${escapeHtml(label)}</span>`;
+    })
+    .join("")}</div>`;
+}
+
+function renderPurposeForm(service) {
+  const current = new Set(service.default_for || []);
+  return `<form class="account-form service-form" data-form="service-purposes" data-service-id="${escapeHtml(service.id)}">
+    <div class="form-intro">
+      <h4>Configure purposes for "${escapeHtml(service.name)}"</h4>
+      <p class="helper">Each purpose can be assigned to at most one Service. Picking a tag here moves it off any other Service that holds it.</p>
+    </div>
+    ${SERVICE_PURPOSE_TAGS
+      .map(([value, label, blurb]) => `<label class="checkbox-label"><input type="checkbox" name="purposes" value="${value}" ${current.has(value) ? "checked" : ""}><span><strong>${escapeHtml(label)}</strong> · <span class="helper">${escapeHtml(blurb)}</span></span></label>`)
+      .join("")}
+    <div class="button-row form-actions">
+      <button type="button" data-action="cancel-purposes-form">Cancel</button>
+      <button type="submit">Save purposes</button>
+    </div>
+  </form>`;
+}
+
+function renderMarketDataRow(service, expandedPurposesFor = null) {
   const status = service.status || "unknown";
+  const isExpanded = expandedPurposesFor === service.id;
   return `<article class="summary-card service-card ${status === "disabled" ? "service-disabled" : ""}">
     <header>
       <div class="service-header">
@@ -239,9 +282,15 @@ function renderMarketDataRow(service) {
       <div><dt>Validation</dt><dd>${escapeHtml(service.validation_status || "not validated")} - ${escapeHtml(service.validation_message || "pending verification")}</dd></div>
       <div><dt>Last validated</dt><dd>${formatDate(service.last_validated_at)}</dd></div>
     </dl>
+    <section class="service-purposes">
+      <h4>Default for</h4>
+      ${renderServicePurposeChips(service)}
+    </section>
+    ${isExpanded ? renderPurposeForm(service) : ""}
     <div class="chip-row" aria-label="Capability summary">${capabilityChips(service.capabilities)}</div>
     <div class="button-row">
       <button type="button" data-action="validate-market-data" data-id="${escapeHtml(service.id)}">Validate</button>
+      <button type="button" data-action="${isExpanded ? "cancel-purposes-form" : "configure-purposes"}" data-id="${escapeHtml(service.id)}">${isExpanded ? "Cancel" : "Configure purposes"}</button>
       <button type="button" data-action="activate-as-stream" data-id="${escapeHtml(service.id)}" title="Open the Pipeline form pre-filled with this service">Activate as Stream…</button>
       <button type="button" data-action="disable-market-data" data-id="${escapeHtml(service.id)}">Disable</button>
     </div>
@@ -250,6 +299,7 @@ function renderMarketDataRow(service) {
 
 function renderMarketDataForm(formState = {}) {
   const provider = (formState.provider || "alpaca").toLowerCase();
+  const initialPurposes = new Set(formState.default_for || []);
   const providerBody =
     provider === "alpaca"
       ? `<div data-provider-body="alpaca" class="provider-body">
@@ -263,11 +313,18 @@ function renderMarketDataForm(formState = {}) {
   return `<form class="account-form service-form" data-form="market-data">
     <div class="form-intro">
       <h3>Create Market Data Service</h3>
-      <p class="helper">Select a provider. Required fields update based on provider.</p>
+      <p class="helper">Register provider credentials and tag the role this Service plays — the runtime picks Services by purpose tag instead of reading .env.</p>
     </div>
     <label><span>Service Name</span><input name="name" required value="${escapeHtml(formState.name || "")}"></label>
     <label><span>Provider</span><select name="provider" data-provider-select="market-data">${renderSelectOptions([["alpaca", "Alpaca"], ["yahoo", "Yahoo"], ["future", "Future"]], provider)}</select></label>
     ${providerBody}
+    <fieldset class="purpose-fieldset">
+      <legend>Default for</legend>
+      <p class="helper">Pick which contexts use this Service. Each tag is single-canonical: assigning it here moves it off any other Service that holds it. Optional — leave blank if you'll tag later.</p>
+      ${SERVICE_PURPOSE_TAGS
+        .map(([value, label, blurb]) => `<label class="checkbox-label"><input type="checkbox" name="default_for" value="${value}" ${initialPurposes.has(value) ? "checked" : ""}><span><strong>${escapeHtml(label)}</strong> · <span class="helper">${escapeHtml(blurb)}</span></span></label>`)
+        .join("")}
+    </fieldset>
     <div class="button-row form-actions">
       <button type="button" data-action="cancel-market-data-form">Cancel</button>
       <button type="submit">Save</button>
@@ -278,13 +335,21 @@ function renderMarketDataForm(formState = {}) {
 function renderMarketDataTab(state) {
   const services = state.marketData?.services || [];
   const formVisible = Boolean(state.marketDataFormState?.visible);
+  const expandedPurposesFor = state.expandedPurposesFor || null;
+  const emptyState = `<section class="empty-state-card">
+    <h3>No Market Data Services yet</h3>
+    <p class="helper">Register your provider credentials here. The runtime no longer reads .env for streaming credentials — Services are operator-driven and tagged with a purpose (live streaming, test streaming, batch historical, etc.) so the right credential is picked for each context.</p>
+    <div class="button-row">
+      <button type="button" data-action="show-market-data-form">+ Add your first Market Data Service</button>
+    </div>
+  </section>`;
   return `<section class="service-workspace">
     <div class="service-toolbar">
       <h2>Market Data Services</h2>
       <button type="button" data-action="show-market-data-form">+ Add Market Data Service</button>
     </div>
     ${formVisible ? renderMarketDataForm(state.marketDataFormState) : ""}
-    <div class="service-table">${services.length ? services.map(renderMarketDataRow).join("") : `<p class="empty">No Market Data Services configured.</p>`}</div>
+    <div class="service-table">${services.length ? services.map((svc) => renderMarketDataRow(svc, expandedPurposesFor)).join("") : emptyState}</div>
   </section>`;
 }
 
@@ -505,10 +570,9 @@ export function renderProviders(state = {}) {
     <div>
       <p class="eyebrow">Providers</p>
       <h1>Providers</h1>
-      <p class="helper">Market Data Pipelines and AI Providers. Pipelines drive shared market-data fan-out; AI is advisory only.</p>
+      <p class="helper">Market Data Pipelines and AI Providers. Register provider credentials below and tag each Service for the contexts it serves (live, test, batch). The runtime no longer bootstraps from .env.</p>
     </div>
   </section>
-  ${renderBootstrapBanner(state)}
   ${renderSummaryCards(state)}
   <section class="panel">
     <header>
@@ -520,37 +584,6 @@ export function renderProviders(state = {}) {
       </div>
     </header>
     ${activeTab === "ai" ? renderAiTab(state) : activeTab === "market-data" ? renderMarketDataTab(state) : renderPipelinesTab(state)}
-  </section>`;
-}
-
-function renderBootstrapBanner(state) {
-  const status = state.systemStatus;
-  const services = state.marketData?.services || [];
-  const hasAlpacaService = services.some((svc) => svc.provider === "alpaca");
-  const credsPresent = !!(status && status.alpaca_credentials_present);
-
-  // Bootstrap is a one-shot for the *Service*. Pipeline creation is a
-  // separate explicit action ("Activate as Stream…" on each Service row).
-  // The banner shows only when creds exist and no Alpaca Service is
-  // registered yet. Once the Service exists, the banner stays hidden;
-  // operators activate streams from the Services tab.
-  if (!credsPresent || hasAlpacaService) {
-    return state.bootstrapNotice
-      ? `<section class="bootstrap-banner bootstrap-banner--success" role="status">${escapeHtml(state.bootstrapNotice)}</section>`
-      : "";
-  }
-
-  return `<section class="bootstrap-banner" role="status">
-    <div>
-      <strong>Alpaca credentials detected in .env</strong>
-      <p>No Alpaca Market Data Service is registered yet. Click below to register the env credentials as an Alpaca Service. Then "Activate as Stream…" on the Services tab to create one or more Pipelines (one per data feed: IEX, SIP, etc.).</p>
-    </div>
-    <div class="bootstrap-banner__actions">
-      <button type="button" data-action="bootstrap-from-env"${state.bootstrapping ? " disabled" : ""}>
-        ${state.bootstrapping ? "Bootstrapping…" : "Bootstrap from .env"}
-      </button>
-    </div>
-    ${state.bootstrapError ? `<p class="warning" role="alert">${escapeHtml(state.bootstrapError)}</p>` : ""}
   </section>`;
 }
 
@@ -567,15 +600,19 @@ function normalizePipelinePayload(data) {
 
 function normalizeMarketDataPayload(data) {
   const provider = (data.get("provider") || "").toLowerCase();
-  if (provider === "alpaca") {
-    return compactPayload({
-      name: data.get("name"),
-      provider,
-      api_key: data.get("api_key"),
-      api_secret: data.get("api_secret")
-    });
+  const purposes = data.getAll("default_for");
+  const base = provider === "alpaca"
+    ? compactPayload({
+        name: data.get("name"),
+        provider,
+        api_key: data.get("api_key"),
+        api_secret: data.get("api_secret")
+      })
+    : compactPayload({ name: data.get("name"), provider });
+  if (purposes.length) {
+    base.default_for = purposes;
   }
-  return compactPayload({ name: data.get("name"), provider });
+  return base;
 }
 
 function normalizeAiPayload(data) {
@@ -624,13 +661,11 @@ export async function mountProviders(root, deps = {}) {
     pipelineFormState: null,
     marketDataFormState: null,
     aiFormState: null,
+    expandedPurposesFor: null,
     activeResolverStrategy: "auto",
     resolutionPayload: { intent: DEFAULT_INTENT },
     resolution: null,
-    systemStatus: null,
-    bootstrapping: false,
-    bootstrapError: null,
-    bootstrapNotice: null
+    systemStatus: null
   };
 
   async function refresh() {
@@ -702,26 +737,14 @@ export async function mountProviders(root, deps = {}) {
       return;
     }
 
-    if (action === "bootstrap-from-env") {
-      state.bootstrapping = true;
-      state.bootstrapError = null;
-      state.bootstrapNotice = null;
+    if (action === "configure-purposes" && id) {
+      state.expandedPurposesFor = id;
       root.innerHTML = renderProviders(state);
-      try {
-        const result = await pipelinesApi.bootstrapFromEnv();
-        if (result.skipped_reason === "missing_credentials") {
-          state.bootstrapError = "Backend reports no Alpaca credentials in .env.";
-        } else if (result.created_service) {
-          state.bootstrapNotice = "Bootstrap complete — Alpaca Market Data Service registered. Use \"Activate as Stream…\" on the Services tab to create one or more Pipelines.";
-        } else {
-          state.bootstrapNotice = "Bootstrap complete — Alpaca Service was already registered.";
-        }
-      } catch (err) {
-        state.bootstrapError = err.message || String(err);
-      } finally {
-        state.bootstrapping = false;
-      }
-      await refresh();
+      return;
+    }
+    if (action === "cancel-purposes-form") {
+      state.expandedPurposesFor = null;
+      root.innerHTML = renderProviders(state);
       return;
     }
 
@@ -783,6 +806,18 @@ export async function mountProviders(root, deps = {}) {
     } else if (form.dataset.form === "market-data") {
       await servicesApi.createMarketData(normalizeMarketDataPayload(data));
       state.marketDataFormState = null;
+    } else if (form.dataset.form === "service-purposes") {
+      const serviceId = form.dataset.serviceId;
+      const purposes = data.getAll("purposes");
+      try {
+        await pipelinesApi.setServicePurposeTags(serviceId, purposes);
+        state.expandedPurposesFor = null;
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.error("Failed to update service purposes:", err);
+        alert(`Could not save purposes: ${err.message || err}`);
+        return;
+      }
     } else if (form.dataset.form === "ai") {
       await servicesApi.createAi(normalizeAiPayload(data));
       state.aiFormState = null;

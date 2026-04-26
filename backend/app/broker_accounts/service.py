@@ -1,11 +1,26 @@
+"""Unified broker-account service.
+
+Per the production-grade principles (no fork between paper and live, real
+persisted credentials, no env fallback): one ``create_account`` method,
+one ``replace_credentials`` method, both parametrized by ``mode``. The
+adapter the service builds for validation is constructed with explicit
+credentials passed by the operator; secrets are persisted through the
+encrypted ``BrokerCredentialStore``.
+"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
 from hashlib import sha256
+import logging
 from sqlite3 import IntegrityError
-from uuid import UUID
-from uuid import uuid4
+from typing import Callable
+from uuid import UUID, uuid4
 
+from backend.app.broker_accounts.credential_store import (
+    BrokerCredentialStore,
+    CredentialStoreError,
+)
 from backend.app.broker_accounts.models import (
     BrokerAccount,
     BrokerAccountCredentialUpdateResponse,
@@ -25,6 +40,10 @@ from backend.app.persistence import SQLiteRuntimeStore
 from backend.app.runtime import RuntimeStatus
 
 
+SUPPORTED_PROVIDERS = {"alpaca"}
+logger = logging.getLogger(__name__)
+
+
 class BrokerAccountCreationError(RuntimeError):
     """Operator-readable broker account setup failure."""
 
@@ -35,38 +54,76 @@ class BrokerAccountCreationResult:
     already_exists: bool = False
 
 
-@dataclass(frozen=True)
-class CredentialReferenceStore:
-    """Create a non-secret credential reference for a validated broker account."""
+def _credential_fingerprint(provider: str, mode: TradingMode, account_id: UUID, api_key: str) -> str:
+    """Build a stable, non-secret display reference for a credential.
 
-    def store_alpaca_paper_credentials(self, *, account_id, api_key: str, api_secret: str) -> str:
-        _ = api_secret
-        fingerprint = sha256(api_key.encode("utf-8")).hexdigest()[:12]
-        return f"alpaca-paper:{account_id}:{fingerprint}"
+    The reference is ``<provider>-<mode>:<account_id>:<fingerprint>`` where
+    fingerprint is the first 12 hex of ``sha256(api_key)``. The actual
+    secrets live in ``BrokerCredentialStore`` (AES-GCM); this string is
+    only for human-readable identification on the account record.
+    """
+    fingerprint = sha256(api_key.encode("utf-8")).hexdigest()[:12]
+    return f"{provider}-{mode.value.lower()}:{account_id}:{fingerprint}"
 
 
 class BrokerAccountService:
+    """Unified service for paper + live, all providers."""
+
     def __init__(
         self,
         *,
         runtime_store: SQLiteRuntimeStore,
-        adapter_factory=AlpacaBrokerAdapter,
-        credential_store: CredentialReferenceStore | None = None,
+        credential_store: BrokerCredentialStore,
+        adapter_factory: Callable[..., AlpacaBrokerAdapter] = AlpacaBrokerAdapter,
         order_ledger: OrderLedger | None = None,
     ) -> None:
         self._runtime_store = runtime_store
+        self._credential_store = credential_store
         self._adapter_factory = adapter_factory
-        self._credential_store = credential_store or CredentialReferenceStore()
         self._order_ledger = order_ledger or OrderLedger()
 
-    def create_alpaca_paper_account(self, *, display_name: str, api_key: str, api_secret: str) -> BrokerAccountCreationResult:
+    # ------------------------------------------------------------------
+    # Listing — exposed so routes can list accounts without extra plumbing
+    # ------------------------------------------------------------------
+
+    def list_broker_accounts(self) -> tuple[BrokerAccount, ...]:
+        accounts = tuple(self._runtime_store.list_broker_accounts())
+        # Reflect needs_credentials based on the live state of the
+        # credential store. Records that pre-date the encrypted store
+        # are flagged so the UI can prompt the operator to re-enter.
+        return tuple(
+            account.model_copy(
+                update={
+                    "needs_credentials": not self._credential_store.has(account.id),
+                }
+            )
+            for account in accounts
+        )
+
+    # ------------------------------------------------------------------
+    # Create
+    # ------------------------------------------------------------------
+
+    def create_account(
+        self,
+        *,
+        display_name: str,
+        provider: str,
+        mode: TradingMode,
+        api_key: str,
+        api_secret: str,
+    ) -> BrokerAccountCreationResult:
+        if provider not in SUPPORTED_PROVIDERS:
+            raise BrokerAccountCreationError(f"unsupported provider: {provider}")
+        if mode not in (TradingMode.BROKER_PAPER, TradingMode.BROKER_LIVE):
+            raise BrokerAccountCreationError(f"unsupported broker mode: {mode}")
+
         validation_account_id = uuid4()
-        mode = TradingMode.BROKER_PAPER
         try:
-            adapter = self._adapter_factory(mode=mode, api_key=api_key, secret_key=api_secret, load_env=False)
+            adapter = self._adapter_factory(mode=mode, api_key=api_key, secret_key=api_secret)
             validation_snapshot = adapter.get_account_snapshot(validation_account_id)
             external_account_id = _external_account_id_from_snapshot(validation_snapshot)
-            existing = self._load_existing_alpaca_paper_account(external_account_id)
+            existing = self._load_existing_account(provider=provider, mode=mode, external_account_id=external_account_id)
             account_id = existing.id if existing is not None else validation_account_id
 
             adapter.get_positions(account_id)
@@ -75,21 +132,25 @@ class BrokerAccountService:
                 ledger=self._order_ledger,
                 adapter=adapter,
                 runtime_store=self._runtime_store,
-                provider="alpaca",
+                provider=provider,
             )
             snapshot = broker_sync.sync_account(account_id)
             broker_sync.sync_positions(account_id)
             broker_sync.sync_open_orders(account_id)
             freshness = broker_sync.record_sync_freshness(snapshot)
-            credentials_ref = self._credential_store.store_alpaca_paper_credentials(
-                account_id=account_id,
-                api_key=api_key,
-                api_secret=api_secret,
-            )
+
+            # Persist secrets BEFORE writing the account row so a power
+            # failure between the two leaves the operator with stored
+            # secrets and no account (recoverable on re-create) rather
+            # than an account with no recoverable credentials.
+            self._credential_store.put(account_id, api_key=api_key, api_secret=api_secret)
+            credentials_ref = _credential_fingerprint(provider, mode, account_id, api_key)
+
             if existing is not None:
                 account = existing.model_copy(
                     update={
                         "credentials_ref": credentials_ref,
+                        "needs_credentials": False,
                         "validation_status": BrokerAccountValidationStatus.VALID,
                         "last_account_snapshot": snapshot,
                         "broker_sync_freshness": freshness,
@@ -104,10 +165,11 @@ class BrokerAccountService:
                 BrokerAccount(
                     id=account_id,
                     display_name=display_name,
-                    provider="alpaca",
+                    provider=provider,
                     mode=mode,
                     external_account_id=external_account_id,
                     credentials_ref=credentials_ref,
+                    needs_credentials=False,
                     validation_status=BrokerAccountValidationStatus.VALID,
                     last_account_snapshot=snapshot,
                     broker_sync_freshness=freshness,
@@ -118,11 +180,19 @@ class BrokerAccountService:
         except BrokerAccountCreationError:
             raise
         except IntegrityError as exc:
-            raise BrokerAccountCreationError("Alpaca paper account is already registered") from exc
+            raise BrokerAccountCreationError(
+                f"{provider} {mode.value} account is already registered"
+            ) from exc
         except Exception as exc:  # noqa: BLE001 - keep route errors operator-readable.
-            raise BrokerAccountCreationError(f"Unable to validate Alpaca paper account: {exc}") from exc
+            raise BrokerAccountCreationError(
+                f"Unable to validate {provider} {mode.value} account: {exc}"
+            ) from exc
 
-    def replace_alpaca_paper_credentials(
+    # ------------------------------------------------------------------
+    # Replace credentials
+    # ------------------------------------------------------------------
+
+    def replace_credentials(
         self,
         *,
         account_id: UUID,
@@ -131,11 +201,11 @@ class BrokerAccountService:
         control_plane=None,
     ) -> BrokerAccountCredentialUpdateResponse:
         account = self._runtime_store.load_broker_account(account_id)
-        if account.mode != TradingMode.BROKER_PAPER or account.provider != "alpaca":
+        if account.provider not in SUPPORTED_PROVIDERS:
             return BrokerAccountCredentialUpdateResponse(
                 account=account,
                 validation_status=BrokerAccountCredentialValidationStatus.MODE_MISMATCH,
-                message="credential replacement is supported only for Alpaca paper accounts",
+                message=f"credential replacement not supported for provider {account.provider}",
             )
         if _masked_or_missing(api_key) or _masked_or_missing(api_secret):
             return BrokerAccountCredentialUpdateResponse(
@@ -145,25 +215,37 @@ class BrokerAccountService:
             )
         blockers = self._active_runtime_blockers(account_id=account_id, control_plane=control_plane)
         if blockers:
-            raise BrokerAccountCreationError(f"Account must be paused before credential replacement: {', '.join(blockers)}")
+            raise BrokerAccountCreationError(
+                f"Account must be paused before credential replacement: {', '.join(blockers)}"
+            )
         try:
-            adapter = self._adapter_factory(mode=TradingMode.BROKER_PAPER, api_key=api_key, secret_key=api_secret, load_env=False)
+            adapter = self._adapter_factory(mode=account.mode, api_key=api_key, secret_key=api_secret)
             snapshot = adapter.get_account_snapshot(account_id)
         except ConnectionError:
-            return self._mark_account_invalid(account, BrokerAccountCredentialValidationStatus.PROVIDER_UNREACHABLE, "provider unreachable")
+            return self._mark_account_invalid(
+                account, BrokerAccountCredentialValidationStatus.PROVIDER_UNREACHABLE, "provider unreachable"
+            )
         except Exception as exc:  # noqa: BLE001 - invalid credentials should be operator-readable.
-            return self._mark_account_invalid(account, BrokerAccountCredentialValidationStatus.INVALID, f"invalid credentials: {exc}")
-        if snapshot.mode is not None and snapshot.mode != TradingMode.BROKER_PAPER:
-            return self._mark_account_invalid(account, BrokerAccountCredentialValidationStatus.MODE_MISMATCH, "credentials resolved to a non-paper account")
+            return self._mark_account_invalid(
+                account, BrokerAccountCredentialValidationStatus.INVALID, f"invalid credentials: {exc}"
+            )
+        if snapshot.mode is not None and snapshot.mode != account.mode:
+            return self._mark_account_invalid(
+                account,
+                BrokerAccountCredentialValidationStatus.MODE_MISMATCH,
+                f"credentials resolved to mode {snapshot.mode.value} (expected {account.mode.value})",
+            )
         external_account_id = _external_account_id_from_snapshot(snapshot)
         if account.external_account_id and external_account_id != account.external_account_id:
-            return self._mark_account_invalid(account, BrokerAccountCredentialValidationStatus.MODE_MISMATCH, "credentials resolved to a different Alpaca account")
+            return self._mark_account_invalid(
+                account,
+                BrokerAccountCredentialValidationStatus.MODE_MISMATCH,
+                f"credentials resolved to a different {account.provider} account",
+            )
 
-        credentials_ref = self._credential_store.store_alpaca_paper_credentials(
-            account_id=account_id,
-            api_key=api_key,
-            api_secret=api_secret,
-        )
+        # Persist new secrets first; only then update the account row.
+        self._credential_store.put(account_id, api_key=api_key, api_secret=api_secret)
+        credentials_ref = _credential_fingerprint(account.provider, account.mode, account_id, api_key)
         stale_sync = BrokerSyncState(
             account_id=account_id,
             last_sync_at=utc_now(),
@@ -175,6 +257,7 @@ class BrokerAccountService:
             account.model_copy(
                 update={
                     "credentials_ref": credentials_ref,
+                    "needs_credentials": False,
                     "validation_status": BrokerAccountValidationStatus.VALID,
                     "external_account_id": external_account_id,
                     "last_account_snapshot": snapshot,
@@ -188,6 +271,24 @@ class BrokerAccountService:
             validation_status=BrokerAccountCredentialValidationStatus.VALID,
             message="credentials validated; broker sync is stale until the next successful sync",
         )
+
+    # ------------------------------------------------------------------
+    # Credential resolution (used by composition root)
+    # ------------------------------------------------------------------
+
+    def get_credentials(self, account_id: UUID) -> tuple[str, str]:
+        """Return ``(api_key, api_secret)`` for ``account_id``.
+
+        Raises ``CredentialStoreError`` if the account has no stored
+        credentials. Callers (composition root, manual-trade route)
+        must surface that to the operator as "needs credentials" and
+        block trading.
+        """
+        return self._credential_store.get(account_id)
+
+    # ------------------------------------------------------------------
+    # Delete / archive (unchanged from before)
+    # ------------------------------------------------------------------
 
     def delete_or_archive_account(
         self,
@@ -222,6 +323,12 @@ class BrokerAccountService:
                     }
                 )
             )
+            # Hard-delete the secrets even on archive — archived accounts
+            # cannot trade and shouldn't retain reusable credentials.
+            try:
+                self._credential_store.delete(account_id)
+            except CredentialStoreError as exc:
+                logger.warning("credential delete failed while archiving account %s: %s", account_id, exc, exc_info=True)
             return BrokerAccountDeletionResponse(
                 account_id=account_id,
                 status=BrokerAccountDeletionStatus.ARCHIVED,
@@ -229,17 +336,25 @@ class BrokerAccountService:
                 archived_account=archived,
             )
         self._runtime_store.delete_broker_account(account_id)
+        try:
+            self._credential_store.delete(account_id)
+        except CredentialStoreError as exc:
+            logger.warning("credential delete failed while deleting account %s: %s", account_id, exc, exc_info=True)
         return BrokerAccountDeletionResponse(
             account_id=account_id,
             status=BrokerAccountDeletionStatus.HARD_DELETED,
             message="broker account hard-deleted; no runtime history existed",
         )
 
-    def _load_existing_alpaca_paper_account(self, external_account_id: str) -> BrokerAccount | None:
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
+
+    def _load_existing_account(self, *, provider: str, mode: TradingMode, external_account_id: str) -> BrokerAccount | None:
         try:
             return self._runtime_store.load_broker_account_by_external_identity(
-                provider="alpaca",
-                mode=TradingMode.BROKER_PAPER.value,
+                provider=provider,
+                mode=mode.value,
                 external_account_id=external_account_id,
             )
         except KeyError:

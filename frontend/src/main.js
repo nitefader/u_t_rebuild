@@ -1,5 +1,6 @@
 import { createBrokerAccountsApi } from "./api/brokerAccounts.js";
 import { createChartLabApi } from "./api/chartLab.js";
+import { createManualTradeApi } from "./api/manualTrade.js";
 import { createOperationsApi } from "./api/operations.js";
 import { createOperationsTradeStreamApi } from "./api/operationsTradeStream.js";
 import { createPipelinesApi } from "./api/pipelines.js";
@@ -22,6 +23,7 @@ const operationsTradeStreamRoot = document.querySelector("#operations-trade-stre
 const providersRoot = document.querySelector("#providers");
 const chartLabRoot = document.querySelector("#chart-lab");
 const brokersRoot = document.querySelector("#brokers");
+const brokersTradeStreamRoot = document.querySelector("#brokers-trade-stream");
 const settingsRoot = document.querySelector("#settings");
 const statusBadgeRoot = document.querySelector("[data-system-status]");
 
@@ -54,7 +56,15 @@ if (providersRoot) {
 }
 
 if (brokersRoot) {
-  mountBrokers(brokersRoot, createBrokerAccountsApi());
+  mountBrokers(brokersRoot, createBrokerAccountsApi(), {
+    manualTradeApi: createManualTradeApi()
+  });
+}
+
+if (brokersTradeStreamRoot) {
+  mountOperationsTradeStream(brokersTradeStreamRoot, createOperationsTradeStreamApi(), {
+    autoConnect: true
+  });
 }
 
 if (chartLabRoot) {

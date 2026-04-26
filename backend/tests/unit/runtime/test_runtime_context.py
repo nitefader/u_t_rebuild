@@ -223,9 +223,12 @@ def test_bootstrap_streams_starts_one_dispatcher_per_active_alpaca_account() -> 
     account_a = SimpleNamespace(id=uuid4(), provider="alpaca", is_archived=False)
     account_b = SimpleNamespace(id=uuid4(), provider="alpaca", is_archived=False)
 
-    class _Store:
+    class _Service:
         def list_broker_accounts(self):
             return (account_a, account_b)
+
+        def get_credentials(self, account_id):
+            return ("K", "S")
 
     # Replace the registry's dispatcher class so start() doesn't call Alpaca.
     registry = runtime_context.trade_dispatcher_registry()
@@ -251,7 +254,7 @@ def test_bootstrap_streams_starts_one_dispatcher_per_active_alpaca_account() -> 
     registry._dispatchers[account_a.id] = _StubDispatcher(account_id=account_a.id)
     registry._dispatchers[account_b.id] = _StubDispatcher(account_id=account_b.id)
 
-    result = runtime_context.bootstrap_streams(broker_accounts=_Store())
+    result = runtime_context.bootstrap_streams(broker_account_service=_Service())
     assert account_a.id in [a for a in registry.account_ids()]
     assert account_b.id in [a for a in registry.account_ids()]
     assert sorted(started_ids) == sorted([account_a.id, account_b.id])
@@ -260,18 +263,23 @@ def test_bootstrap_streams_starts_one_dispatcher_per_active_alpaca_account() -> 
     assert result["skipped"] == []
 
 
-def test_bootstrap_streams_skips_archived_and_non_alpaca_accounts() -> None:
+def test_bootstrap_streams_skips_archived_and_non_alpaca_and_needs_credentials() -> None:
     from types import SimpleNamespace
 
-    archived = SimpleNamespace(id=uuid4(), provider="alpaca", is_archived=True)
-    other_provider = SimpleNamespace(id=uuid4(), provider="future", is_archived=False)
+    archived = SimpleNamespace(id=uuid4(), provider="alpaca", is_archived=True, needs_credentials=False)
+    other_provider = SimpleNamespace(id=uuid4(), provider="future", is_archived=False, needs_credentials=False)
+    needs_creds = SimpleNamespace(id=uuid4(), provider="alpaca", is_archived=False, needs_credentials=True)
 
-    class _Store:
+    class _Service:
         def list_broker_accounts(self):
-            return (archived, other_provider)
+            return (archived, other_provider, needs_creds)
 
-    result = runtime_context.bootstrap_streams(broker_accounts=_Store())
+        def get_credentials(self, account_id):
+            raise AssertionError("must not resolve credentials for skipped accounts")
+
+    result = runtime_context.bootstrap_streams(broker_account_service=_Service())
     assert result["started_account_ids"] == []
     skipped_ids = [pair[0] for pair in result["skipped"]]
     assert str(archived.id) in skipped_ids
     assert str(other_provider.id) in skipped_ids
+    assert str(needs_creds.id) in skipped_ids

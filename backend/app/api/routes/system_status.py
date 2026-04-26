@@ -11,15 +11,10 @@ from __future__ import annotations
 
 import os
 
+from fastapi import APIRouter
 from pydantic import BaseModel, ConfigDict
 
 from backend.app.api.system_settings_store import setting
-
-
-try:  # pragma: no cover - exercised when FastAPI is installed.
-    from fastapi import APIRouter
-except ModuleNotFoundError:  # pragma: no cover
-    APIRouter = None  # type: ignore[assignment]
 
 
 class SystemStatusResponse(BaseModel):
@@ -91,12 +86,7 @@ def system_status() -> SystemStatusResponse:
     )
 
 
-if APIRouter is None:
-    from backend.app.api.routes.operations import FallbackRouter
-
-    router = FallbackRouter(prefix="/api/v1/system", tags=["system"])
-else:
-    router = APIRouter(prefix="/api/v1/system", tags=["system"])
+router = APIRouter(prefix="/api/v1/system", tags=["system"])
 
 
 @router.get("/status", response_model=SystemStatusResponse)

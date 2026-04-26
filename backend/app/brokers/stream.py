@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import threading
 from collections.abc import Callable, Iterable
 from datetime import datetime
@@ -23,6 +24,8 @@ from .models import (
 if TYPE_CHECKING:
     from .sync import BrokerSyncService
 
+
+logger = logging.getLogger(__name__)
 
 BrokerStreamEvent = BrokerOrderUpdateEvent | BrokerFillUpdateEvent | BrokerPositionSnapshot | BrokerAccountSnapshot
 
@@ -274,8 +277,8 @@ class BrokerStreamRunner:
         if hasattr(self._client, "stop"):
             try:
                 self._client.stop()
-            except Exception:  # noqa: BLE001 - best-effort shutdown
-                pass
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("broker stream client stop failed for %s: %s", self._name, exc, exc_info=True)
         if self._thread is not None:
             self._thread.join(timeout=timeout)
             self._thread = None

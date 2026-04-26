@@ -97,8 +97,11 @@ class FakeOrderRequest:
         self.kwargs = kwargs
 
 
-def _adapter(response: dict | None = None) -> AlpacaBrokerAdapter:
-    return AlpacaBrokerAdapter(trading_client=FakeTradingClient(response=response), load_env=False)
+def _adapter(response: dict | None = None, *, mode: TradingMode = TradingMode.BROKER_PAPER) -> AlpacaBrokerAdapter:
+    return AlpacaBrokerAdapter(
+        mode=mode,
+        trading_client=FakeTradingClient(response=response),
+    )
 
 
 def test_adapter_implements_broker_adapter_protocol() -> None:
@@ -276,7 +279,7 @@ def test_adapter_cannot_create_internal_orders() -> None:
 def test_mocked_submission_uses_trading_client(monkeypatch) -> None:
     monkeypatch.setattr(alpaca_module, "MarketOrderRequest", FakeOrderRequest)
     fake_client = FakeTradingClient()
-    adapter = AlpacaBrokerAdapter(trading_client=fake_client, load_env=False)
+    adapter = AlpacaBrokerAdapter(mode=TradingMode.BROKER_PAPER, trading_client=fake_client)
 
     result = adapter.submit_order(_order())
 
@@ -287,30 +290,40 @@ def test_mocked_submission_uses_trading_client(monkeypatch) -> None:
     assert fake_client.submitted_order_data.kwargs["client_order_id"] == "utos-11111111-aaaaaaaa-99999999-open-000001"
 
 
-def test_adapter_instantiates_with_env(monkeypatch) -> None:
+def test_adapter_builds_trading_client_with_explicit_credentials(monkeypatch) -> None:
+    """Adapter takes credentials explicitly, never reads env."""
+
     class FakeTradingClientClass:
         def __init__(self, api_key, secret_key, **kwargs) -> None:
             self.api_key = api_key
             self.secret_key = secret_key
             self.kwargs = kwargs
 
-    monkeypatch.setenv("ALPACA_API_KEY", "key")
-    monkeypatch.setenv("ALPACA_SECRET_KEY", "secret")
-    monkeypatch.setenv("ALPACA_BASE_URL", "https://malicious.invalid")
     monkeypatch.setattr(alpaca_module, "TradingClient", FakeTradingClientClass)
+    paper = AlpacaBrokerAdapter(mode=TradingMode.BROKER_PAPER, api_key="K", secret_key="S")
+    live = AlpacaBrokerAdapter(mode=TradingMode.BROKER_LIVE, api_key="K", secret_key="S")
 
-    adapter = AlpacaBrokerAdapter(load_env=False)
+    assert paper._client.api_key == "K"
+    assert paper._client.secret_key == "S"
+    assert paper._client.kwargs["paper"] is True
+    assert paper.base_url == "https://paper-api.alpaca.markets"
+    assert live._client.kwargs["paper"] is False
+    assert live.base_url == "https://api.alpaca.markets"
 
-    assert adapter._client.api_key == "key"
-    assert adapter._client.secret_key == "secret"
-    assert adapter._client.kwargs["paper"] is True
-    assert "url_override" not in adapter._client.kwargs
-    assert adapter.base_url == "https://paper-api.alpaca.markets"
+
+def test_adapter_requires_explicit_credentials() -> None:
+    with pytest.raises(AlpacaBrokerError) as exc_info:
+        AlpacaBrokerAdapter(mode=TradingMode.BROKER_PAPER)
+    assert exc_info.value.details.code == "missing_credentials"
 
 
 def test_adapter_rejects_external_base_url_override() -> None:
     with pytest.raises(AlpacaBrokerError) as exc_info:
-        AlpacaBrokerAdapter(trading_client=FakeTradingClient(), load_env=False, base_url="https://example.invalid")
+        AlpacaBrokerAdapter(
+            mode=TradingMode.BROKER_PAPER,
+            trading_client=FakeTradingClient(),
+            base_url="https://example.invalid",
+        )
 
     assert exc_info.value.details.code == "custom_base_url_rejected"
 

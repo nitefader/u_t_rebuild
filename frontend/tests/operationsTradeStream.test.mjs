@@ -110,15 +110,18 @@ function makeDocument() {
 test("createOperationsTradeStreamApi.streamUrl uses ws scheme to the trade-stream path", () => {
   setupGlobals();
   const api = createOperationsTradeStreamApi({ fetchImpl: makeFetch({}), websocketImpl: FakeWebSocket });
-  assert.equal(api.streamUrl(), "ws://127.0.0.1:5173/api/v1/operations/trade-stream");
+  assert.equal(
+    api.streamUrl("11111111-2222-3333-4444-555555555555"),
+    "ws://127.0.0.1:5173/api/v1/operations/trade-stream?account_id=11111111-2222-3333-4444-555555555555"
+  );
 });
 
 test("mountOperationsTradeStream collects order_event and fill_event entries", async () => {
   setupGlobals();
   const root = makeRoot();
   const api = {
-    async health() { return { streaming_enabled: true, account_provider: "alpaca_paper" }; },
-    openStream() { return new FakeWebSocket("ws://test/trade"); }
+    async health() { return { streaming_enabled: true, account_provider: "broker_account", account_ids: ["acct-1"] }; },
+    openStream(accountId) { return new FakeWebSocket(`ws://test/trade?account_id=${accountId}`); }
   };
   const panel = mountOperationsTradeStream(root, api);
   await Promise.resolve();
@@ -128,7 +131,8 @@ test("mountOperationsTradeStream collects order_event and fill_event entries", a
   const socket = FakeWebSocket.last;
   assert.ok(socket, "socket created");
   socket.emitOpen();
-  socket.emitMessage({ type: "ready", account_provider: "alpaca_paper" });
+  assert.equal(socket.url, "ws://test/trade?account_id=acct-1");
+  socket.emitMessage({ type: "ready", account_provider: "broker_account", account_id: "acct-1" });
   socket.emitMessage({
     type: "order_event",
     data: { client_order_id: "utos-1", status: "accepted", filled_quantity: 0, event_at: "2026-04-25T17:30:00+00:00" }
@@ -158,7 +162,7 @@ test("mountOperationsTradeStream marks status as disabled when health says strea
   setupGlobals();
   const root = makeRoot();
   const api = {
-    async health() { return { streaming_enabled: false, account_provider: "alpaca_paper" }; },
+    async health() { return { streaming_enabled: false, account_provider: "broker_account", account_ids: [] }; },
     openStream() { return new FakeWebSocket("ws://test/trade"); }
   };
   const panel = mountOperationsTradeStream(root, api);

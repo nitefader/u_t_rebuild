@@ -34,14 +34,20 @@ class InternalOrderStatus(StrEnum):
     FAILED = "failed"
 
 
+class OrderOrigin(StrEnum):
+    PROGRAM = "program"
+    MANUAL_OPERATOR = "manual_operator"
+
+
 class InternalOrder(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     order_id: UUID
     client_order_id: str
     account_id: UUID
-    deployment_id: UUID
-    program_id: UUID
+    origin: OrderOrigin = OrderOrigin.PROGRAM
+    deployment_id: UUID | None = None
+    program_id: UUID | None = None
     symbol: str
     side: CandidateSide
     quantity: float = Field(gt=0)
@@ -68,6 +74,10 @@ class InternalOrder(BaseModel):
     def validate_filled_quantity(self) -> "InternalOrder":
         if self.filled_quantity > self.quantity:
             raise ValueError("filled_quantity cannot exceed quantity")
+        if self.origin == OrderOrigin.PROGRAM and (self.deployment_id is None or self.program_id is None):
+            raise ValueError("program orders require deployment_id and program_id")
+        if self.origin == OrderOrigin.MANUAL_OPERATOR and (self.deployment_id is not None or self.program_id is not None):
+            raise ValueError("manual operator orders cannot carry deployment/program lineage")
         return self
 
     @model_validator(mode="before")

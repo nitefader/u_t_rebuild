@@ -2,7 +2,7 @@
 
 from .ledger import OrderLedger
 from .manager import OrderManager
-from .models import InternalOrder, InternalOrderIntent, InternalOrderStatus, OrderManagerError, OrderStatusUpdate
+from .models import InternalOrder, InternalOrderIntent, InternalOrderStatus, OrderManagerError, OrderOrigin, OrderStatusUpdate
 from .trade_ledger import Trade, TradeLedger
 
 __all__ = [
@@ -12,6 +12,7 @@ __all__ = [
     "OrderLedger",
     "OrderManager",
     "OrderManagerError",
+    "OrderOrigin",
     "OrderStatusUpdate",
     "Trade",
     "TradeLedger",

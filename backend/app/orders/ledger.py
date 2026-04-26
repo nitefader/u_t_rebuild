@@ -25,8 +25,10 @@ class OrderLedger:
             raise OrderManagerError(f"internal order already exists: {order.order_id}")
         self._orders_by_id[order.order_id] = order
         self._order_ids_by_account.setdefault(order.account_id, []).append(order.order_id)
-        self._order_ids_by_deployment.setdefault(order.deployment_id, []).append(order.order_id)
-        self._order_ids_by_program.setdefault(order.program_id, []).append(order.order_id)
+        if order.deployment_id is not None:
+            self._order_ids_by_deployment.setdefault(order.deployment_id, []).append(order.order_id)
+        if order.program_id is not None:
+            self._order_ids_by_program.setdefault(order.program_id, []).append(order.order_id)
         return order
 
     def get(self, order_id: UUID) -> InternalOrder:

@@ -18,18 +18,10 @@ from __future__ import annotations
 
 from typing import Any, Annotated
 
+from fastapi import APIRouter, Body, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
 from backend.app.api.system_settings_store import SystemSettingsStore, get_store
-
-
-try:  # pragma: no cover - exercised when FastAPI is installed.
-    from fastapi import APIRouter, Body, Depends, HTTPException
-except ModuleNotFoundError:  # pragma: no cover
-    APIRouter = None  # type: ignore[assignment]
-    Body = None  # type: ignore[assignment]
-    Depends = None  # type: ignore[assignment]
-    HTTPException = None  # type: ignore[assignment]
 
 
 _SUPPORTED_DATA_FEEDS = {"iex", "sip", "delayed_sip", "boats", "overnight", "otc"}
@@ -63,8 +55,6 @@ def _settings_from_store(store: SystemSettingsStore) -> SystemSettings:
 def _validate_data_feed(value: str) -> str:
     normalized = value.lower()
     if normalized not in _SUPPORTED_DATA_FEEDS:
-        if HTTPException is None:
-            raise ValueError(f"unsupported alpaca_data_feed: {value!r}")
         raise HTTPException(status_code=400, detail=f"unsupported alpaca_data_feed: {value!r}")
     return normalized
 
@@ -74,23 +64,14 @@ def get_settings_store() -> SystemSettingsStore:
 
 
 def _dependency(default: object) -> object:
-    if Depends is None:
-        return default
     return Depends(default)
 
 
 def _body(default: object) -> object:
-    if Body is None:
-        return default
     return Body(default)
 
 
-if APIRouter is None:
-    from backend.app.api.routes.operations import FallbackRouter
-
-    router = FallbackRouter(prefix="/api/v1/system", tags=["system"])
-else:
-    router = APIRouter(prefix="/api/v1/system", tags=["system"])
+router = APIRouter(prefix="/api/v1/system", tags=["system"])
 
 
 SettingsStoreDependency = Annotated[Any, _dependency(get_settings_store)]

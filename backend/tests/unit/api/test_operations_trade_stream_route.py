@@ -5,7 +5,6 @@ from uuid import UUID
 
 from backend.app.api.routes import operations_trade_stream
 from backend.app.api.routes.operations_trade_stream import (
-    OperationsTradeStreamConfig,
     OperationsTradeStreamHealthResponse,
     operations_trade_stream_health,
     serialize_account_snapshot,
@@ -27,21 +26,28 @@ from backend.app.domain import TradingMode
 ACCOUNT_ID = UUID("11111111-2222-3333-4444-555555555555")
 
 
-def test_health_with_no_creds_reports_streaming_disabled(monkeypatch) -> None:
-    monkeypatch.delenv("ALPACA_API_KEY", raising=False)
-    monkeypatch.delenv("ALPACA_SECRET_KEY", raising=False)
+def test_health_with_no_dispatchers_reports_streaming_disabled() -> None:
+    from backend.app.runtime.runtime_context import shutdown_runtime_context
+
+    shutdown_runtime_context()
     response = operations_trade_stream_health()
     assert isinstance(response, OperationsTradeStreamHealthResponse)
     assert response.streaming_enabled is False
-    assert response.account_provider == "alpaca_paper"
-    assert response.websocket_path == "/api/v1/operations/trade-stream"
+    assert response.account_provider == "broker_account"
+    assert response.requires_account_id is True
+    assert "account_id" in response.websocket_path
+    shutdown_runtime_context()
 
 
-def test_health_with_creds_reports_streaming_enabled(monkeypatch) -> None:
-    monkeypatch.setenv("ALPACA_API_KEY", "K")
-    monkeypatch.setenv("ALPACA_SECRET_KEY", "S")
+def test_health_with_dispatcher_reports_streaming_enabled() -> None:
+    from backend.app.runtime.runtime_context import shutdown_runtime_context, trade_dispatcher_registry
+
+    shutdown_runtime_context()
+    trade_dispatcher_registry().get_or_create(ACCOUNT_ID)
     response = operations_trade_stream_health()
     assert response.streaming_enabled is True
+    assert response.account_ids == (str(ACCOUNT_ID),)
+    shutdown_runtime_context()
 
 
 def test_serialize_order_event_emits_status_value_and_iso_timestamp() -> None:
@@ -57,6 +63,7 @@ def test_serialize_order_event_emits_status_value_and_iso_timestamp() -> None:
         event_at=datetime(2026, 4, 25, 17, 30, tzinfo=timezone.utc),
     )
     payload = serialize_order_event(event)
+    assert payload["account_id"] == str(ACCOUNT_ID)
     assert payload["status"] == "partial_fill"
     assert payload["filled_quantity"] == 4
     assert payload["event_at"] == "2026-04-25T17:30:00+00:00"

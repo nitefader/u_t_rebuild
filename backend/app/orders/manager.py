@@ -6,12 +6,15 @@ from typing import Any
 from uuid import UUID, uuid4
 
 from backend.app.control_plane.service import CancellationScope, ControlPlane
-from backend.app.domain import IntentType
+from backend.app.domain import CandidateSide, IntentType, OrderType, TimeInForce
 from backend.app.domain._base import utc_now
-from backend.app.control_plane.client_order_id import build_program_client_order_id
+from backend.app.control_plane.client_order_id import (
+    build_manual_client_order_id,
+    build_program_client_order_id,
+)
 
 from .ledger import OrderLedger
-from .models import InternalOrder, InternalOrderIntent, InternalOrderStatus, OrderManagerError
+from .models import InternalOrder, InternalOrderIntent, InternalOrderStatus, OrderManagerError, OrderOrigin
 
 
 class OrderManager:
@@ -88,6 +91,7 @@ class OrderManager:
                 intent=intent,
             ),
             account_id=account_id,
+            origin=OrderOrigin.PROGRAM,
             deployment_id=execution_intent.deployment_id,
             program_id=execution_intent.program_version_id,
             symbol=execution_intent.symbol.upper(),
@@ -103,6 +107,82 @@ class OrderManager:
             reason=execution_intent.reason,
         )
         return self._ledger.add(order)
+
+    def create_manual_order(
+        self,
+        *,
+        account_id: UUID,
+        symbol: str,
+        side: CandidateSide | str,
+        quantity: float,
+        intent: InternalOrderIntent | str = InternalOrderIntent.OPEN,
+        order_type: OrderType | str = OrderType.MARKET,
+        time_in_force: TimeInForce | str = TimeInForce.DAY,
+        reason: str | None = None,
+        signal_name: str | None = "manual",
+    ) -> InternalOrder:
+        """Operator-driven order creation outside of any Program/Deployment.
+
+        Bypasses the Portfolio Governor approval check (manual orders are
+        the operator's authority by design) but still:
+          - flows through ``OrderLedger`` so reconcile + cancel-scope find them,
+          - honors the staleness gate for OPEN orders,
+          - honors the system-recovery kill-switch.
+
+        Manual orders carry ``origin=manual_operator`` and nullable
+        deployment/program lineage so deployment-scoped queries cannot
+        accidentally treat operator action as strategy action.
+        """
+        if self._control_plane.system_recovery_active:
+            raise OrderManagerError("system recovery is active; new order creation is blocked")
+        normalized_intent = self._coerce_manual_intent(intent)
+        ledger_intent = self._intent_for_manual(normalized_intent)
+        normalized_side = side if isinstance(side, CandidateSide) else CandidateSide(side)
+        normalized_order_type = order_type if isinstance(order_type, OrderType) else OrderType(order_type)
+        normalized_tif = time_in_force if isinstance(time_in_force, TimeInForce) else TimeInForce(time_in_force)
+        if quantity <= 0:
+            raise OrderManagerError("manual order quantity must be positive")
+        self._enforce_broker_sync_freshness(account_id=account_id, intent=ledger_intent)
+        now = utc_now()
+        order = InternalOrder(
+            order_id=uuid4(),
+            client_order_id=build_manual_client_order_id(account_id, intent=normalized_intent),
+            account_id=account_id,
+            origin=OrderOrigin.MANUAL_OPERATOR,
+            deployment_id=None,
+            program_id=None,
+            symbol=symbol.upper(),
+            side=normalized_side,
+            quantity=quantity,
+            order_type=normalized_order_type,
+            time_in_force=normalized_tif,
+            intent=ledger_intent,
+            status=InternalOrderStatus.CREATED,
+            created_at=now,
+            updated_at=now,
+            signal_name=signal_name,
+            reason=reason,
+        )
+        return self._ledger.add(order)
+
+    @staticmethod
+    def _coerce_manual_intent(intent: InternalOrderIntent | str) -> str:
+        if isinstance(intent, InternalOrderIntent):
+            value = intent.value
+        else:
+            value = str(intent)
+        if value not in {"open", "close", "reduce"}:
+            raise OrderManagerError(f"unsupported manual order intent: {intent}")
+        return value
+
+    @staticmethod
+    def _intent_for_manual(manual_intent: str) -> InternalOrderIntent:
+        # ``reduce`` maps onto CLOSE in the ledger — it's a partial close,
+        # which is still a CLOSE for ledger / reconcile purposes. The
+        # client_order_id keeps the operator's original ``reduce`` label.
+        if manual_intent == "open":
+            return InternalOrderIntent.OPEN
+        return InternalOrderIntent.CLOSE
 
     def update_status(
         self,

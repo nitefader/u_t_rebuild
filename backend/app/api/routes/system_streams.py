@@ -15,13 +15,8 @@ from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
 
+from fastapi import APIRouter
 from pydantic import BaseModel, ConfigDict
-
-
-try:  # pragma: no cover - exercised when FastAPI is installed.
-    from fastapi import APIRouter
-except ModuleNotFoundError:  # pragma: no cover
-    APIRouter = None  # type: ignore[assignment]
 
 
 _TRADE_STREAM_STALE_SECONDS = 90
@@ -119,12 +114,7 @@ def system_streams_snapshot() -> SystemStreamsResponse:
     )
 
 
-if APIRouter is None:
-    from backend.app.api.routes.operations import FallbackRouter
-
-    router = FallbackRouter(prefix="/api/v1/system", tags=["system"])
-else:
-    router = APIRouter(prefix="/api/v1/system", tags=["system"])
+router = APIRouter(prefix="/api/v1/system", tags=["system"])
 
 
 @router.get("/streams", response_model=SystemStreamsResponse)

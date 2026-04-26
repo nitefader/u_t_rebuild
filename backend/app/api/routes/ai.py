@@ -6,6 +6,8 @@ from typing import TYPE_CHECKING, Any
 from typing import Annotated
 from uuid import UUID
 
+from fastapi import APIRouter, Depends, HTTPException
+
 from backend.app.ai import (
     AIProviderCatalogError,
     AIServiceList,
@@ -16,13 +18,6 @@ from backend.app.ai import (
 if TYPE_CHECKING:
     from backend.app.ai import AIProviderCatalog
 
-try:  # pragma: no cover
-    from fastapi import APIRouter, Depends, HTTPException
-except ModuleNotFoundError:  # pragma: no cover
-    APIRouter = None  # type: ignore[assignment]
-    Depends = None  # type: ignore[assignment]
-    HTTPException = None  # type: ignore[assignment]
-
 
 def get_ai_provider_catalog() -> "AIProviderCatalog":
     from backend.app.ai.runtime import create_ai_provider_catalog_from_environment
@@ -31,17 +26,10 @@ def get_ai_provider_catalog() -> "AIProviderCatalog":
 
 
 def _dependency(default: object) -> object:
-    if Depends is None:
-        return default
     return Depends(default)
 
 
-if APIRouter is None:
-    from backend.app.api.routes.operations import FallbackRouter
-
-    router = FallbackRouter(prefix="/api/v1/ai", tags=["ai"])
-else:
-    router = APIRouter(prefix="/api/v1/ai", tags=["ai"])
+router = APIRouter(prefix="/api/v1/ai", tags=["ai"])
 
 
 CatalogDependency = Annotated[Any, _dependency(get_ai_provider_catalog)]
@@ -92,8 +80,6 @@ def disable_provider(service_id: UUID, catalog: CatalogDependency) -> AIServiceR
 
 
 def _operator_error(message: str) -> Exception:
-    if HTTPException is None:
-        return AIProviderCatalogError(message)
     return HTTPException(status_code=400, detail=message)
 
 

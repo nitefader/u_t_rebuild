@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
-from typing import Annotated, Callable
+from typing import Annotated
 from uuid import UUID
 
+from fastapi import APIRouter, Body, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
 from backend.app.operations.models import (
@@ -17,14 +17,6 @@ from backend.app.operations.models import (
 
 if TYPE_CHECKING:
     from backend.app.operations import OperationsCenterService
-
-try:  # pragma: no cover - exercised only when the optional web framework is installed.
-    from fastapi import APIRouter, Body, Depends, HTTPException
-except ModuleNotFoundError:  # pragma: no cover - the fallback is covered by unit tests in this environment.
-    APIRouter = None  # type: ignore[assignment]
-    Body = None  # type: ignore[assignment]
-    Depends = None  # type: ignore[assignment]
-    HTTPException = None  # type: ignore[assignment]
 
 
 class ControlCommandRequest(BaseModel):
@@ -49,54 +41,11 @@ class OperatorErrorResponse(BaseModel):
     detail: str
 
 
-if HTTPException is None:
+class OperatorRouteError(HTTPException):
+    """Raised by direct route calls with operator-readable FastAPI details."""
 
-    class OperatorRouteError(RuntimeError):
-        """Raised by fallback route functions with operator-readable details."""
-
-else:
-
-    class OperatorRouteError(HTTPException):  # type: ignore[misc, valid-type]
-        """Raised by direct route calls with operator-readable FastAPI details."""
-
-        def __init__(self, detail: str) -> None:
-            super().__init__(status_code=503, detail=detail)
-
-
-@dataclass(frozen=True)
-class RegisteredRoute:
-    path: str
-    method: str
-    endpoint: Callable[..., object]
-    response_model: type[BaseModel]
-
-
-class FallbackRouter:
-    def __init__(self, *, prefix: str = "", tags: list[str] | None = None) -> None:
-        self.prefix = prefix
-        self.tags = tags or []
-        self.routes: list[RegisteredRoute] = []
-
-    def get(self, path: str, *, response_model: type[BaseModel]) -> Callable[[Callable[..., object]], Callable[..., object]]:
-        return self._register("GET", path, response_model)
-
-    def post(self, path: str, *, response_model: type[BaseModel]) -> Callable[[Callable[..., object]], Callable[..., object]]:
-        return self._register("POST", path, response_model)
-
-    def put(self, path: str, *, response_model: type[BaseModel]) -> Callable[[Callable[..., object]], Callable[..., object]]:
-        return self._register("PUT", path, response_model)
-
-    def _register(
-        self,
-        method: str,
-        path: str,
-        response_model: type[BaseModel],
-    ) -> Callable[[Callable[..., object]], Callable[..., object]]:
-        def decorator(endpoint: Callable[..., object]) -> Callable[..., object]:
-            self.routes.append(RegisteredRoute(path=f"{self.prefix}{path}", method=method, endpoint=endpoint, response_model=response_model))
-            return endpoint
-
-        return decorator
+    def __init__(self, detail: str) -> None:
+        super().__init__(status_code=503, detail=detail)
 
 
 def get_operations_center_service() -> "OperationsCenterService":
@@ -106,24 +55,14 @@ def get_operations_center_service() -> "OperationsCenterService":
 
 
 def _dependency(default: object) -> object:
-    if Depends is None:
-        return default
     return Depends(default)
 
 
 def _body(default: object) -> object:
-    if Body is None:
-        return default
     return Body(default)
 
 
-def _router():
-    if APIRouter is None:
-        return FallbackRouter(prefix="/api/v1/operations", tags=["operations"])
-    return APIRouter(prefix="/api/v1/operations", tags=["operations"])
-
-
-router = _router()
+router = APIRouter(prefix="/api/v1/operations", tags=["operations"])
 
 OperationsServiceDependency = Annotated[Any, _dependency(get_operations_center_service)]
 CommandBody = Annotated[ControlCommandRequest, _body(...)]

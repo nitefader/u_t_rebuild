@@ -47,6 +47,7 @@ from .models import (
     MarketDataServiceRecord,
     MarketDataServiceWrite,
     MarketDataValidationStatus,
+    ServicePurpose,
 )
 from .resolver import (
     RESOLVER_VERSION,
@@ -122,6 +123,7 @@ __all__ = [
     "ResolverResult",
     "ResolverSelectionCode",
     "SelectionStrategy",
+    "ServicePurpose",
     "ServiceStatus",
     "ServiceType",
     "Timeframe",

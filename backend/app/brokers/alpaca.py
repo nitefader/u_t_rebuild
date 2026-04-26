@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 from collections.abc import Mapping
 from datetime import datetime
 from typing import Any
@@ -21,12 +20,6 @@ from .models import (
     BrokerPositionSide,
     BrokerPositionSnapshot,
 )
-
-try:  # pragma: no cover - exercised through monkeypatched globals in unit tests.
-    from dotenv import load_dotenv
-except ImportError:  # pragma: no cover
-    def load_dotenv() -> bool:
-        return False
 
 
 try:  # pragma: no cover - real SDK is optional in unit tests.
@@ -89,10 +82,13 @@ class AlpacaBrokerCapabilities(BaseModel):
 
 
 class AlpacaBrokerAdapter:
-    """Paper-only Alpaca broker adapter.
+    """Per-account Alpaca broker adapter (paper or live).
 
-    This adapter translates already-created internal orders and delegates to
-    alpaca-py when a client is configured. It never creates internal orders.
+    Translates already-created internal orders and delegates to alpaca-py.
+    Never creates internal orders. Mode + credentials are required; the
+    adapter does not read environment variables — credentials come from
+    the operator-driven ``BrokerCredentialStore`` (encrypted-at-rest)
+    via the composition root.
     """
 
     provider = "alpaca"
@@ -102,23 +98,27 @@ class AlpacaBrokerAdapter:
     def __init__(
         self,
         *,
-        mode: TradingMode = TradingMode.BROKER_PAPER,
+        mode: TradingMode,
         api_key: str | None = None,
         secret_key: str | None = None,
         trading_client: Any | None = None,
-        load_env: bool = True,
         base_url: str | None = None,
     ) -> None:
         if base_url is not None:
             raise AlpacaBrokerError("custom_base_url_rejected", "Alpaca endpoint is derived from broker account mode")
-        if mode != TradingMode.BROKER_PAPER:
-            raise AlpacaBrokerError("broker_live_disabled", "AlpacaBrokerAdapter currently supports BROKER_PAPER only")
+        if mode not in (TradingMode.BROKER_PAPER, TradingMode.BROKER_LIVE):
+            raise AlpacaBrokerError("unsupported_broker_mode", f"Unsupported Alpaca broker mode: {mode}")
         self.mode = mode
         self.base_url = self.endpoint_for_mode(mode)
         self.capabilities = AlpacaBrokerCapabilities()
-        self._api_key, self._secret_key = self._resolve_credentials(
-            api_key=api_key, secret_key=secret_key, load_env=load_env, allow_missing=trading_client is not None
-        )
+        if trading_client is None:
+            if not api_key or not secret_key:
+                raise AlpacaBrokerError(
+                    "missing_credentials",
+                    "AlpacaBrokerAdapter requires explicit api_key and secret_key",
+                )
+        self._api_key = api_key
+        self._secret_key = secret_key
         self._client = trading_client or self._build_trading_client()
 
     @classmethod
@@ -366,22 +366,6 @@ class AlpacaBrokerAdapter:
             stop_price=self._optional_float(response.get("stop_price")),
             timestamp=self._optional_datetime(response.get("updated_at")) or utc_now(),
         )
-
-    def _resolve_credentials(
-        self,
-        *,
-        api_key: str | None,
-        secret_key: str | None,
-        load_env: bool,
-        allow_missing: bool = False,
-    ) -> tuple[str | None, str | None]:
-        if load_env:
-            load_dotenv()
-        api_key = api_key or os.getenv("ALPACA_API_KEY")
-        secret_key = secret_key or os.getenv("ALPACA_SECRET_KEY")
-        if not (api_key and secret_key) and not allow_missing:
-            raise AlpacaBrokerError("missing_credentials", "ALPACA_API_KEY and ALPACA_SECRET_KEY are required")
-        return api_key, secret_key
 
     def _build_trading_client(self) -> Any:
         if TradingClient is None:

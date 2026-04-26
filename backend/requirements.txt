@@ -19,3 +19,7 @@ alpaca-py>=0.30
 
 # Env file loader
 python-dotenv>=1.0
+
+# Authenticated encryption for at-rest broker credentials.
+# AES-GCM via cryptography.hazmat.primitives.ciphers.aead.
+cryptography>=42.0

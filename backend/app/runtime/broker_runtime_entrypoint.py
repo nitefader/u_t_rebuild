@@ -63,11 +63,34 @@ def run_broker_runtime(
     (sim-lab live simulation, chart-lab live preview) against the same
     market-data subscription before the hub starts.
 
-    Required env (validated when ``AlpacaBrokerAdapter`` constructs):
-        ALPACA_API_KEY, ALPACA_SECRET_KEY, ALPACA_BASE_URL=paper URL.
+    Per the operator-driven credential model: this entrypoint pulls the
+    per-account credentials from the encrypted ``BrokerCredentialStore``
+    via ``BrokerAccountService``. There is no env-var fallback; accounts
+    without stored credentials fail-closed and the operator must
+    re-enter via the inline credentials surface on the Brokers page.
     """
+    from backend.app.broker_accounts.runtime_service import (
+        create_broker_account_service_from_environment,
+    )
+
     runtime_store = SQLiteRuntimeStore(sqlite_path)
-    broker_adapter = AlpacaBrokerAdapter()
+    broker_account_service = create_broker_account_service_from_environment()
+    accounts = list(broker_account_service.list_broker_accounts())
+    primary = next(
+        (a for a in accounts if a.provider == "alpaca" and not a.is_archived and not a.needs_credentials),
+        None,
+    )
+    if primary is None:
+        raise BrokerRuntimeEntrypointError(
+            "no usable Alpaca broker account is registered. "
+            "Add one (or re-enter credentials) on the Brokers page before starting the runtime."
+        )
+    api_key, api_secret = broker_account_service.get_credentials(primary.id)
+    broker_adapter = AlpacaBrokerAdapter(
+        mode=primary.mode,
+        api_key=api_key,
+        secret_key=api_secret,
+    )
     order_manager = OrderManager()
     broker_sync = BrokerSync(
         ledger=order_manager.ledger,

@@ -1,13 +1,16 @@
 const MAX_EVENTS = 50;
 
-export function mountOperationsTradeStream(root, api) {
+export function mountOperationsTradeStream(root, api, options = {}) {
   if (!root) return;
+
+  const autoConnect = options.autoConnect === true;
 
   const state = {
     socket: null,
     config: null,
+    accountId: options.accountId || null,
     status: "loading",
-    statusMessage: "Loading trade-stream config…",
+    statusMessage: "Loading trade-stream config...",
     events: []
   };
 
@@ -32,20 +35,30 @@ export function mountOperationsTradeStream(root, api) {
     state.socket = null;
   }
 
+  function selectedAccountId() {
+    return state.accountId || (state.config && state.config.account_ids && state.config.account_ids[0]) || null;
+  }
+
   function connect() {
     disconnect();
-    setStatus("connecting", "Connecting to paper account trade stream…");
+    const accountId = selectedAccountId();
+    if (!accountId) {
+      setStatus("error", "No broker account trade stream is available.");
+      return;
+    }
+    state.accountId = accountId;
+    setStatus("connecting", `Connecting to account ${accountId} trade stream...`);
 
     let socket;
     try {
-      socket = api.openStream();
+      socket = api.openStream(accountId);
     } catch (err) {
       setStatus("error", `Could not open WebSocket: ${err.message}`);
       return;
     }
     state.socket = socket;
 
-    socket.addEventListener("open", () => setStatus("connected", "Streaming Alpaca paper trade updates"));
+    socket.addEventListener("open", () => setStatus("connected", `Streaming account ${accountId} trade updates`));
     socket.addEventListener("message", (event) => {
       let payload;
       try {
@@ -54,9 +67,9 @@ export function mountOperationsTradeStream(root, api) {
         return;
       }
       if (payload.type === "ready") {
-        setStatus("connected", `Streaming ${payload.account_provider}`);
+        setStatus("connected", `Streaming account ${payload.account_id || accountId}`);
       } else if (payload.type === "error") {
-        setStatus("error", `Stream error: ${payload.code}${payload.message ? ` — ${payload.message}` : ""}`);
+        setStatus("error", `Stream error: ${payload.code}${payload.message ? ` - ${payload.message}` : ""}`);
       } else if (
         payload.type === "order_event" ||
         payload.type === "fill_event" ||
@@ -78,20 +91,21 @@ export function mountOperationsTradeStream(root, api) {
 
   function describeEvent(event) {
     const data = event.data || {};
+    const account = data.account_id ? ` [${data.account_id.slice(0, 8)}]` : "";
     if (event.type === "order_event") {
       const status = data.status || "?";
       const symbol = data.symbol || data.client_order_id || "?";
       const filled = data.filled_quantity ?? 0;
-      return `Order ${status}: ${symbol} (filled ${filled})`;
+      return `Order${account} ${status}: ${symbol} (filled ${filled})`;
     }
     if (event.type === "fill_event") {
-      return `Fill: ${data.symbol} ${data.side} ${data.qty} @ ${data.price}`;
+      return `Fill${account}: ${data.symbol} ${data.side} ${data.qty} @ ${data.price}`;
     }
     if (event.type === "account_snapshot") {
-      return `Account: equity ${data.equity}, cash ${data.cash}, buying_power ${data.buying_power}`;
+      return `Account${account}: equity ${data.equity}, cash ${data.cash}, buying_power ${data.buying_power}`;
     }
     if (event.type === "position_snapshot") {
-      return `Position: ${data.symbol} ${data.side} ${data.qty} @ ${data.avg_entry_price}`;
+      return `Position${account}: ${data.symbol} ${data.side} ${data.qty} @ ${data.avg_entry_price}`;
     }
     return event.type;
   }
@@ -105,7 +119,7 @@ export function mountOperationsTradeStream(root, api) {
     const header = document.createElement("header");
     header.className = "ops-trade-stream__header";
     const title = document.createElement("h2");
-    title.textContent = "Trade Stream — Alpaca Paper";
+    title.textContent = "Trade Stream";
     header.appendChild(title);
 
     const controls = document.createElement("div");
@@ -142,7 +156,7 @@ export function mountOperationsTradeStream(root, api) {
       const help = document.createElement("p");
       help.className = "ops-trade-stream__help";
       help.textContent =
-        "Set ALPACA_API_KEY and ALPACA_SECRET_KEY before starting the API server. The stream emits 24/7 whenever the paper account has activity (submits, cancels, fills) — no equity market hours required.";
+        "No broker account trade stream is registered. Add broker credentials on the Broker Accounts page, then restart or re-bootstrap the runtime.";
       wrapper.appendChild(help);
       root.appendChild(wrapper);
       return;
@@ -153,7 +167,7 @@ export function mountOperationsTradeStream(root, api) {
       placeholder.className = "ops-trade-stream__placeholder";
       placeholder.textContent =
         state.status === "connected"
-          ? "Waiting for trade events. Submit or cancel a paper order to see events arrive."
+          ? "Waiting for account-scoped trade events."
           : "Connect to start streaming.";
       wrapper.appendChild(placeholder);
     } else {
@@ -182,10 +196,17 @@ export function mountOperationsTradeStream(root, api) {
       const config = await api.health();
       state.config = config;
       if (!config.streaming_enabled) {
-        setStatus("disabled", "Streaming disabled — credentials are not configured.");
+        setStatus("disabled", "Streaming disabled: no broker account dispatcher is registered.");
         return;
       }
-      setStatus("idle", "Ready. Click Connect to subscribe to Alpaca paper trade updates.");
+      if (!state.accountId && config.account_ids && config.account_ids.length) {
+        state.accountId = config.account_ids[0];
+      }
+      if (autoConnect) {
+        connect();
+        return;
+      }
+      setStatus("idle", `Ready. Click Connect to subscribe to account ${state.accountId} trade updates.`);
     } catch (err) {
       setStatus("error", `Could not load trade-stream config: ${err.message}`);
     }
@@ -198,7 +219,7 @@ export function mountOperationsTradeStream(root, api) {
 }
 
 function formatTime(iso) {
-  if (!iso) return "—";
+  if (!iso) return "-";
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return iso;
   return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });

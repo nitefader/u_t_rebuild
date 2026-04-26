@@ -117,7 +117,8 @@ def _order() -> InternalOrder:
 
 
 def _adapter(client: FakeAlpacaClient) -> AlpacaBrokerAdapter:
-    return AlpacaBrokerAdapter(trading_client=client, load_env=False)
+    from backend.app.domain import TradingMode
+    return AlpacaBrokerAdapter(mode=TradingMode.BROKER_PAPER, trading_client=client)
 
 
 def test_submit_market_order_success(monkeypatch) -> None:

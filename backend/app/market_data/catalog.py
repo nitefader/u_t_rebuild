@@ -24,9 +24,11 @@ from .models import (
     MarketDataServiceRecord,
     MarketDataServiceWrite,
     MarketDataValidationStatus,
+    ServicePurpose,
 )
 from .resolver import (
     InvocationContext,
+    Provider,
     ResolverResult,
     SelectionStrategy,
     ServiceStatus,
@@ -39,7 +41,7 @@ class MarketDataCatalogError(ValueError):
     """Operator-readable Market Data catalog failure."""
 
 
-CURRENT_MARKET_DATA_CATALOG_SCHEMA_VERSION = 1
+CURRENT_MARKET_DATA_CATALOG_SCHEMA_VERSION = 2  # v2 added ServicePurpose default_for tags
 
 
 class MarketDataCatalogSnapshot(BaseModel):
@@ -113,8 +115,13 @@ class MarketDataServiceCatalog:
             capability_notes=request.capability_notes or profile.notes,
             capability_updated_at=utc_now(),
             capability_manual_override=manual_capabilities,
+            default_for=tuple(_dedupe_purposes(request.default_for)),
         )
         self._records[record.id] = record
+        # Single-canonical-default per purpose: any other Service that held one
+        # of the new tags loses it. Stays consistent with set_default_for.
+        if record.default_for:
+            self._records = self._enforce_purpose_uniqueness(record.id, record.default_for)
         self._save()
         return record
 
@@ -215,6 +222,84 @@ class MarketDataServiceCatalog:
         self._save()
         return self._records[service_id]
 
+    def set_default_for(
+        self,
+        service_id: UUID,
+        purposes: tuple[ServicePurpose, ...] | list[ServicePurpose] | set[ServicePurpose],
+    ) -> MarketDataServiceRecord:
+        """Replace the ``default_for`` tag set on a Service.
+
+        Single-canonical-default semantics: any other Service holding a
+        purpose in ``purposes`` loses that tag. Disabled / draft Services
+        cannot hold tags — same constraint as ``set_default``.
+        """
+        selected = self.get_service(service_id)
+        _ensure_can_default(selected)
+        normalized = tuple(_dedupe_purposes(purposes))
+        # First strip the new tags off any other Service that held them, then
+        # rewrite the target Service with the full new tag set.
+        self._records = self._enforce_purpose_uniqueness(service_id, normalized)
+        target = self._records[service_id]
+        self._records[service_id] = target.model_copy(
+            update={"default_for": normalized, "updated_at": utc_now()}
+        )
+        self._save()
+        return self._records[service_id]
+
+    def add_default_for(self, service_id: UUID, purpose: ServicePurpose) -> MarketDataServiceRecord:
+        existing = self.get_service(service_id)
+        merged = tuple(_dedupe_purposes((*existing.default_for, purpose)))
+        return self.set_default_for(service_id, merged)
+
+    def clear_default_for(self, service_id: UUID, purpose: ServicePurpose) -> MarketDataServiceRecord:
+        existing = self.get_service(service_id)
+        if purpose not in existing.default_for:
+            return existing
+        remaining = tuple(p for p in existing.default_for if p != purpose)
+        updated = existing.model_copy(update={"default_for": remaining, "updated_at": utc_now()})
+        self._records[service_id] = updated
+        self._save()
+        return updated
+
+    def find_default_for(
+        self, purpose: ServicePurpose, *, provider: Provider | None = None
+    ) -> MarketDataServiceRecord | None:
+        """Return the Service tagged ``default_for=purpose``, or ``None``.
+
+        Replaces env-var lookup as the canonical "which credential do we use
+        for this context?" path. Disabled Services are excluded.
+        """
+        for service in self._records.values():
+            if service.status == ServiceStatus.DISABLED:
+                continue
+            if purpose not in service.default_for:
+                continue
+            if provider is not None and service.provider != provider:
+                continue
+            return service
+        return None
+
+    def _enforce_purpose_uniqueness(
+        self, owner_id: UUID, purposes: tuple[ServicePurpose, ...]
+    ) -> dict[UUID, MarketDataServiceRecord]:
+        """Strip ``purposes`` from every Service except ``owner_id``."""
+        if not purposes:
+            return self._records
+        purpose_set = set(purposes)
+        result: dict[UUID, MarketDataServiceRecord] = {}
+        for key, service in self._records.items():
+            if key == owner_id:
+                result[key] = service
+                continue
+            stripped = tuple(p for p in service.default_for if p not in purpose_set)
+            if stripped == service.default_for:
+                result[key] = service
+            else:
+                result[key] = service.model_copy(
+                    update={"default_for": stripped, "updated_at": utc_now()}
+                )
+        return result
+
     def disable_service(self, service_id: UUID) -> MarketDataServiceRecord:
         existing = self.get_service(service_id)
         updated = existing.model_copy(
@@ -264,9 +349,9 @@ class MarketDataServiceCatalog:
         """Drop duplicates by ``(provider, credentials_hash)``.
 
         Keeps the oldest (by ``created_at``) record so an
-        operator-customized name and is_default flag survive when a
-        bootstrap-from-env later registered a generic copy. Defaults are
-        preserved if any duplicate is marked default.
+        operator-customized name survives when a bootstrap-from-env
+        later registered a generic copy. ``is_default`` and the union
+        of ``default_for`` tags are preserved across duplicates.
         """
         groups: dict[tuple[Provider, str | None], list[MarketDataServiceRecord]] = {}
         unkeyed: list[MarketDataServiceRecord] = []
@@ -282,8 +367,16 @@ class MarketDataServiceCatalog:
         for group in groups.values():
             group.sort(key=lambda s: s.created_at)
             kept = group[0]
+            updates: dict[str, object] = {}
             if any(other.is_default for other in group[1:]):
-                kept = kept.model_copy(update={"is_default": True})
+                updates["is_default"] = True
+            merged_purposes = tuple(_dedupe_purposes(
+                p for record in group for p in record.default_for
+            ))
+            if merged_purposes != kept.default_for:
+                updates["default_for"] = merged_purposes
+            if updates:
+                kept = kept.model_copy(update=updates)
             result[kept.id] = kept
         return result
 
@@ -327,3 +420,15 @@ def _ensure_can_default(service: MarketDataServiceRecord) -> None:
         raise MarketDataCatalogError("disabled service cannot be default")
     if service.status != ServiceStatus.VALID:
         raise MarketDataCatalogError("invalid service cannot be default")
+
+
+def _dedupe_purposes(purposes) -> list[ServicePurpose]:
+    """Order-preserving dedup over an iterable of purpose tags."""
+    seen: set[ServicePurpose] = set()
+    result: list[ServicePurpose] = []
+    for purpose in purposes:
+        if purpose in seen:
+            continue
+        seen.add(purpose)
+        result.append(purpose)
+    return result

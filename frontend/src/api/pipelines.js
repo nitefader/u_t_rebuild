@@ -37,6 +37,7 @@ export function createPipelinesApi(fetchImpl = globalThis.fetch) {
     setDefaultPipeline: (id) => post(`/pipelines/${id}/set-default`),
     disablePipeline: (id) => post(`/pipelines/${id}/disable`),
     attachServiceToPipeline: (id, service_id) => post(`/pipelines/${id}/attach-service`, { service_id }),
-    bootstrapFromEnv: () => post("/bootstrap-from-env")
+    setServicePurposeTags: (service_id, purposes) =>
+      post(`/services/${service_id}/default-for`, { purposes })
   };
 }

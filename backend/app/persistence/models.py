@@ -4,13 +4,15 @@ RUNTIME_SCHEMA = """
 CREATE TABLE IF NOT EXISTS internal_orders (
     order_id TEXT PRIMARY KEY,
     account_id TEXT NOT NULL,
-    deployment_id TEXT NOT NULL,
-    program_id TEXT NOT NULL,
+    origin TEXT NOT NULL DEFAULT 'program',
+    deployment_id TEXT,
+    program_id TEXT,
     client_order_id TEXT NOT NULL UNIQUE,
     status TEXT NOT NULL,
     payload TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS ix_internal_orders_account_id ON internal_orders(account_id);
+CREATE INDEX IF NOT EXISTS ix_internal_orders_origin ON internal_orders(origin);
 CREATE INDEX IF NOT EXISTS ix_internal_orders_deployment_id ON internal_orders(deployment_id);
 CREATE INDEX IF NOT EXISTS ix_internal_orders_program_id ON internal_orders(program_id);
 
@@ -95,4 +97,38 @@ CREATE TABLE IF NOT EXISTS control_plane_states (
     control_plane_id TEXT PRIMARY KEY,
     payload TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS manual_order_idempotency (
+    account_id TEXT NOT NULL,
+    idempotency_key TEXT NOT NULL,
+    order_id TEXT,
+    status TEXT NOT NULL,
+    request_hash TEXT NOT NULL,
+    operator_session_id TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (account_id, idempotency_key)
+);
+CREATE INDEX IF NOT EXISTS ix_manual_order_idempotency_order_id
+    ON manual_order_idempotency(order_id);
+CREATE INDEX IF NOT EXISTS ix_manual_order_idempotency_status
+    ON manual_order_idempotency(status);
+
+CREATE TABLE IF NOT EXISTS manual_trade_audit_events (
+    event_id TEXT PRIMARY KEY,
+    event_code TEXT NOT NULL,
+    account_id TEXT NOT NULL,
+    order_id TEXT,
+    client_order_id TEXT,
+    idempotency_key TEXT,
+    operator_session_id TEXT NOT NULL,
+    occurred_at TEXT NOT NULL,
+    payload TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ix_manual_trade_audit_events_account_time
+    ON manual_trade_audit_events(account_id, occurred_at);
+CREATE INDEX IF NOT EXISTS ix_manual_trade_audit_events_code_time
+    ON manual_trade_audit_events(event_code, occurred_at);
+CREATE INDEX IF NOT EXISTS ix_manual_trade_audit_events_order_id
+    ON manual_trade_audit_events(order_id);
 """
