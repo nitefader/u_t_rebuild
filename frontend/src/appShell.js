@@ -32,14 +32,15 @@ function badgeClass(status) {
 function badgeLabel(status) {
   if (!status.alpaca_credentials_present) return "Alpaca not configured";
   if (status.alpaca_test_stream) return `Alpaca · ${status.operator_environment} · TEST stream`;
-  return `Alpaca · ${status.operator_environment}`;
+  const feed = (status.alpaca_data_feed || "iex").toUpperCase();
+  return `Alpaca · ${status.operator_environment} · ${feed}`;
 }
 
 function badgeTooltip(status) {
   const parts = [
     `Endpoint: ${status.alpaca_endpoint}`,
     `Credentials: ${status.alpaca_credentials_present ? "configured" : "missing — set ALPACA_API_KEY and ALPACA_SECRET_KEY"}`,
-    `Market data: ${status.alpaca_test_stream ? "FAKEPACA test stream (24/7)" : "live data feed"}`
+    `Market data: ${status.alpaca_test_stream ? "FAKEPACA test stream (24/7)" : `${(status.alpaca_data_feed || "iex").toUpperCase()} feed`}`
   ];
   return parts.join("\n");
 }

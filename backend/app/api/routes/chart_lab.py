@@ -35,6 +35,39 @@ from backend.app.features import NormalizedBar
 from backend.app.market_data import AlpacaMarketDataAdapter, MarketDataStreamHub
 
 
+try:  # pragma: no cover - alpaca-py optional in tests.
+    from alpaca.data.enums import DataFeed
+except ImportError:  # pragma: no cover
+    DataFeed = None  # type: ignore[assignment]
+
+
+_DATA_FEED_ALIASES = {
+    "iex": "IEX",
+    "sip": "SIP",
+    "delayed_sip": "DELAYED_SIP",
+    "delayed-sip": "DELAYED_SIP",
+    "boats": "BOATS",
+    "overnight": "OVERNIGHT",
+    "otc": "OTC",
+}
+
+
+def resolve_data_feed(env_value: str | None) -> Any:
+    """Return the alpaca-py ``DataFeed`` enum for ``env_value`` or None.
+
+    None means "let alpaca-py default to IEX". Unknown values raise so the
+    operator gets a clear error rather than silently falling back to a
+    different feed than they configured.
+    """
+    if not env_value or DataFeed is None:
+        return None
+    name = _DATA_FEED_ALIASES.get(env_value.lower(), env_value.upper())
+    feed = getattr(DataFeed, name, None)
+    if feed is None:
+        raise ValueError(f"unknown ALPACA_DATA_FEED: {env_value!r}")
+    return feed
+
+
 try:  # pragma: no cover - exercised when FastAPI is installed.
     from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 except ModuleNotFoundError:  # pragma: no cover
@@ -49,6 +82,7 @@ class ChartLabHealthResponse(BaseModel):
     streaming_enabled: bool
     test_stream: bool
     default_symbol: str
+    data_feed: str
     websocket_path: str
 
 
@@ -59,23 +93,27 @@ class ChartLabConfig:
     streaming_enabled: bool
     test_stream: bool
     default_symbol: str
+    data_feed: str
 
     @classmethod
     def from_env(cls) -> "ChartLabConfig":
         test_stream = os.getenv("ALPACA_USE_TEST_STREAM") == "1"
         has_creds = bool(os.getenv("ALPACA_API_KEY") and os.getenv("ALPACA_SECRET_KEY"))
         default_symbol = AlpacaMarketDataAdapter.TEST_SYMBOL if test_stream else os.getenv("CHART_LAB_DEFAULT_SYMBOL", "SPY")
+        data_feed = "test" if test_stream else (os.getenv("ALPACA_DATA_FEED") or "iex").lower()
         return cls(
             streaming_enabled=has_creds,
             test_stream=test_stream,
             default_symbol=default_symbol,
+            data_feed=data_feed,
         )
 
 
 def build_market_data_adapter(config: ChartLabConfig) -> AlpacaMarketDataAdapter:
     if config.test_stream:
         return AlpacaMarketDataAdapter(url_override=AlpacaMarketDataAdapter.TEST_STREAM_URL)
-    return AlpacaMarketDataAdapter()
+    feed = resolve_data_feed(config.data_feed)
+    return AlpacaMarketDataAdapter(feed=feed)
 
 
 def serialize_bar(bar: NormalizedBar) -> dict[str, Any]:
@@ -112,6 +150,7 @@ def chart_lab_health() -> ChartLabHealthResponse:
         streaming_enabled=config.streaming_enabled,
         test_stream=config.test_stream,
         default_symbol=config.default_symbol,
+        data_feed=config.data_feed,
         websocket_path="/api/v1/chart-lab/stream",
     )
 

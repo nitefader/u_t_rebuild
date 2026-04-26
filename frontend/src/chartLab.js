@@ -236,9 +236,10 @@ export function mountChartLab(root, api) {
     const subtitle = document.createElement("p");
     subtitle.className = "chart-lab__subtitle";
     if (state.config) {
+      const feed = (state.config.data_feed || "iex").toUpperCase();
       subtitle.textContent = state.config.test_stream
         ? "Source: Alpaca FAKEPACA test stream (24/7 synthetic data)"
-        : `Source: Alpaca live data feed · default symbol ${state.config.default_symbol}`;
+        : `Source: Alpaca · ${feed} feed · default symbol ${state.config.default_symbol}`;
     } else {
       subtitle.textContent = "Live bar stream from the configured Alpaca account.";
     }

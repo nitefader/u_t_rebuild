@@ -26,6 +26,7 @@ class SystemStatusResponse(BaseModel):
     alpaca_credentials_present: bool
     alpaca_test_stream: bool
     alpaca_endpoint: str
+    alpaca_data_feed: str
     operator_environment: str
 
 
@@ -35,10 +36,15 @@ def system_status() -> SystemStatusResponse:
     endpoint = os.getenv("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
     is_paper = "paper-api" in endpoint
     operator_environment = os.getenv("UTOS_ENVIRONMENT") or ("paper" if is_paper else "live")
+    if test_stream:
+        data_feed = "test"
+    else:
+        data_feed = (os.getenv("ALPACA_DATA_FEED") or "iex").lower()
     return SystemStatusResponse(
         alpaca_credentials_present=has_creds,
         alpaca_test_stream=test_stream,
         alpaca_endpoint=endpoint,
+        alpaca_data_feed=data_feed,
         operator_environment=operator_environment,
     )
 

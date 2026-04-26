@@ -36,10 +36,12 @@ def test_health_with_no_creds_reports_streaming_disabled(monkeypatch) -> None:
     monkeypatch.delenv("ALPACA_API_KEY", raising=False)
     monkeypatch.delenv("ALPACA_SECRET_KEY", raising=False)
     monkeypatch.delenv("ALPACA_USE_TEST_STREAM", raising=False)
+    monkeypatch.delenv("ALPACA_DATA_FEED", raising=False)
     response = chart_lab_health()
     assert isinstance(response, ChartLabHealthResponse)
     assert response.streaming_enabled is False
     assert response.test_stream is False
+    assert response.data_feed == "iex"
     assert response.websocket_path == "/api/v1/chart-lab/stream"
 
 
@@ -59,29 +61,64 @@ def test_health_with_test_stream_uses_fakepaca_default_symbol(monkeypatch) -> No
     response = chart_lab_health()
     assert response.test_stream is True
     assert response.default_symbol == AlpacaMarketDataAdapter.TEST_SYMBOL
+    assert response.data_feed == "test"
+
+
+def test_health_reports_configured_data_feed(monkeypatch) -> None:
+    monkeypatch.setenv("ALPACA_API_KEY", "K")
+    monkeypatch.setenv("ALPACA_SECRET_KEY", "S")
+    monkeypatch.delenv("ALPACA_USE_TEST_STREAM", raising=False)
+    monkeypatch.setenv("ALPACA_DATA_FEED", "sip")
+    response = chart_lab_health()
+    assert response.data_feed == "sip"
+
+
+def test_resolve_data_feed_maps_known_aliases() -> None:
+    from backend.app.api.routes.chart_lab import resolve_data_feed
+    try:
+        from alpaca.data.enums import DataFeed
+    except ImportError:
+        import pytest
+        pytest.skip("alpaca-py not installed")
+    assert resolve_data_feed("sip") is DataFeed.SIP
+    assert resolve_data_feed("IEX") is DataFeed.IEX
+    assert resolve_data_feed("delayed_sip") is DataFeed.DELAYED_SIP
+    assert resolve_data_feed(None) is None
+    assert resolve_data_feed("") is None
+
+
+def test_resolve_data_feed_rejects_unknown_value() -> None:
+    import pytest
+    from backend.app.api.routes.chart_lab import resolve_data_feed
+    try:
+        from alpaca.data.enums import DataFeed  # noqa: F401
+    except ImportError:
+        pytest.skip("alpaca-py not installed")
+    with pytest.raises(ValueError):
+        resolve_data_feed("nonexistent_feed")
 
 
 def test_resolve_symbol_forces_fakepaca_in_test_stream_mode() -> None:
-    config = ChartLabConfig(streaming_enabled=True, test_stream=True, default_symbol="FAKEPACA")
+    config = ChartLabConfig(streaming_enabled=True, test_stream=True, default_symbol="FAKEPACA", data_feed="test")
     assert resolve_symbol("SPY", config) == "FAKEPACA"
     assert resolve_symbol(None, config) == "FAKEPACA"
 
 
 def test_resolve_symbol_uses_request_then_default_in_live_mode() -> None:
-    config = ChartLabConfig(streaming_enabled=True, test_stream=False, default_symbol="QQQ")
+    config = ChartLabConfig(streaming_enabled=True, test_stream=False, default_symbol="QQQ", data_feed="iex")
     assert resolve_symbol("spy", config) == "SPY"
     assert resolve_symbol("", config) == "QQQ"
     assert resolve_symbol(None, config) == "QQQ"
 
 
 def test_build_market_data_adapter_uses_test_url_when_test_stream_enabled() -> None:
-    config = ChartLabConfig(streaming_enabled=True, test_stream=True, default_symbol="FAKEPACA")
+    config = ChartLabConfig(streaming_enabled=True, test_stream=True, default_symbol="FAKEPACA", data_feed="test")
     adapter = build_market_data_adapter(config)
     assert adapter._url_override == AlpacaMarketDataAdapter.TEST_STREAM_URL
 
 
 def test_build_market_data_adapter_uses_default_url_when_test_stream_disabled() -> None:
-    config = ChartLabConfig(streaming_enabled=True, test_stream=False, default_symbol="SPY")
+    config = ChartLabConfig(streaming_enabled=True, test_stream=False, default_symbol="SPY", data_feed="iex")
     adapter = build_market_data_adapter(config)
     assert adapter._url_override is None
 
