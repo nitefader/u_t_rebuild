@@ -8,7 +8,12 @@ Trading mode (``TradingMode``) is intentionally absent from this bucket —
 mode is owned exclusively by ``BrokerAccount``.
 """
 
-from .alpaca import AlpacaMarketDataAdapter, AlpacaMarketDataError, MarketDataSubscription
+from .alpaca import (
+    AlpacaMarketDataAdapter,
+    AlpacaMarketDataError,
+    MarketDataStreamRunner,
+    MarketDataSubscription,
+)
 from .capability_profiles import ProviderCapabilityProfile, provider_capability_profile
 from .catalog import (
     MarketDataCatalogError,
@@ -96,6 +101,7 @@ __all__ = [
     "MarketDataServiceList",
     "MarketDataServiceRecord",
     "MarketDataServiceWrite",
+    "MarketDataStreamRunner",
     "MarketDataSubscription",
     "MarketDataValidationResult",
     "MarketDataValidationStatus",

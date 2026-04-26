@@ -3,7 +3,8 @@ from __future__ import annotations
 import asyncio
 import os
 import re
-from collections.abc import Iterable
+import threading
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from threading import Thread
@@ -28,6 +29,49 @@ except ImportError:  # pragma: no cover
 
 class AlpacaMarketDataError(ValueError):
     """Raised when Alpaca market data cannot be normalized or streamed safely."""
+
+
+class MarketDataStreamRunner:
+    """Drive a market-data stream client (StockDataStream / CryptoDataStream) in a daemon thread.
+
+    Both alpaca-py data streams expose a blocking ``run()`` that owns its own
+    asyncio event loop. The runner spawns ``run()`` in a daemon thread so the
+    main process can keep flowing while bars are pushed into whatever
+    handler was registered via ``AlpacaMarketDataAdapter.subscribe_bars``.
+    """
+
+    def __init__(self, stream_client: Any, *, name: str = "alpaca-market-data-stream") -> None:
+        if not hasattr(stream_client, "run"):
+            raise AlpacaMarketDataError("stream client must expose run()")
+        self._client = stream_client
+        self._name = name
+        self._thread: threading.Thread | None = None
+
+    def start(self) -> None:
+        if self._thread is not None:
+            return
+        self._thread = threading.Thread(target=self._client.run, daemon=True, name=self._name)
+        self._thread.start()
+
+    def stop(self, *, timeout: float = 5.0) -> None:
+        for method_name in ("stop_ws", "stop"):
+            method = getattr(self._client, method_name, None)
+            if method is None:
+                continue
+            try:
+                result = method()
+                if asyncio.iscoroutine(result):
+                    asyncio.run(result)
+            except Exception:  # noqa: BLE001 - best-effort shutdown
+                pass
+            break
+        if self._thread is not None:
+            self._thread.join(timeout=timeout)
+            self._thread = None
+
+    @property
+    def is_running(self) -> bool:
+        return self._thread is not None and self._thread.is_alive()
 
 
 class MarketDataSubscription(BaseModel):
@@ -119,6 +163,36 @@ class AlpacaMarketDataAdapter:
         timeout_seconds: float = 60,
     ) -> tuple[NormalizedBar, ...]:
         return asyncio.run(self.collect_bars(subscription=subscription, timeout_seconds=timeout_seconds))
+
+    def subscribe_bars(
+        self,
+        symbols: Iterable[str],
+        *,
+        emit: Callable[[NormalizedBar], None],
+        timeframe: str = "1m",
+    ) -> Any:
+        """Subscribe a normalize-and-emit handler for ``symbols`` on the data stream.
+
+        Returns the underlying stream client so a ``MarketDataStreamRunner``
+        can drive its blocking ``run()`` in a background thread. The handler
+        registered with the SDK is async (alpaca-py's ``subscribe_bars``
+        invokes the handler with ``await``); the emit callback is a
+        synchronous function and runs inside the async handler.
+        """
+        normalized_symbols = tuple(str(symbol).upper() for symbol in symbols)
+        if not normalized_symbols:
+            raise AlpacaMarketDataError("subscribe_bars requires at least one symbol")
+        stream = self._stream_client or self._build_stream_client()
+
+        async def _handler(bar: object) -> None:
+            try:
+                normalized = self.normalize_bar(bar, timeframe=timeframe)
+            except AlpacaMarketDataError:
+                return
+            emit(normalized)
+
+        stream.subscribe_bars(_handler, *normalized_symbols)
+        return stream
 
     async def _collect_from_stream(
         self,

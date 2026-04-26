@@ -3894,3 +3894,56 @@ Verification:
 
 Commit:
 - pending.
+
+---
+
+## 2026-04-25 19:55 ET - Slice 2D: Paper-runtime entrypoint (bar flow + lifecycle owner)
+
+Task:
+- Close the last gaps blocking "trade Alpaca paper today": (a) market-data bars don't flow into the orchestrator in production; (b) nothing starts the BrokerStreamRunner alongside the orchestrator; (c) there's no top-level entrypoint. Wire all three so a single run_paper_runtime call composes adapter + streams + supervisor and blocks until SIGINT.
+
+Files changed:
+- backend/app/market_data/alpaca.py (subscribe_bars push handler that registers an async normalize-then-emit handler with StockDataStream; MarketDataStreamRunner mirrors BrokerStreamRunner — runs the data stream's blocking run() in a daemon thread, stops via stop_ws/stop)
+- backend/app/market_data/__init__.py (exports MarketDataStreamRunner)
+- backend/app/runtime/paper_runtime_supervisor.py (new — PaperRuntimeSupervisor owns bar-stream + broker-stream lifecycle; builds symbol → {deployment_ids} index; dispatches incoming bars to BrokerRuntimeOrchestrator.process_completed_bar per matching deployment; idempotent stop)
+- backend/app/runtime/paper_runtime_entrypoint.py (new — run_paper_runtime composes runtime_store + adapter + sync + sync_service + supervisor; CLI seam with --sqlite-path; SIGINT/SIGTERM handler)
+- backend/app/runtime/__init__.py (lazy export PaperRuntimeSupervisor + PaperRuntimeSupervisorError)
+- backend/tests/unit/runtime/test_paper_runtime_supervisor.py (5 tests: bar dispatch routes only to subscribed deployments; start idempotency; stop idempotency; empty-deployment startup; AlpacaMarketDataAdapter.subscribe_bars async handler)
+- backend/tests/unit/runtime/test_paper_runtime_entrypoint.py (2 smoke tests: idle supervisor with no active deployments; explicit-deployment composition with TradingClient/TradingStream/StockDataStream patched out)
+
+Implemented:
+- AlpacaMarketDataAdapter.subscribe_bars(symbols, *, emit, timeframe="1m") returns the underlying stream client. Registers an async handler that normalizes each push payload via adapter.normalize_bar and calls emit(bar). Skips invalid payloads silently (drop, don't crash the loop).
+- MarketDataStreamRunner: daemon-thread driver; tries stop_ws() first, falls back to stop(); coroutine return values get asyncio.run'd best-effort; idempotent.
+- PaperRuntimeSupervisor: owns BrokerRuntimeOrchestrator + AlpacaMarketDataAdapter + optional BrokerStreamRunner + market_data_stream_factory. start(deployments) preflights each deployment via broker_runtime.start_deployment_runtime; deployments that fail preflight land in supervisor.blocked_at_start (not raised) so other deployments still come up. Builds symbol → deployment_ids index across all deployments. Subscribes to the union of symbols. Dispatches bars by symbol into broker_runtime.process_completed_bar per matching deployment. stop() takes deployments down, stops both stream runners, clears state. Lock-guarded; start() raises PaperRuntimeSupervisorError if already running.
+- run_paper_runtime(sqlite_path, deployments=None, block_until_signal=True) composes the production stack: SQLiteRuntimeStore → AlpacaBrokerAdapter → OrderManager → BrokerSync → ControlPlane → BrokerRuntimeOrchestrator → BrokerSyncService (when active deployments exist) → BrokerStreamRunner → AlpacaMarketDataAdapter → PaperRuntimeSupervisor.start(active_entries). If block_until_signal, sets SIGINT/SIGTERM handlers and waits on a threading.Event; otherwise returns the started supervisor. Module is invokable as python -m backend.app.runtime.paper_runtime_entrypoint.
+
+Scope kept out:
+- Multi-account fan-out within one supervisor. Today's supervisor assumes one broker account (one BrokerStreamRunner, one set of credentials). Multi-account → one supervisor per account, or a future shard model.
+- A live Alpaca paper smoke for the full supervisor (we have an opt-in BTC/USD broker-stream test from slice 2C-followup #2; an analogous full-pipeline test would also need a live market-data feed).
+- Promotion gate integration into deployment creation. Still a separate slice.
+- HTTP route for "start/stop runtime" — the CLI is the only entrypoint right now.
+- Persisting deployments into SQLiteRuntimeStore.list_active_broker_paper_deployments. The store doesn't implement that method yet, so today the entrypoint either receives deployments explicitly or starts idle.
+
+Validation performed:
+- python -m compileall -q backend
+- python -m pytest backend/
+- cd frontend && npm.cmd run build
+- cd frontend && npm.cmd test
+
+Result:
+- compileall clean. Backend: 714 passed, 2 skipped (+9 unit tests vs the prior wiring slice; the 2 skips are the slice 2C-followup#2 paper-crypto stream test and the existing read-only paper integration test). Frontend: 37 passed. Build clean.
+
+Verification:
+- PaperRuntimeSupervisor only dispatches bars to deployments whose universe contains the symbol (verified by SPY/QQQ/IWM dispatch test).
+- AlpacaMarketDataAdapter registers an async handler that normalizes Alpaca bar payloads ({"S","t","o","h","l","c","v"}) into NormalizedBar via existing normalize_bar.
+- run_paper_runtime composes the full stack against patched-out TradingClient/TradingStream/StockDataStream — no real network in the test suite.
+- Slice 2C / 2C-followup contracts unchanged: AlpacaAccountStreamAdapter source still no broker-sync references; OrderManager source still no submit_order.
+
+Commit:
+- pending.
+
+How to run:
+  set ALPACA_API_KEY=...
+  set ALPACA_SECRET_KEY=...
+  set ALPACA_BASE_URL=https://paper-api.alpaca.markets
+  python -m backend.app.runtime.paper_runtime_entrypoint --sqlite-path data/utos.sqlite3
