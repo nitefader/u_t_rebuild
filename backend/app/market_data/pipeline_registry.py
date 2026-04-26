@@ -161,6 +161,7 @@ class MarketDataPipelineRegistry:
     def _save(self) -> None:
         if self._store_path is None:
             return
-        self._store_path.parent.mkdir(parents=True, exist_ok=True)
+        from backend.app.persistence import write_text_atomic
+
         snapshot = PipelineRegistrySnapshot(pipelines=tuple(self._records.values()))
-        self._store_path.write_text(snapshot.model_dump_json(indent=2), encoding="utf-8")
+        write_text_atomic(self._store_path, snapshot.model_dump_json(indent=2))

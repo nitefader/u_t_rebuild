@@ -85,8 +85,9 @@ def _load_records(path: Path, key: str) -> list[dict[str, Any]]:
 
 
 def _write_records(path: Path, key: str, records: list[dict[str, Any]]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps({key: records}, indent=2, default=str), encoding="utf-8")
+    from backend.app.persistence import write_json_atomic
+
+    write_json_atomic(path, {key: records})
 
 
 def migrate_legacy_catalog() -> MigrationResponse:

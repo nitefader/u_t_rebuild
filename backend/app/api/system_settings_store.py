@@ -46,6 +46,8 @@ class SystemSettingsStore:
         unknown = set(changes) - set(self.SUPPORTED_KEYS)
         if unknown:
             raise ValueError(f"unsupported settings: {sorted(unknown)}")
+        from backend.app.persistence import write_json_atomic
+
         with self._lock:
             current = {}
             if self._path.exists():
@@ -58,10 +60,7 @@ class SystemSettingsStore:
                     current.pop(key, None)
                 else:
                     current[key] = value
-            self._path.parent.mkdir(parents=True, exist_ok=True)
-            tmp = self._path.with_suffix(self._path.suffix + ".tmp")
-            tmp.write_text(json.dumps(current, indent=2, sort_keys=True), encoding="utf-8")
-            tmp.replace(self._path)
+            write_json_atomic(self._path, current, sort_keys=True)
             return current
 
 
