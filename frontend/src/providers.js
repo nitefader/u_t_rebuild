@@ -136,6 +136,8 @@ function renderPipelineRow(pipeline) {
     </header>
     <dl class="detail-grid">
       <div><dt>Provider</dt><dd>${escapeHtml(pipeline.provider || "unknown")}</dd></div>
+      <div><dt>Service</dt><dd>${pipeline.service_id ? `<code>${escapeHtml(pipeline.service_id)}</code>` : "<em>not bound</em>"}</dd></div>
+      <div><dt>Data Feed</dt><dd>${escapeHtml(pipeline.data_feed || "iex")}</dd></div>
       <div><dt>Trading Mode</dt><dd>${escapeHtml(pipeline.trading_mode || "(vendor-only)")}</dd></div>
       <div><dt>Default for provider</dt><dd>${pipeline.is_default_for_provider ? "yes" : "no"}</dd></div>
       <div><dt>Pipeline ID</dt><dd><code>${escapeHtml(pipeline.id)}</code></dd></div>
@@ -150,20 +152,35 @@ function renderPipelineRow(pipeline) {
   </article>`;
 }
 
-function renderPipelineForm(formState = {}) {
-  const provider = (formState.provider || "alpaca").toLowerCase();
+const DATA_FEED_OPTIONS = [
+  ["iex", "IEX (real-time, free)"],
+  ["sip", "SIP (real-time, premium)"],
+  ["delayed_sip", "Delayed SIP (15-min delay)"],
+  ["boats", "BOATS (overnight)"],
+  ["overnight", "Overnight derived"],
+  ["otc", "OTC"]
+];
+
+function renderPipelineForm(formState = {}, services = []) {
   const tradingMode = formState.trading_mode || "";
+  const dataFeed = formState.data_feed || "iex";
+  const serviceId = formState.service_id || "";
+  const alpacaServices = services.filter((svc) => svc.provider === "alpaca" && svc.status !== "disabled");
   return `<form class="account-form service-form" data-form="pipeline">
     <div class="form-intro">
-      <h3>Create Market Data Pipeline</h3>
-      <p class="helper">A pipeline is a shared market-data subscription. One pipeline can serve many Deployments — never open per-account streams.</p>
+      <h3>Activate Market Data Stream (Pipeline)</h3>
+      <p class="helper">Picks one of your registered Market Data Services and turns it into a live stream identity. Only one ACTIVE pipeline per (Service · trading mode · data feed) is allowed — duplicates are rejected at create time.</p>
     </div>
-    <label><span>Display Name</span><input name="display_name" required value="${escapeHtml(formState.display_name || "")}"></label>
-    <label><span>Provider</span><select name="provider" data-provider-select="pipeline">${renderSelectOptions([["alpaca", "Alpaca"], ["yahoo", "Yahoo"], ["future", "Future"]], provider)}</select></label>
-    <label><span>Trading Mode</span><select name="trading_mode">${renderSelectOptions(TRADING_MODE_OPTIONS, tradingMode)}</select><small class="helper">Use BROKER_PAPER / BROKER_LIVE only when this pipeline uses broker-credentialed feeds; leave None for vendor-data-only feeds (Yahoo, news).</small></label>
+    <label><span>Service</span><select name="service_id" required>
+      <option value="" disabled${serviceId ? "" : " selected"}>— pick a Service —</option>
+      ${alpacaServices.map((svc) => `<option value="${escapeHtml(svc.id)}"${serviceId === svc.id ? " selected" : ""}>${escapeHtml(svc.name)} (${escapeHtml(svc.provider)})</option>`).join("")}
+    </select><small class="helper">Only Alpaca services with a credentialed account are listed. Add the service first if you don't see one.</small></label>
+    <label><span>Display Name</span><input name="display_name" placeholder="auto from service · feed" value="${escapeHtml(formState.display_name || "")}"></label>
+    <label><span>Data Feed</span><select name="data_feed">${renderSelectOptions(DATA_FEED_OPTIONS, dataFeed)}</select></label>
+    <label><span>Trading Mode</span><select name="trading_mode">${renderSelectOptions(TRADING_MODE_OPTIONS, tradingMode)}</select><small class="helper">BROKER_PAPER for paper-credentialed streams, BROKER_LIVE for live; leave None for vendor-data-only feeds.</small></label>
     <div class="button-row form-actions">
       <button type="button" data-action="cancel-pipeline-form">Cancel</button>
-      <button type="submit">Save</button>
+      <button type="submit">Activate</button>
     </div>
   </form>`;
 }
@@ -176,7 +193,7 @@ function renderPipelinesTab(state) {
       <h2>Market Data Pipelines</h2>
       <button type="button" data-action="show-pipeline-form">+ Add Pipeline</button>
     </div>
-    ${formVisible ? renderPipelineForm(state.pipelineFormState) : ""}
+    ${formVisible ? renderPipelineForm(state.pipelineFormState, state.marketData?.services || []) : ""}
     <div class="service-table">${pipelines.length ? pipelines.map(renderPipelineRow).join("") : `<p class="empty">No pipelines configured. Add a pipeline so resolver results carry a real pipeline_id.</p>`}</div>
   </section>
   ${DataIntentPanel(state)}
@@ -201,13 +218,12 @@ function renderServiceFlags(service) {
     <span class="service-flag flag-market">${escapeHtml(service.provider || "unknown")}</span>
     <span class="service-flag flag-${status}">${escapeHtml(status)}</span>
     <span class="service-flag flag-credentials">${escapeHtml(credentialed)}</span>
-    ${service.is_default ? `<span class="service-flag flag-default">default</span>` : ""}
   </div>`;
 }
 
 function renderMarketDataRow(service) {
   const status = service.status || "unknown";
-  return `<article class="summary-card service-card ${service.is_default ? "service-default" : ""} ${status === "disabled" ? "service-disabled" : ""}">
+  return `<article class="summary-card service-card ${status === "disabled" ? "service-disabled" : ""}">
     <header>
       <div class="service-header">
         <span class="service-icon service-icon-market">M</span>
@@ -218,7 +234,6 @@ function renderMarketDataRow(service) {
     ${renderServiceFlags(service)}
     <dl class="detail-grid">
       <div><dt>Provider</dt><dd>${escapeHtml(service.provider || "unknown")}</dd></div>
-      <div><dt>Default</dt><dd>${service.is_default ? "yes" : "no"}</dd></div>
       <div><dt>Credentials</dt><dd>${service.has_api_key || service.has_api_secret ? MASKED : "not required"}</dd></div>
       <div><dt>Validation</dt><dd>${escapeHtml(service.validation_status || "not validated")} - ${escapeHtml(service.validation_message || "pending verification")}</dd></div>
       <div><dt>Last validated</dt><dd>${formatDate(service.last_validated_at)}</dd></div>
@@ -226,7 +241,7 @@ function renderMarketDataRow(service) {
     <div class="chip-row" aria-label="Capability summary">${capabilityChips(service.capabilities)}</div>
     <div class="button-row">
       <button type="button" data-action="validate-market-data" data-id="${escapeHtml(service.id)}">Validate</button>
-      <button type="button" data-action="default-market-data" data-id="${escapeHtml(service.id)}">Set Default</button>
+      <button type="button" data-action="activate-as-stream" data-id="${escapeHtml(service.id)}" title="Open the Pipeline form pre-filled with this service">Activate as Stream…</button>
       <button type="button" data-action="disable-market-data" data-id="${escapeHtml(service.id)}">Disable</button>
     </div>
   </article>`;
@@ -540,9 +555,11 @@ function renderBootstrapBanner(state) {
 
 function normalizePipelinePayload(data) {
   const trading_mode = data.get("trading_mode");
+  const display_name = data.get("display_name");
   return compactPayload({
-    display_name: data.get("display_name"),
-    provider: data.get("provider"),
+    service_id: data.get("service_id"),
+    display_name: display_name || undefined,
+    data_feed: data.get("data_feed") || "iex",
     trading_mode: trading_mode || undefined
   });
 }
@@ -718,8 +735,19 @@ export async function mountProviders(root, deps = {}) {
     if (action === "show-market-data-form") state.marketDataFormState = { visible: true, provider: "alpaca" };
     if (action === "cancel-market-data-form") state.marketDataFormState = null;
     if (action === "validate-market-data" && id) await servicesApi.validateMarketData(id);
-    if (action === "default-market-data" && id) await servicesApi.setDefaultMarketData(id);
     if (action === "disable-market-data" && id) await servicesApi.disableMarketData(id);
+    if (action === "activate-as-stream" && id) {
+      // Switch to the Pipelines tab and pre-fill the form with this service.
+      state.activeTab = "pipelines";
+      state.pipelineFormState = {
+        visible: true,
+        service_id: id,
+        trading_mode: "BROKER_PAPER",
+        data_feed: "iex"
+      };
+      root.innerHTML = renderProviders(state);
+      return;
+    }
 
     if (action === "show-ai-form") state.aiFormState = { visible: true, provider: "groq", capability_label: "fast" };
     if (action === "cancel-ai-form") state.aiFormState = null;
@@ -736,7 +764,7 @@ export async function mountProviders(root, deps = {}) {
     event.preventDefault();
     const data = new FormData(form);
     if (form.dataset.form === "pipeline") {
-      await pipelinesApi.createPipeline(normalizePipelinePayload(data));
+      await pipelinesApi.createPipelineFromService(normalizePipelinePayload(data));
       state.pipelineFormState = null;
     } else if (form.dataset.form === "market-data") {
       await servicesApi.createMarketData(normalizeMarketDataPayload(data));

@@ -131,14 +131,31 @@ test("Pipelines tab renders pipeline rows with provider, trading_mode, default f
   assert.match(html, new RegExp(pipelineId));
 });
 
-test("Pipelines tab create form does not let operator pick a banned standalone mode", () => {
+test("Pipelines tab activate-stream form does not let operator pick a banned standalone mode", () => {
   const html = renderProviders(state({ pipelineFormState: { visible: true, provider: "alpaca" } }));
-  assert.match(html, /Create Market Data Pipeline/);
+  assert.match(html, /Activate Market Data Stream/);
   assert.match(html, /option value="BROKER_PAPER"/);
   assert.match(html, /option value="BROKER_LIVE"/);
   // Banned standalone "paper" / "live" must never appear as enum values.
   assert.doesNotMatch(html, /option value="paper"/);
   assert.doesNotMatch(html, /option value="live"/);
+});
+
+test("Pipelines tab activate-stream form lists registered Alpaca services in the Service dropdown", () => {
+  const html = renderProviders(state({ pipelineFormState: { visible: true } }));
+  // The fixture state() seeds an "Alpaca Main" service.
+  assert.match(html, /name="service_id"/);
+  assert.match(html, /Alpaca Main/);
+});
+
+test("Pipeline row surfaces service_id and data_feed", () => {
+  const fixture = state();
+  // Add service_id + data_feed to the fixture pipeline.
+  fixture.pipelines.pipelines[0].service_id = "11111111-1111-1111-1111-111111111111";
+  fixture.pipelines.pipelines[0].data_feed = "sip";
+  const html = renderProviders(fixture);
+  assert.match(html, /11111111-1111-1111-1111-111111111111/);
+  assert.match(html, /<dt>Data Feed<\/dt><dd>sip<\/dd>/);
 });
 
 test("Market Data tab still renders without a Mode field", () => {
