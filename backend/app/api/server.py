@@ -28,10 +28,31 @@ from backend.app.api.routes import (
     system_migration,
     system_settings,
     system_status,
+    system_streams,
 )
 
 
 app = FastAPI(title="Trading OS API")
+
+
+@app.on_event("startup")
+def _bootstrap_streams() -> None:  # pragma: no cover
+    """Per the runtime architecture spec: streams auto-start at boot.
+
+    - The Market Data Pipeline (hub registry) is constructed and ready.
+    - One Broker Trade Update Stream is started per configured Account,
+      regardless of whether any Deployments have subscribed yet.
+    """
+    from backend.app.runtime.runtime_context import bootstrap_streams
+
+    result = bootstrap_streams()
+    import logging
+    logging.getLogger("backend.app.api.server").info(
+        "stream bootstrap: started=%d skipped=%d seen=%d",
+        len(result["started_account_ids"]),
+        len(result["skipped"]),
+        result["total_accounts_seen"],
+    )
 
 
 @app.on_event("shutdown")
@@ -43,6 +64,7 @@ def _shutdown_runtime_singletons() -> None:  # pragma: no cover
 
 app.include_router(system_status.router)
 app.include_router(system_settings.router)
+app.include_router(system_streams.router)
 app.include_router(system_migration.router)
 app.include_router(broker_accounts.router)
 app.include_router(operations.router)

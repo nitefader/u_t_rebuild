@@ -5,14 +5,17 @@ import { createPipelinesApi } from "./api/pipelines.js";
 import { createServicesApi } from "./api/services.js";
 import { createSystemSettingsApi } from "./api/systemSettings.js";
 import { createSystemStatusApi } from "./api/systemStatus.js";
+import { createSystemStreamsApi } from "./api/systemStreams.js";
 import { mountSystemStatusBadge } from "./appShell.js";
 import { mountChartLab } from "./chartLab.js";
 import { mountOperationsCenter } from "./operationsCenter.js";
 import { mountOperationsTradeStream } from "./operationsTradeStream.js";
 import { mountProviders } from "./providers.js";
 import { mountSettings } from "./settings.js";
+import { mountSystemStreams } from "./systemStreams.js";
 
 const operationsRoot = document.querySelector("#operations-center");
+const operationsStreamsRoot = document.querySelector("#operations-streams");
 const operationsTradeStreamRoot = document.querySelector("#operations-trade-stream");
 const providersRoot = document.querySelector("#providers");
 const chartLabRoot = document.querySelector("#chart-lab");
@@ -29,6 +32,10 @@ if (settingsRoot) {
 
 if (operationsRoot) {
   mountOperationsCenter(operationsRoot, createOperationsApi());
+}
+
+if (operationsStreamsRoot) {
+  mountSystemStreams(operationsStreamsRoot, createSystemStreamsApi());
 }
 
 if (operationsTradeStreamRoot) {

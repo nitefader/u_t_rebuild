@@ -145,7 +145,8 @@ if APIRouter is not None:  # pragma: no cover - WebSocket only registers with re
             await websocket.close()
             return
 
-        from backend.app.runtime.runtime_context import trade_event_dispatcher
+        from uuid import UUID
+        from backend.app.runtime.runtime_context import trade_dispatcher_registry
 
         loop = asyncio.get_running_loop()
         ws_open = True
@@ -158,24 +159,49 @@ if APIRouter is not None:  # pragma: no cover - WebSocket only registers with re
             except Exception:  # noqa: BLE001 - loop closed mid-shutdown
                 pass
 
-        def on_event(event: object) -> None:
-            if isinstance(event, BrokerOrderUpdateEvent):
-                emit({"type": "order_event", "data": serialize_order_event(event)})
-            elif isinstance(event, BrokerFillUpdateEvent):
-                emit({"type": "fill_event", "data": serialize_fill_event(event)})
-            elif isinstance(event, BrokerAccountSnapshot):
-                emit({"type": "account_snapshot", "data": serialize_account_snapshot(event)})
-            elif isinstance(event, BrokerPositionSnapshot):
-                emit({"type": "position_snapshot", "data": serialize_position_snapshot(event)})
+        def make_on_event(account_id: UUID) -> Any:
+            def on_event(event: object) -> None:
+                envelope = {"account_id": str(account_id)}
+                if isinstance(event, BrokerOrderUpdateEvent):
+                    emit({"type": "order_event", "data": serialize_order_event(event), **envelope})
+                elif isinstance(event, BrokerFillUpdateEvent):
+                    emit({"type": "fill_event", "data": serialize_fill_event(event), **envelope})
+                elif isinstance(event, BrokerAccountSnapshot):
+                    emit({"type": "account_snapshot", "data": serialize_account_snapshot(event), **envelope})
+                elif isinstance(event, BrokerPositionSnapshot):
+                    emit({"type": "position_snapshot", "data": serialize_position_snapshot(event), **envelope})
+            return on_event
 
-        # All Operations trade-stream tabs share one TradingStream connection.
-        # The dispatcher lazy-builds the stream on first subscribe and stops
-        # it when the last subscriber disconnects.
-        dispatcher = trade_event_dispatcher()
-        subscriber_id = dispatcher.subscribe(on_event)
+        # ?account_id=... subscribes to one Account's dispatcher; omitted
+        # subscribes to every running dispatcher (fan-out across accounts).
+        registry = trade_dispatcher_registry()
+        requested_account_param = websocket.query_params.get("account_id")
+        target_dispatchers: list[tuple[UUID, Any, str]] = []
+        if requested_account_param:
+            try:
+                requested_account = UUID(requested_account_param)
+            except ValueError:
+                await websocket.send_text(json.dumps({"type": "error", "code": "invalid_account_id"}))
+                await websocket.close()
+                return
+            dispatcher = registry.get(requested_account)
+            if dispatcher is None:
+                await websocket.send_text(json.dumps({"type": "error", "code": "unknown_account_id"}))
+                await websocket.close()
+                return
+            sub_id = dispatcher.subscribe(make_on_event(requested_account))
+            target_dispatchers.append((requested_account, dispatcher, sub_id))
+        else:
+            for dispatcher in registry.all():
+                sub_id = dispatcher.subscribe(make_on_event(dispatcher.account_id))
+                target_dispatchers.append((dispatcher.account_id, dispatcher, sub_id))
 
         try:
-            await websocket.send_text(json.dumps({"type": "ready", "account_provider": "alpaca_paper"}))
+            await websocket.send_text(json.dumps({
+                "type": "ready",
+                "account_provider": "alpaca_paper",
+                "account_ids": [str(aid) for aid, _, _ in target_dispatchers],
+            }))
             while True:
                 await websocket.receive_text()
         except WebSocketDisconnect:
@@ -187,7 +213,8 @@ if APIRouter is not None:  # pragma: no cover - WebSocket only registers with re
                 pass
         finally:
             ws_open = False
-            try:
-                dispatcher.unsubscribe(subscriber_id)
-            except Exception:  # noqa: BLE001
-                pass
+            for _, dispatcher, sub_id in target_dispatchers:
+                try:
+                    dispatcher.unsubscribe(sub_id)
+                except Exception:  # noqa: BLE001
+                    pass

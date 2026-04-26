@@ -9,6 +9,7 @@ from .operations_trade_stream import router as operations_trade_stream_router
 from .system_migration import router as system_migration_router
 from .system_settings import router as system_settings_router
 from .system_status import router as system_status_router
+from .system_streams import router as system_streams_router
 
 __all__ = [
     "ai_router",
@@ -20,4 +21,5 @@ __all__ = [
     "system_migration_router",
     "system_settings_router",
     "system_status_router",
+    "system_streams_router",
 ]
