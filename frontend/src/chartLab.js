@@ -143,11 +143,14 @@ export function mountChartLab(root, api) {
     const closes = state.bars.map((bar) => bar.close);
     const min = Math.min(...closes);
     const max = Math.max(...closes);
-    const range = max - min || 1;
+    const range = max - min;
     const xStep = 600 / (state.bars.length - 1);
     const points = closes
       .map((close, index) => {
-        const y = 220 - ((close - min) / range) * 200;
+        // When all closes are identical (FAKEPACA test stream emits a
+        // canned bar) the line draws horizontally at chart center
+        // instead of pinning to the bottom of the y-axis.
+        const y = range > 0 ? 220 - ((close - min) / range) * 200 : 120;
         const x = index * xStep;
         return `${x.toFixed(2)},${y.toFixed(2)}`;
       })
@@ -162,7 +165,7 @@ export function mountChartLab(root, api) {
 
     const lastClose = closes[closes.length - 1];
     const dot = document.createElementNS(SVG_NS, "circle");
-    const lastY = 220 - ((lastClose - min) / range) * 200;
+    const lastY = range > 0 ? 220 - ((lastClose - min) / range) * 200 : 120;
     dot.setAttribute("cx", "600");
     dot.setAttribute("cy", lastY.toFixed(2));
     dot.setAttribute("r", "3");
