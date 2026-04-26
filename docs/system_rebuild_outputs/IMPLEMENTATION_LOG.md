@@ -4001,3 +4001,49 @@ How to run (unchanged module path is updated):
   set ALPACA_SECRET_KEY=...
   set ALPACA_BASE_URL=https://paper-api.alpaca.markets
   python -m backend.app.runtime.broker_runtime_entrypoint --sqlite-path data/utos.sqlite3
+
+---
+
+## 2026-04-25 21:05 ET - Slice 2D-followup #2: FAKEPACA test stream wiring
+
+Task:
+- Make weekend equity-stream testing real. Alpaca exposes a 24/7 synthetic stream at wss://stream.data.alpaca.markets/v2/test that emits continuous fake trades/quotes/bars for the symbol FAKEPACA. Wire it through AlpacaMarketDataAdapter so the existing MarketDataStreamHub can consume it on a Saturday without waiting for equity hours.
+
+Files changed:
+- backend/app/market_data/alpaca.py (TEST_STREAM_URL + TEST_SYMBOL class constants; new feed and url_override constructor kwargs; _build_stream_client passes them through to StockDataStream)
+- backend/tests/unit/market_data/test_alpaca_market_data_adapter.py (2 new tests: feed/url_override reach the SDK ctor; FAKEPACA constants pinned)
+- backend/tests/integration/test_alpaca_fakepaca_stream.py (new — opt-in 24/7 stream test gated on RUN_ALPACA_FAKEPACA_STREAM=1; subscribes to FAKEPACA via the hub; asserts at least one NormalizedBar arrives within 90s)
+
+Implemented:
+- AlpacaMarketDataAdapter.TEST_STREAM_URL = "wss://stream.data.alpaca.markets/v2/test", TEST_SYMBOL = "FAKEPACA". Both pinned by a unit test so refactors can't drift them.
+- AlpacaMarketDataAdapter(feed=..., url_override=...) — both default to None. When set, they reach StockDataStream(api_key, secret_key, feed=feed, url_override=url_override). Same adapter shape, no new code path for the test stream — it's the production path with a different endpoint.
+- backend/tests/integration/test_alpaca_fakepaca_stream.py exercises the full hub: AlpacaMarketDataAdapter(url_override=TEST_STREAM_URL) → MarketDataStreamHub.register("fakepaca-smoke", [TEST_SYMBOL], on_bar) → hub.start(). A threading.Event flips when the first NormalizedBar arrives; assertion fires within 90 s. No orders, no broker side — pure market-data stream smoke.
+
+Scope kept out:
+- Wiring FAKEPACA into the broker_runtime_entrypoint by default. The CLI still defaults to the live data feed; FAKEPACA is opt-in via constructor args. (When the CLI gains a --test-stream flag, it can flip url_override.)
+- Replay-from-historical-bars adapter for fully deterministic tests. Different problem; FAKEPACA solves "is the stream pipe alive" but not "does my strategy produce the same orders given the same historical day".
+- DataFeed enum import. The adapter accepts whatever you pass; the test passes a string "iex" and the URL override since the URL-override path bypasses the feed selector.
+
+Validation performed:
+- python -m compileall -q backend
+- python -m pytest backend/
+- cd frontend && npm.cmd run build
+- cd frontend && npm.cmd test
+
+Result:
+- compileall clean. Backend: 726 passed, 3 skipped (+2 unit tests vs slice 2D-followup; 1 new opt-in integration test; the 3 skips are now FAKEPACA + paper-crypto stream + read-only paper polling). Frontend: 37 passed. Build clean.
+
+Verification:
+- TEST_STREAM_URL and TEST_SYMBOL constants pinned by test_adapter_test_stream_constants_match_alpaca_docs.
+- feed and url_override pass-through pinned by test_adapter_passes_feed_and_url_override_to_stock_data_stream.
+
+Commit:
+- pending.
+
+How to run on a weekend:
+  set RUN_ALPACA_FAKEPACA_STREAM=1
+  set ALPACA_API_KEY=...
+  set ALPACA_SECRET_KEY=...
+  pytest backend/tests/integration/test_alpaca_fakepaca_stream.py -v -s
+
+Expected: stream connects, FAKEPACA bar arrives within ~60-90 s, test passes.

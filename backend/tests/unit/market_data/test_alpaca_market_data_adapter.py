@@ -91,6 +91,39 @@ def test_injected_bar_source_collects_normalized_bars_without_network() -> None:
     assert bars[0].timeframe == "1m"
 
 
+def test_adapter_passes_feed_and_url_override_to_stock_data_stream(monkeypatch) -> None:
+    """When feed/url_override are supplied, they reach the underlying SDK ctor."""
+    captured: dict[str, object] = {}
+
+    class FakeStockDataStream:
+        def __init__(self, api_key, secret_key, **kwargs) -> None:  # type: ignore[no-untyped-def]
+            captured["api_key"] = api_key
+            captured["secret_key"] = secret_key
+            captured["kwargs"] = kwargs
+
+    monkeypatch.setattr(alpaca_market_data_module, "StockDataStream", FakeStockDataStream)
+    monkeypatch.setenv("ALPACA_API_KEY", "K")
+    monkeypatch.setenv("ALPACA_SECRET_KEY", "S")
+
+    adapter = AlpacaMarketDataAdapter(
+        load_env=False,
+        feed="iex",
+        url_override=AlpacaMarketDataAdapter.TEST_STREAM_URL,
+    )
+    adapter._build_stream_client()
+
+    assert captured["api_key"] == "K"
+    assert captured["secret_key"] == "S"
+    assert captured["kwargs"]["feed"] == "iex"
+    assert captured["kwargs"]["url_override"] == AlpacaMarketDataAdapter.TEST_STREAM_URL
+
+
+def test_adapter_test_stream_constants_match_alpaca_docs() -> None:
+    """Sanity: pin the FAKEPACA constants so refactors don't drift them."""
+    assert AlpacaMarketDataAdapter.TEST_SYMBOL == "FAKEPACA"
+    assert AlpacaMarketDataAdapter.TEST_STREAM_URL == "wss://stream.data.alpaca.markets/v2/test"
+
+
 class FakeStreamToolAdapter:
     submit_count = 0
     collect_count = 0

@@ -108,9 +108,20 @@ class AlpacaMarketDataAdapter:
     This class only maps external market data into NormalizedBar objects. It
     does not compute features, create orders, submit orders, or touch broker
     execution boundaries.
+
+    For weekend / off-hours testing, point ``url_override`` at
+    :attr:`TEST_STREAM_URL` and subscribe to :attr:`TEST_SYMBOL`
+    (``FAKEPACA``) — Alpaca emits continuous synthetic trades, quotes,
+    and bars on that endpoint 24/7.
     """
 
     provider = "alpaca"
+
+    #: Alpaca's official 24/7 synthetic data stream. Subscribe to ``FAKEPACA``
+    #: to receive a continuous fake trade/quote/bar feed for off-hours testing.
+    #: See https://docs.alpaca.markets/docs/real-time-stock-pricing-data
+    TEST_STREAM_URL = "wss://stream.data.alpaca.markets/v2/test"
+    TEST_SYMBOL = "FAKEPACA"
 
     def __init__(
         self,
@@ -118,10 +129,14 @@ class AlpacaMarketDataAdapter:
         stream_client: Any | None = None,
         bar_source: Iterable[object] | None = None,
         load_env: bool = True,
+        feed: Any | None = None,
+        url_override: str | None = None,
     ) -> None:
         self._stream_client = stream_client
         self._bar_source = tuple(bar_source) if bar_source is not None else None
         self._load_env = load_env
+        self._feed = feed
+        self._url_override = url_override
 
     def normalize_bar(self, bar: object, *, symbol: str | None = None, timeframe: str = "1m") -> NormalizedBar:
         payload = self._response_to_dict(bar)
@@ -243,7 +258,12 @@ class AlpacaMarketDataAdapter:
             raise AlpacaMarketDataError("ALPACA_API_KEY and ALPACA_SECRET_KEY are required")
         if StockDataStream is None:
             raise AlpacaMarketDataError("alpaca-py StockDataStream is required for market data streaming")
-        return StockDataStream(api_key, secret_key)  # type: ignore[misc,operator]
+        kwargs: dict[str, Any] = {}
+        if self._feed is not None:
+            kwargs["feed"] = self._feed
+        if self._url_override is not None:
+            kwargs["url_override"] = self._url_override
+        return StockDataStream(api_key, secret_key, **kwargs)  # type: ignore[misc,operator]
 
     def _stop_stream(self, stream: Any) -> None:
         for method_name in ("stop_ws", "stop"):
