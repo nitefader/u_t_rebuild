@@ -579,10 +579,32 @@ export async function mountProviders(root, deps = {}) {
   };
 
   async function refresh() {
-    state.pipelines = await pipelinesApi.listPipelines();
-    state.marketData = await servicesApi.listMarketData();
-    state.ai = await servicesApi.listAi();
-    root.innerHTML = renderProviders(state);
+    try {
+      state.pipelines = await pipelinesApi.listPipelines();
+      state.marketData = await servicesApi.listMarketData();
+      state.ai = await servicesApi.listAi();
+      root.innerHTML = renderProviders(state);
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error("Providers refresh failed:", err);
+      root.innerHTML = `<section class="loading-shell loading-shell--error" role="alert">
+        <div>
+          <h1>Providers</h1>
+          <p>Could not load Providers data.</p>
+          <p class="loading-shell__hint">${escapeHtml(err.message || String(err))}</p>
+          <p class="loading-shell__hint">Check that the API server is running on port 8000 and the routes /api/v1/market-data and /api/v1/ai are reachable.</p>
+        </div>
+      </section>`;
+    }
+  }
+
+  function escapeHtml(value) {
+    return String(value ?? "")
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replaceAll('"', "&quot;")
+      .replaceAll("'", "&#39;");
   }
 
   async function resolveFromForm() {
