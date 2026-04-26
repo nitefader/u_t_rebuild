@@ -155,6 +155,22 @@ export function mountChartLab(root, api) {
     return table;
   }
 
+  function buildLastPrice() {
+    if (state.bars.length === 0) return null;
+    const latest = state.bars[state.bars.length - 1];
+    const wrap = document.createElement("div");
+    wrap.className = "chart-lab__last-price";
+    const value = document.createElement("span");
+    value.className = "chart-lab__last-price-value";
+    value.textContent = formatPrice(latest.close);
+    const meta = document.createElement("span");
+    meta.className = "chart-lab__last-price-meta";
+    meta.textContent = `${latest.symbol} · ${latest.timeframe} · ${formatTime(latest.timestamp)}`;
+    wrap.appendChild(value);
+    wrap.appendChild(meta);
+    return wrap;
+  }
+
   function render() {
     root.innerHTML = "";
 
@@ -172,14 +188,16 @@ export function mountChartLab(root, api) {
     subtitle.className = "chart-lab__subtitle";
     if (state.config) {
       subtitle.textContent = state.config.test_stream
-        ? "Source: Alpaca FAKEPACA test stream (24/7)"
-        : `Source: Alpaca live data feed (default symbol ${state.config.default_symbol})`;
+        ? "Source: Alpaca FAKEPACA test stream (24/7 synthetic data)"
+        : `Source: Alpaca live data feed · default symbol ${state.config.default_symbol}`;
     } else {
       subtitle.textContent = "Live bar stream from the configured Alpaca account.";
     }
     header.appendChild(subtitle);
-
     wrapper.appendChild(header);
+
+    const panel = document.createElement("section");
+    panel.className = "chart-lab__panel";
 
     const controls = document.createElement("form");
     controls.className = "chart-lab__controls";
@@ -223,26 +241,29 @@ export function mountChartLab(root, api) {
       controls.appendChild(stopButton);
     }
 
-    wrapper.appendChild(controls);
+    panel.appendChild(controls);
 
     const status = document.createElement("p");
     status.className = `chart-lab__status chart-lab__status--${state.status}`;
     status.textContent = state.statusMessage;
-    wrapper.appendChild(status);
+    panel.appendChild(status);
 
     if (!state.config || !state.config.streaming_enabled) {
       const help = document.createElement("p");
       help.className = "chart-lab__help";
       help.textContent =
         "Streaming is disabled. Set ALPACA_API_KEY and ALPACA_SECRET_KEY (and optionally ALPACA_USE_TEST_STREAM=1 for the 24/7 FAKEPACA feed) before starting the API server.";
-      wrapper.appendChild(help);
+      panel.appendChild(help);
     } else {
-      wrapper.appendChild(buildChart());
+      const lastPrice = buildLastPrice();
+      if (lastPrice) panel.appendChild(lastPrice);
+      panel.appendChild(buildChart());
       if (state.bars.length > 0) {
-        wrapper.appendChild(buildBarsTable());
+        panel.appendChild(buildBarsTable());
       }
     }
 
+    wrapper.appendChild(panel);
     root.appendChild(wrapper);
   }
 

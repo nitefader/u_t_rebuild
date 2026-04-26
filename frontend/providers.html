@@ -3,20 +3,29 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Providers</title>
+    <title>Providers · Trading OS</title>
     <link rel="stylesheet" href="./src/styles.css">
   </head>
   <body>
     <nav class="top-nav" aria-label="Primary">
-      <a class="brand" href="./index.html">Trading OS</a>
-      <a class="nav-link" href="./index.html">Operations Center</a>
-      <a class="nav-link active" href="./providers.html" aria-current="page">Providers</a>
-      <a class="nav-link" href="./chart_lab.html">Chart Lab</a>
+      <a class="brand" href="./index.html">
+        <span class="brand__mark" aria-hidden="true">▣</span>
+        Trading OS
+      </a>
+      <div class="top-nav__links">
+        <a class="nav-link" href="./index.html">Operations</a>
+        <a class="nav-link" href="./chart_lab.html">Chart Lab</a>
+        <a class="nav-link active" href="./providers.html" aria-current="page">Providers</a>
+      </div>
+      <div class="top-nav__status" data-system-status></div>
     </nav>
-    <main id="providers" class="services-shell" aria-live="polite">
+    <main id="providers" aria-live="polite">
       <section class="loading-shell">
-        <h1>Providers</h1>
-        <p>Loading Market Data Pipelines and AI Providers.</p>
+        <div class="loading-shell__spinner" aria-hidden="true"></div>
+        <div>
+          <h1>Providers</h1>
+          <p>Loading market-data pipelines and AI providers.</p>
+        </div>
       </section>
     </main>
     <script type="module" src="./src/main.js"></script>

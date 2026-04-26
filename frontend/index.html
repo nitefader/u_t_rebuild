@@ -3,20 +3,29 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Operations Center</title>
+    <title>Operations Center · Trading OS</title>
     <link rel="stylesheet" href="./src/styles.css">
   </head>
   <body>
     <nav class="top-nav" aria-label="Primary">
-      <a class="brand" href="./index.html">Trading OS</a>
-      <a class="nav-link active" href="./index.html" aria-current="page">Operations Center</a>
-      <a class="nav-link" href="./providers.html">Providers</a>
-      <a class="nav-link" href="./chart_lab.html">Chart Lab</a>
+      <a class="brand" href="./index.html">
+        <span class="brand__mark" aria-hidden="true">▣</span>
+        Trading OS
+      </a>
+      <div class="top-nav__links">
+        <a class="nav-link active" href="./index.html" aria-current="page">Operations</a>
+        <a class="nav-link" href="./chart_lab.html">Chart Lab</a>
+        <a class="nav-link" href="./providers.html">Providers</a>
+      </div>
+      <div class="top-nav__status" data-system-status></div>
     </nav>
     <main id="operations-center" aria-live="polite">
       <section class="loading-shell">
-        <h1>Operations Center</h1>
-        <p>Loading runtime visibility. Controls remain unavailable until live Operations API state is loaded.</p>
+        <div class="loading-shell__spinner" aria-hidden="true"></div>
+        <div>
+          <h1>Operations Center</h1>
+          <p>Loading runtime state from the Operations API.</p>
+        </div>
       </section>
     </main>
     <aside id="operations-trade-stream" class="operations-trade-stream-shell" aria-live="polite"></aside>

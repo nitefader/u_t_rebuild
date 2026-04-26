@@ -3,6 +3,8 @@ import { createOperationsApi } from "./api/operations.js";
 import { createOperationsTradeStreamApi } from "./api/operationsTradeStream.js";
 import { createPipelinesApi } from "./api/pipelines.js";
 import { createServicesApi } from "./api/services.js";
+import { createSystemStatusApi } from "./api/systemStatus.js";
+import { mountSystemStatusBadge } from "./appShell.js";
 import { mountChartLab } from "./chartLab.js";
 import { mountOperationsCenter } from "./operationsCenter.js";
 import { mountOperationsTradeStream } from "./operationsTradeStream.js";
@@ -12,6 +14,11 @@ const operationsRoot = document.querySelector("#operations-center");
 const operationsTradeStreamRoot = document.querySelector("#operations-trade-stream");
 const providersRoot = document.querySelector("#providers");
 const chartLabRoot = document.querySelector("#chart-lab");
+const statusBadgeRoot = document.querySelector("[data-system-status]");
+
+if (statusBadgeRoot) {
+  mountSystemStatusBadge(statusBadgeRoot, createSystemStatusApi());
+}
 
 if (operationsRoot) {
   mountOperationsCenter(operationsRoot, createOperationsApi());

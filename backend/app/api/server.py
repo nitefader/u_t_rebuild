@@ -9,11 +9,13 @@ from backend.app.api.routes import (
     market_data,
     operations,
     operations_trade_stream,
+    system_status,
 )
 
 
 app = FastAPI(title="Trading OS API")
 
+app.include_router(system_status.router)
 app.include_router(broker_accounts.router)
 app.include_router(operations.router)
 app.include_router(operations_trade_stream.router)
