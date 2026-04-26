@@ -1,16 +1,19 @@
-"""Paper runtime entrypoint — wires creds → supervisor → block-until-signal.
+"""Broker-runtime entrypoint — composes the full broker-runtime stack.
 
 This is the CLI seam that turns the in-process surfaces (broker adapter,
-streams, broker runtime, supervisor) into a single ``run_paper_runtime``
-function plus a ``__main__`` invocation for ``python -m
-backend.app.runtime.paper_runtime_entrypoint``.
+trade-update stream, market-data hub, broker runtime, supervisor) into a
+single ``run_broker_runtime`` function plus a ``__main__`` invocation
+for ``python -m backend.app.runtime.broker_runtime_entrypoint``.
 
-The function is intentionally thin: it composes existing services and
-hands the result to ``PaperRuntimeSupervisor.start``. It does **not**
-create deployments — those are created via the broker_accounts /
-deployments flow elsewhere. The entrypoint reads active paper
-deployments from the runtime store (if any), starts streams, and
-blocks on SIGINT.
+The function is intentionally thin: it composes existing services in
+dependency order, registers the supervisor as a market-data hub
+consumer, starts the streams, and (optionally) blocks on SIGINT.
+
+It does not create deployments — those live elsewhere. It also does not
+know whether the broker adapter is BROKER_PAPER or BROKER_LIVE; today
+``AlpacaBrokerAdapter`` only supports paper, so paper is what runs. When
+the adapter gains live support and the promotion gate is wired in, the
+same entrypoint runs live.
 """
 
 from __future__ import annotations
@@ -23,39 +26,44 @@ import threading
 from collections.abc import Iterable
 from pathlib import Path
 
-from backend.app.brokers import AlpacaAccountStreamAdapter, AlpacaBrokerAdapter, BrokerStreamRouter, BrokerStreamRunner, BrokerSync
-from backend.app.brokers import BrokerSyncService
+from backend.app.brokers import (
+    AlpacaAccountStreamAdapter,
+    AlpacaBrokerAdapter,
+    BrokerStreamRouter,
+    BrokerStreamRunner,
+    BrokerSync,
+    BrokerSyncService,
+)
 from backend.app.control_plane import ControlPlane
-from backend.app.market_data import AlpacaMarketDataAdapter
+from backend.app.market_data import AlpacaMarketDataAdapter, MarketDataStreamHub
 from backend.app.orders import OrderManager, TradeLedger
 from backend.app.persistence import SQLiteRuntimeStore
 
 from .broker_runtime_orchestrator import BrokerRuntimeDeployment, BrokerRuntimeOrchestrator
-from .paper_runtime_supervisor import PaperRuntimeSupervisor
+from .broker_runtime_supervisor import BrokerRuntimeSupervisor
 
 
 logger = logging.getLogger(__name__)
 
 
-class PaperRuntimeEntrypointError(RuntimeError):
+class BrokerRuntimeEntrypointError(RuntimeError):
     """Raised when the runtime cannot start safely (missing env, bad store, etc.)."""
 
 
-def run_paper_runtime(
+def run_broker_runtime(
     *,
     sqlite_path: str | Path,
     deployments: Iterable[BrokerRuntimeDeployment] | None = None,
+    market_data_hub: MarketDataStreamHub | None = None,
     block_until_signal: bool = True,
-) -> PaperRuntimeSupervisor:
-    """Build the paper runtime stack and return a started supervisor.
+) -> tuple[BrokerRuntimeSupervisor, MarketDataStreamHub]:
+    """Build the broker runtime stack and return (supervisor, hub).
 
-    The function composes the production services in dependency order,
-    starts the trade-update stream, the market-data stream, and each
-    eligible deployment, then optionally blocks on SIGINT/SIGTERM. It
-    returns the running supervisor so callers (tests, embedding code)
-    can inspect or stop it programmatically.
+    The hub is exposed so callers can register additional consumers
+    (sim-lab live simulation, chart-lab live preview) against the same
+    market-data subscription before the hub starts.
 
-    Required env (validated on construction of ``AlpacaBrokerAdapter``):
+    Required env (validated when ``AlpacaBrokerAdapter`` constructs):
         ALPACA_API_KEY, ALPACA_SECRET_KEY, ALPACA_BASE_URL=paper URL.
     """
     runtime_store = SQLiteRuntimeStore(sqlite_path)
@@ -78,13 +86,9 @@ def run_paper_runtime(
         control_plane=control_plane,
     )
 
-    sync_service: BrokerSyncService | None = None
     broker_stream_runner: BrokerStreamRunner | None = None
     active_entries = broker_runtime.load_active_broker_paper_deployments()
     if active_entries:
-        # One sync_service per supervisor — all active paper deployments
-        # share the same broker account here. (Multi-account support is
-        # deferred until the deployment model carries account_id sharding.)
         first_account_id = active_entries[0].account_id
         sync_service = BrokerSyncService(
             adapter=broker_adapter,
@@ -105,26 +109,27 @@ def run_paper_runtime(
         BrokerStreamRouter(sync_service).attach(stream_adapter)
         broker_stream_runner = BrokerStreamRunner(stream_client)
 
-    market_data_adapter = AlpacaMarketDataAdapter()
-    supervisor = PaperRuntimeSupervisor(
+    hub = market_data_hub or MarketDataStreamHub(market_data_adapter=AlpacaMarketDataAdapter())
+    supervisor = BrokerRuntimeSupervisor(
         broker_runtime=broker_runtime,
-        market_data_adapter=market_data_adapter,
+        market_data_hub=hub,
         broker_stream_runner=broker_stream_runner,
     )
     supervisor.start(active_entries)
+    hub.start()
 
     if not block_until_signal:
-        return supervisor
+        return supervisor, hub
 
-    _block_until_signal(supervisor)
-    return supervisor
+    _block_until_signal(supervisor, hub)
+    return supervisor, hub
 
 
-def _block_until_signal(supervisor: PaperRuntimeSupervisor) -> None:
+def _block_until_signal(supervisor: BrokerRuntimeSupervisor, hub: MarketDataStreamHub) -> None:
     stop_event = threading.Event()
 
     def _handle_signal(signum: int, frame: object) -> None:  # noqa: ARG001
-        logger.info("received signal %s; stopping paper runtime", signum)
+        logger.info("received signal %s; stopping broker runtime", signum)
         stop_event.set()
 
     signal.signal(signal.SIGINT, _handle_signal)
@@ -135,11 +140,12 @@ def _block_until_signal(supervisor: PaperRuntimeSupervisor) -> None:
         stop_event.wait()
     finally:
         supervisor.stop()
+        hub.stop()
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Start the Alpaca paper trading runtime against active deployments.",
+        description="Start the broker runtime against active deployments.",
     )
     parser.add_argument(
         "--sqlite-path",
@@ -152,7 +158,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 def main(argv: list[str] | None = None) -> None:
     logging.basicConfig(level=os.getenv("UTOS_LOG_LEVEL", "INFO"))
     args = _parse_args(argv)
-    run_paper_runtime(sqlite_path=args.sqlite_path)
+    run_broker_runtime(sqlite_path=args.sqlite_path)
 
 
 if __name__ == "__main__":  # pragma: no cover

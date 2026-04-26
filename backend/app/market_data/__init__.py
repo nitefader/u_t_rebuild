@@ -14,6 +14,7 @@ from .alpaca import (
     MarketDataStreamRunner,
     MarketDataSubscription,
 )
+from .stream_hub import MarketDataStreamHub, MarketDataStreamHubError
 from .capability_profiles import ProviderCapabilityProfile, provider_capability_profile
 from .catalog import (
     MarketDataCatalogError,
@@ -101,6 +102,8 @@ __all__ = [
     "MarketDataServiceList",
     "MarketDataServiceRecord",
     "MarketDataServiceWrite",
+    "MarketDataStreamHub",
+    "MarketDataStreamHubError",
     "MarketDataStreamRunner",
     "MarketDataSubscription",
     "MarketDataValidationResult",

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Any
 from uuid import UUID, uuid4
 
 import pytest
@@ -28,15 +27,15 @@ from backend.app.domain import (
 from backend.app.domain.risk_profile import PositionSizingMethod
 from backend.app.domain.strategy import SignalRule
 from backend.app.features import NormalizedBar, ResolvedProgramComponents
-from backend.app.market_data import AlpacaMarketDataAdapter
+from backend.app.market_data import MarketDataStreamHub
 from backend.app.orders import OrderManager
 from backend.app.persistence import SQLiteOrderLedger, SQLiteRuntimeStore
 from backend.app.runtime import (
     BrokerRuntimeDeployment,
     BrokerRuntimeOrchestrator,
+    BrokerRuntimeSupervisor,
+    BrokerRuntimeSupervisorError,
     DeploymentContext,
-    PaperRuntimeSupervisor,
-    PaperRuntimeSupervisorError,
     RuntimeState,
     RuntimeStatus,
 )
@@ -53,31 +52,11 @@ def _components(*, symbol: str = "SPY") -> ResolvedProgramComponents:
     risk_id = uuid4()
     execution_id = uuid4()
     universe_id = uuid4()
-    strategy = StrategyVersion(
-        id=strategy_id,
-        strategy_id=uuid4(),
-        version=1,
-        name="Supervisor Strategy",
-        entry_rules=[
-            SignalRule(
-                name="close_above_open",
-                side=CandidateSide.LONG,
-                intent_type=IntentType.ENTRY,
-                condition=ConditionNode(
-                    left_feature="5m.close[0]",
-                    operator=ConditionOperator.GREATER_THAN,
-                    right_feature="5m.open[0]",
-                ),
-                stop_candidate_feature="5m.low[0]",
-                target_candidate_feature="5m.high[0]",
-            )
-        ],
-    )
     return ResolvedProgramComponents(
         program=ProgramVersion(
             id=uuid4(),
             program_id=uuid4(),
-            name="Supervisor Program",
+            name="P",
             version=1,
             strategy_version_id=strategy_id,
             strategy_controls_version_id=controls_id,
@@ -85,19 +64,36 @@ def _components(*, symbol: str = "SPY") -> ResolvedProgramComponents:
             execution_style_version_id=execution_id,
             universe_snapshot_id=universe_id,
         ),
-        strategy=strategy,
+        strategy=StrategyVersion(
+            id=strategy_id,
+            strategy_id=uuid4(),
+            version=1,
+            name="S",
+            entry_rules=[
+                SignalRule(
+                    name="r",
+                    side=CandidateSide.LONG,
+                    intent_type=IntentType.ENTRY,
+                    condition=ConditionNode(
+                        left_feature="5m.close[0]",
+                        operator=ConditionOperator.GREATER_THAN,
+                        right_feature="5m.open[0]",
+                    ),
+                )
+            ],
+        ),
         strategy_controls=StrategyControlsVersion(
             id=controls_id,
             strategy_controls_id=uuid4(),
             version=1,
-            name="5m",
+            name="c",
             timeframe="5m",
         ),
         risk_profile=RiskProfileVersion(
             id=risk_id,
             risk_profile_id=uuid4(),
             version=1,
-            name="Fixed",
+            name="r",
             sizing_method=PositionSizingMethod.FIXED_SHARES,
             fixed_shares=10,
         ),
@@ -105,7 +101,7 @@ def _components(*, symbol: str = "SPY") -> ResolvedProgramComponents:
             id=execution_id,
             execution_style_id=uuid4(),
             version=1,
-            name="Market",
+            name="e",
             entry_order_type=OrderType.MARKET,
             time_in_force=TimeInForce.DAY,
         ),
@@ -113,7 +109,7 @@ def _components(*, symbol: str = "SPY") -> ResolvedProgramComponents:
             id=universe_id,
             universe_id=uuid4(),
             version=1,
-            name="Universe",
+            name="u",
             symbols=[UniverseSymbol(symbol=symbol)],
         ),
     )
@@ -132,13 +128,13 @@ def _bar(symbol: str = "SPY", *, close: float = 100, open_: float = 99) -> Norma
     )
 
 
-def _seed_account(store: SQLiteRuntimeStore, account_id: UUID = ACCOUNT_ID, *, stale: bool = False) -> None:
+def _seed_account(store: SQLiteRuntimeStore) -> None:
     from backend.app.brokers import BrokerSyncState
 
     now = datetime.now(timezone.utc)
     store.save_broker_account(
         BrokerAccount(
-            id=account_id,
+            id=ACCOUNT_ID,
             display_name="Paper",
             provider="alpaca",
             mode=TradingMode.BROKER_PAPER,
@@ -148,11 +144,10 @@ def _seed_account(store: SQLiteRuntimeStore, account_id: UUID = ACCOUNT_ID, *, s
     )
     store.save_broker_sync_freshness(
         BrokerSyncState(
-            account_id=account_id,
+            account_id=ACCOUNT_ID,
             last_sync_at=now,
-            last_successful_sync_at=None if stale else now,
-            is_stale=stale,
-            stale_reason="stale" if stale else None,
+            last_successful_sync_at=now,
+            is_stale=False,
         )
     )
 
@@ -182,9 +177,7 @@ def _build_runtime(tmp_path, *, deployments) -> tuple[BrokerRuntimeOrchestrator,
     return runtime, store
 
 
-class _RecordingMarketDataAdapter:
-    """Stand-in for AlpacaMarketDataAdapter — records subscribe_bars calls."""
-
+class _RecordingHubAdapter:
     def __init__(self) -> None:
         self.subscribed_symbols: tuple[str, ...] | None = None
         self.emit_callback = None
@@ -200,17 +193,16 @@ class _RecordingMarketDataAdapter:
         return _FakeStream()
 
 
-class _RecordingMarketDataRunner:
+class _FakeRunner:
     def __init__(self, stream) -> None:  # type: ignore[no-untyped-def]
         self.stream = stream
-        self.started = False
-        self.stopped = False
+        self.is_running = False
 
     def start(self) -> None:
-        self.started = True
+        self.is_running = True
 
     def stop(self, *, timeout: float = 5.0) -> None:  # noqa: ARG002
-        self.stopped = True
+        self.is_running = False
 
 
 class _RecordingBrokerStreamRunner:
@@ -225,7 +217,11 @@ class _RecordingBrokerStreamRunner:
         self.stopped = True
 
 
-def test_supervisor_dispatches_bar_only_to_subscribed_deployments(tmp_path) -> None:
+def _make_hub() -> MarketDataStreamHub:
+    return MarketDataStreamHub(market_data_adapter=_RecordingHubAdapter(), runner_factory=_FakeRunner)
+
+
+def test_supervisor_registers_with_hub_and_dispatches_bars_via_hub(tmp_path) -> None:
     spy_components = _components(symbol="SPY")
     qqq_components = _components(symbol="QQQ")
     deployments = (
@@ -241,33 +237,25 @@ def test_supervisor_dispatches_bar_only_to_subscribed_deployments(tmp_path) -> N
         ),
     )
     runtime, _ = _build_runtime(tmp_path, deployments=deployments)
-    market_data = _RecordingMarketDataAdapter()
-    market_data_runner_holder: list[_RecordingMarketDataRunner] = []
-
-    def runner_factory(stream):
-        runner = _RecordingMarketDataRunner(stream)
-        market_data_runner_holder.append(runner)
-        return runner
-
-    supervisor = PaperRuntimeSupervisor(
+    hub = _make_hub()
+    broker_runner = _RecordingBrokerStreamRunner()
+    supervisor = BrokerRuntimeSupervisor(
         broker_runtime=runtime,
-        market_data_adapter=market_data,
-        broker_stream_runner=_RecordingBrokerStreamRunner(),
-        market_data_stream_factory=runner_factory,
+        market_data_hub=hub,
+        broker_stream_runner=broker_runner,
     )
+
     supervisor.start(deployments)
     try:
-        assert supervisor.is_running is True
-        assert supervisor.subscribed_symbols == ("QQQ", "SPY")
-        assert market_data.subscribed_symbols == ("QQQ", "SPY")
-        assert market_data_runner_holder[0].started is True
+        # Hub now knows about the supervisor and the union of its symbols.
+        assert supervisor.consumer_id in hub.consumer_ids
+        assert hub.subscribed_symbols == ("QQQ", "SPY")
+        assert broker_runner.started is True
 
-        # Dispatch a SPY bar — only DEPLOYMENT_A should process it.
-        supervisor.dispatch_bar(_bar(symbol="SPY"))
-        # Dispatch a QQQ bar — only DEPLOYMENT_B.
-        supervisor.dispatch_bar(_bar(symbol="QQQ"))
-        # Dispatch an IWM bar — neither.
-        supervisor.dispatch_bar(_bar(symbol="IWM"))
+        # Bars dispatched through the hub reach the right deployments.
+        hub.dispatch_bar(_bar("SPY"))
+        hub.dispatch_bar(_bar("QQQ"))
+        hub.dispatch_bar(_bar("IWM"))  # nobody subscribed
 
         spy_state = runtime.loop_status(DEPLOYMENT_ID_A)
         qqq_state = runtime.loop_status(DEPLOYMENT_ID_B)
@@ -275,99 +263,77 @@ def test_supervisor_dispatches_bar_only_to_subscribed_deployments(tmp_path) -> N
         assert qqq_state.last_bar_timestamp is not None
     finally:
         supervisor.stop()
-        assert market_data_runner_holder[0].stopped is True
+        assert supervisor.consumer_id not in hub.consumer_ids
+        assert broker_runner.stopped is True
 
 
-def test_supervisor_start_is_idempotent_in_one_session(tmp_path) -> None:
+def test_multiple_consumers_share_the_same_hub_subscription(tmp_path) -> None:
+    """Supervisor + a sim-lab-live consumer on the same hub subscribe-once."""
     components = _components(symbol="SPY")
     deployments = (
         BrokerRuntimeDeployment(
-            deployment=DeploymentContext(deployment_id=DEPLOYMENT_ID_A, program=components.program),
+            deployment=DeploymentContext(deployment_id=DEPLOYMENT_ID_A, program=components.program, mode=TradingMode.BROKER_PAPER.value),
             components=components,
             account_id=ACCOUNT_ID,
         ),
     )
     runtime, _ = _build_runtime(tmp_path, deployments=deployments)
-    market_data = _RecordingMarketDataAdapter()
-    supervisor = PaperRuntimeSupervisor(
-        broker_runtime=runtime,
-        market_data_adapter=market_data,
-        market_data_stream_factory=_RecordingMarketDataRunner,
+    hub = _make_hub()
+    sim_received: list[str] = []
+    hub.register("sim-lab-live", ["SPY", "QQQ"], lambda bar: sim_received.append(bar.symbol))
+    supervisor = BrokerRuntimeSupervisor(broker_runtime=runtime, market_data_hub=hub)
+    supervisor.start(deployments)
+
+    try:
+        assert hub.subscribed_symbols == ("QQQ", "SPY")  # union: SPY (broker+sim) + QQQ (sim only)
+        assert set(hub.consumer_ids) == {"sim-lab-live", supervisor.consumer_id}
+
+        hub.dispatch_bar(_bar("SPY"))
+        hub.dispatch_bar(_bar("QQQ"))
+
+        # Sim lab sees both; broker supervisor only sees SPY (its only universe symbol).
+        assert sim_received == ["SPY", "QQQ"]
+        assert runtime.loop_status(DEPLOYMENT_ID_A).last_bar_timestamp is not None
+    finally:
+        supervisor.stop()
+        # Sim lab consumer is still registered on the hub after broker stops.
+        assert "sim-lab-live" in hub.consumer_ids
+
+
+def test_double_start_raises(tmp_path) -> None:
+    components = _components()
+    deployments = (
+        BrokerRuntimeDeployment(
+            deployment=DeploymentContext(deployment_id=DEPLOYMENT_ID_A, program=components.program, mode=TradingMode.BROKER_PAPER.value),
+            components=components,
+            account_id=ACCOUNT_ID,
+        ),
     )
+    runtime, _ = _build_runtime(tmp_path, deployments=deployments)
+    supervisor = BrokerRuntimeSupervisor(broker_runtime=runtime, market_data_hub=_make_hub())
     supervisor.start(deployments)
     try:
-        with pytest.raises(PaperRuntimeSupervisorError):
+        with pytest.raises(BrokerRuntimeSupervisorError):
             supervisor.start(deployments)
     finally:
         supervisor.stop()
 
 
-def test_supervisor_stop_is_idempotent_when_not_running(tmp_path) -> None:
-    components = _components(symbol="SPY")
-    deployments = (
-        BrokerRuntimeDeployment(
-            deployment=DeploymentContext(deployment_id=DEPLOYMENT_ID_A, program=components.program),
-            components=components,
-            account_id=ACCOUNT_ID,
-        ),
-    )
-    runtime, _ = _build_runtime(tmp_path, deployments=deployments)
-    supervisor = PaperRuntimeSupervisor(
-        broker_runtime=runtime,
-        market_data_adapter=_RecordingMarketDataAdapter(),
-    )
-    # Should not raise.
-    supervisor.stop()
+def test_stop_before_start_is_noop(tmp_path) -> None:
+    runtime, _ = _build_runtime(tmp_path, deployments=())
+    supervisor = BrokerRuntimeSupervisor(broker_runtime=runtime, market_data_hub=_make_hub())
+    supervisor.stop()  # no exception
     assert supervisor.is_running is False
 
 
-def test_supervisor_starts_with_no_deployments_skips_market_data_subscription(tmp_path) -> None:
+def test_supervisor_with_no_deployments_skips_hub_registration(tmp_path) -> None:
     runtime, _ = _build_runtime(tmp_path, deployments=())
-    market_data = _RecordingMarketDataAdapter()
-    supervisor = PaperRuntimeSupervisor(
-        broker_runtime=runtime,
-        market_data_adapter=market_data,
-    )
+    hub = _make_hub()
+    supervisor = BrokerRuntimeSupervisor(broker_runtime=runtime, market_data_hub=hub)
     supervisor.start(())
     try:
         assert supervisor.is_running is True
-        assert supervisor.subscribed_symbols == ()
-        assert market_data.subscribed_symbols is None
+        assert supervisor.consumer_id not in hub.consumer_ids
+        assert hub.subscribed_symbols == ()
     finally:
         supervisor.stop()
-
-
-def test_market_data_adapter_subscribe_bars_registers_async_handler() -> None:
-    """The handler we hand to alpaca-py is async; emit fires synchronously inside it."""
-    import asyncio
-
-    captured: list = []
-
-    class FakeStream:
-        def subscribe_bars(self, handler, *symbols):  # type: ignore[no-untyped-def]
-            captured.append({"handler": handler, "symbols": symbols})
-
-        def run(self) -> None: ...
-
-    received: list[NormalizedBar] = []
-    adapter = AlpacaMarketDataAdapter(stream_client=FakeStream(), load_env=False)
-    adapter.subscribe_bars(["SPY", "qqq"], emit=received.append, timeframe="1m")
-
-    assert len(captured) == 1
-    assert captured[0]["symbols"] == ("SPY", "QQQ")
-
-    handler = captured[0]["handler"]
-    fake_bar = {
-        "S": "SPY",
-        "t": "2026-01-02T14:30:00+00:00",
-        "o": 100,
-        "h": 101,
-        "l": 99,
-        "c": 100.5,
-        "v": 1000,
-    }
-    asyncio.run(handler(fake_bar))
-
-    assert len(received) == 1
-    assert received[0].symbol == "SPY"
-    assert received[0].timeframe == "1m"

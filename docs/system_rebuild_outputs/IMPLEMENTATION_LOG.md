@@ -3947,3 +3947,57 @@ How to run:
   set ALPACA_SECRET_KEY=...
   set ALPACA_BASE_URL=https://paper-api.alpaca.markets
   python -m backend.app.runtime.paper_runtime_entrypoint --sqlite-path data/utos.sqlite3
+
+---
+
+## 2026-04-25 20:25 ET - Slice 2D-followup: Generic MarketDataStreamHub + BrokerRuntimeSupervisor rename
+
+Task:
+- Slice 2D's PaperRuntimeSupervisor conflated two concerns: (a) a single market-data subscription with symbol-routed dispatch — generic, every live consumer needs it; (b) the broker trade-update stream and per-deployment lifecycle — broker-runtime-specific (paper today, live later). Calling the whole thing "Paper" baked in two assumptions that aren't true: that paper is the only consumer and that it won't share with live or with sim-lab live / chart-lab live preview later. This slice extracts the generic piece and renames the broker piece.
+
+Files changed:
+- backend/app/market_data/stream_hub.py (new — MarketDataStreamHub: register(consumer_id, symbols, on_bar) / unregister / start / stop. Subscribes to the union of all consumers' symbols exactly once via the adapter, dispatches each NormalizedBar to every consumer that asked for that symbol. Lock-guarded; rejects mutation while running.)
+- backend/app/market_data/__init__.py (exports MarketDataStreamHub + MarketDataStreamHubError)
+- backend/app/runtime/broker_runtime_supervisor.py (new — BrokerRuntimeSupervisor: owns broker_stream_runner + deployment lifecycle, *consumes* the hub for bars rather than owning a stream; per-supervisor consumer_id; idempotent stop; does not stop the hub since the hub may be shared)
+- backend/app/runtime/broker_runtime_entrypoint.py (renamed from paper_runtime_entrypoint.py — run_broker_runtime composes runtime_store + adapter + sync + sync_service + hub + supervisor; returns (supervisor, hub) so callers can register sim-lab / chart-lab consumers on the same hub before it starts)
+- backend/app/runtime/__init__.py (lazy-export BrokerRuntimeSupervisor instead of PaperRuntimeSupervisor)
+- backend/tests/unit/market_data/test_market_data_stream_hub.py (new — 9 tests: subscribe-once-on-start, dispatch by symbol only to subscribed consumers, re-register replaces, unregister drops symbol when last consumer leaves, mutation-during-run rejected, double-start rejected, no-consumer start is idle, stop-before-start no-op, empty-symbol register rejected)
+- backend/tests/unit/runtime/test_broker_runtime_supervisor.py (new — 5 tests: registers with hub and dispatches via hub, multiple consumers share one subscription, double-start rejection, stop-before-start no-op, empty-deployment supervisor skips hub registration)
+- backend/tests/unit/runtime/test_broker_runtime_entrypoint.py (new — 2 entrypoint smoke tests with TradingClient/TradingStream/StockDataStream patched)
+- DELETED: backend/app/runtime/paper_runtime_supervisor.py, backend/tests/unit/runtime/test_paper_runtime_supervisor.py, backend/tests/unit/runtime/test_paper_runtime_entrypoint.py
+
+Implemented:
+- MarketDataStreamHub.register(consumer_id, symbols, on_bar): consumer_id is the dedup key; re-registering replaces the prior subscription. The hub builds a symbol → {consumer_ids} reverse index. start() asks the adapter to subscribe_bars(union_of_symbols) exactly once and runs the stream client in a daemon thread. Bars arriving on the emit callback dispatch to every consumer that asked for the bar's symbol.
+- BrokerRuntimeSupervisor: market_data_hub is a constructor parameter (no default — composition root injects it). consumer_id auto-generated per supervisor instance ("broker-runtime-supervisor:<uuid8>"). start(deployments) preflights via broker_runtime, registers with the hub under its consumer_id, starts the broker stream runner. stop() unregisters from the hub, stops the broker runner, brings deployments down, leaves the hub alone (caller owns hub lifecycle).
+- run_broker_runtime returns (supervisor, hub) so other consumers (sim-lab live, chart-lab live preview) can register on the hub before it starts. The function builds and starts the hub itself when block_until_signal=True; SIGINT handler stops both.
+- Multi-consumer test verifies that BrokerRuntimeSupervisor + a sim-lab-live-style consumer share one MarketDataStreamHub: the hub subscribes to the union (SPY for both, plus QQQ for sim-lab only), each bar routes to the right consumer(s), and stopping the broker supervisor leaves the sim-lab consumer registered.
+
+Scope kept out:
+- Live add/remove of symbols on a running hub. Today the consumer set is fixed at start. To change symbols, stop the hub, re-register, restart. (alpaca-py's data streams support live (un)subscribe; exposing that is a future capability.)
+- Multi-account fan-out within one supervisor (still one broker account per supervisor).
+- Wiring sim-lab live simulation / chart-lab live preview as actual hub consumers — those are separate slices when those runtimes go live.
+- Promotion gate integration into deployment creation.
+
+Validation performed:
+- python -m compileall -q backend
+- python -m pytest backend/
+- cd frontend && npm.cmd run build
+- cd frontend && npm.cmd test
+
+Result:
+- compileall clean. Backend: 724 passed, 2 skipped (+10 unit tests vs slice 2D, no functional regressions). Frontend: 37 passed. Build clean.
+
+Verification:
+- MarketDataStreamHub is generic: nothing in stream_hub.py references brokers, deployments, or paper. Re-usable from sim-lab and chart-lab.
+- BrokerRuntimeSupervisor consumes the hub via register/unregister; does not own the data stream lifecycle. Hub remains running across supervisor stop, ready for other consumers.
+- run_broker_runtime returns the hub so callers can compose multi-consumer scenarios in one process.
+- Slice 2C / 2C-followup contracts unchanged.
+
+Commit:
+- pending.
+
+How to run (unchanged module path is updated):
+  set ALPACA_API_KEY=...
+  set ALPACA_SECRET_KEY=...
+  set ALPACA_BASE_URL=https://paper-api.alpaca.markets
+  python -m backend.app.runtime.broker_runtime_entrypoint --sqlite-path data/utos.sqlite3

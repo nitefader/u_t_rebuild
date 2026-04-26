@@ -23,12 +23,12 @@ def __getattr__(name: str):
             "BrokerRuntimeLoopStatus": BrokerRuntimeLoopStatus,
             "BrokerRuntimeOrchestrator": BrokerRuntimeOrchestrator,
         }[name]
-    if name in {"PaperRuntimeSupervisor", "PaperRuntimeSupervisorError"}:
-        from .paper_runtime_supervisor import PaperRuntimeSupervisor, PaperRuntimeSupervisorError
+    if name in {"BrokerRuntimeSupervisor", "BrokerRuntimeSupervisorError"}:
+        from .broker_runtime_supervisor import BrokerRuntimeSupervisor, BrokerRuntimeSupervisorError
 
         return {
-            "PaperRuntimeSupervisor": PaperRuntimeSupervisor,
-            "PaperRuntimeSupervisorError": PaperRuntimeSupervisorError,
+            "BrokerRuntimeSupervisor": BrokerRuntimeSupervisor,
+            "BrokerRuntimeSupervisorError": BrokerRuntimeSupervisorError,
         }[name]
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
@@ -37,11 +37,11 @@ __all__ = [
     "BrokerRuntimeDeployment",
     "BrokerRuntimeLoopStatus",
     "BrokerRuntimeOrchestrator",
+    "BrokerRuntimeSupervisor",
+    "BrokerRuntimeSupervisorError",
     "DeploymentContext",
     "ExecutionIntent",
     "ExecutionIntentBuilder",
-    "PaperRuntimeSupervisor",
-    "PaperRuntimeSupervisorError",
     "RecoveryResult",
     "RuntimeDecisionBatch",
     "RuntimeEngine",

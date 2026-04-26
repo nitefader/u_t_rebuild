@@ -4,15 +4,12 @@ from pathlib import Path
 
 import backend.app.brokers.alpaca as alpaca_module
 import backend.app.market_data.alpaca as market_data_alpaca_module
-from backend.app.runtime import paper_runtime_entrypoint
+from backend.app.runtime import broker_runtime_entrypoint
 
 
 class _FakeTradingClient:
-    """Stand-in for alpaca-py TradingClient that satisfies the adapter."""
-
     def __init__(self, *args, **kwargs) -> None:  # type: ignore[no-untyped-def]
-        self._args = args
-        self._kwargs = kwargs
+        pass
 
     def get_clock(self) -> dict:
         return {"is_open": False}
@@ -43,37 +40,29 @@ class _FakeTradingStream:
     def stop(self) -> None: ...
 
 
-def test_run_paper_runtime_with_no_active_deployments_returns_idle_supervisor(
+def test_run_broker_runtime_with_no_active_deployments_returns_idle_supervisor(
     tmp_path: Path, monkeypatch
 ) -> None:
-    """When the runtime store has no paper deployments, the supervisor still
-    starts cleanly — no streams open, no bar subscriptions registered.
-
-    This is the smoke-test path for `python -m backend.app.runtime.paper_runtime_entrypoint`
-    against a fresh database: the process should start without crashing and
-    be safe to stop immediately.
-    """
     monkeypatch.setattr(alpaca_module, "TradingClient", _FakeTradingClient)
     monkeypatch.setattr(market_data_alpaca_module, "StockDataStream", _FakeStockDataStream)
     monkeypatch.setenv("ALPACA_API_KEY", "test-key")
     monkeypatch.setenv("ALPACA_SECRET_KEY", "test-secret")
 
     sqlite_path = tmp_path / "empty.sqlite"
-    supervisor = paper_runtime_entrypoint.run_paper_runtime(
+    supervisor, hub = broker_runtime_entrypoint.run_broker_runtime(
         sqlite_path=sqlite_path,
         block_until_signal=False,
     )
     try:
         assert supervisor.is_running is True
         assert supervisor.active_deployment_ids == ()
-        assert supervisor.subscribed_symbols == ()
+        assert hub.subscribed_symbols == ()
     finally:
         supervisor.stop()
-        assert supervisor.is_running is False
+        hub.stop()
 
 
-def test_run_paper_runtime_loads_explicit_deployments(tmp_path: Path, monkeypatch) -> None:
-    """Caller-supplied deployments seed BrokerRuntimeOrchestrator and bring the supervisor up."""
+def test_run_broker_runtime_loads_explicit_deployments(tmp_path: Path, monkeypatch) -> None:
     from datetime import datetime, timezone
     from uuid import UUID, uuid4
 
@@ -211,7 +200,7 @@ def test_run_paper_runtime_loads_explicit_deployments(tmp_path: Path, monkeypatc
         account_id=account_id,
     )
 
-    supervisor = paper_runtime_entrypoint.run_paper_runtime(
+    supervisor, hub = broker_runtime_entrypoint.run_broker_runtime(
         sqlite_path=sqlite_path,
         deployments=(deployment,),
         block_until_signal=False,
@@ -219,6 +208,7 @@ def test_run_paper_runtime_loads_explicit_deployments(tmp_path: Path, monkeypatc
     try:
         assert supervisor.is_running is True
         assert deployment_id in supervisor.active_deployment_ids
-        assert supervisor.subscribed_symbols == ("SPY",)
+        assert hub.subscribed_symbols == ("SPY",)
     finally:
         supervisor.stop()
+        hub.stop()

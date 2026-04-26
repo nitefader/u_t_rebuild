@@ -1,30 +1,32 @@
-"""PaperRuntimeSupervisor — process-level lifecycle owner for paper deployments.
+"""BrokerRuntimeSupervisor — process-level lifecycle for broker-runtime deployments.
 
-Bridges the three independent surfaces that the runtime composition root
-already builds — ``BrokerRuntimeOrchestrator`` (per-deployment processing),
-``BrokerStreamRunner`` (account/orders/fills push), ``MarketDataStreamRunner``
-(bars push) — into one start/stop story so a CLI entrypoint or HTTP route
-can ask for "run these deployments" and get exactly that.
+The supervisor owns the broker-side concerns that are unique to a running
+deployment (the broker trade-update stream, the per-deployment lifecycle)
+and **consumes** the generic ``MarketDataStreamHub`` for bars rather than
+owning it. The hub is shared across consumers (this supervisor, Sim Lab
+Live Simulation, Chart Lab Live Preview, etc.) so the system subscribes
+to each market-data symbol exactly once.
 
-Scope, intentionally narrow:
+Scope:
 
-- Single broker account per supervisor instance (one set of credentials,
-  one ``AlpacaBrokerAdapter``, one ``BrokerStreamRunner``).
-- One ``MarketDataStreamRunner`` shared by every active deployment; the
-  supervisor builds a ``symbol → {deployment_ids}`` index and dispatches
-  each incoming bar to all deployments that subscribe to that symbol.
-- All deployments under this supervisor share the same broker freshness;
-  there is no cross-account fan-out here. Multiple paper accounts means
-  multiple supervisors.
+- Today, the broker adapter wired in is ``AlpacaBrokerAdapter`` which
+  only supports ``BROKER_PAPER``. The supervisor does not enforce paper
+  vs. live; it accepts whatever ``BrokerRuntimeOrchestrator`` was built
+  with. Live becomes a swap of the adapter once the promotion gate is
+  wired in.
+- One broker account per supervisor instance (one ``BrokerStreamRunner``,
+  one set of credentials). Multiple accounts → multiple supervisors.
+- Each deployment's universe symbols are registered with the hub under
+  one consumer id per supervisor; bars route into
+  ``BrokerRuntimeOrchestrator.process_completed_bar``.
 
 What it does NOT own:
 
-- Loading deployments from persistence — caller passes
-  ``BrokerRuntimeDeployment`` instances (or the underlying
+- Loading deployments from persistence (caller passes them in or the
   ``BrokerRuntimeOrchestrator`` already loaded them).
-- Promotion gating, order routing, governor enforcement — those still
-  live in their existing services and are exercised by the per-bar
-  pipeline call inside ``BrokerRuntimeOrchestrator.process_completed_bar``.
+- Promotion gating, order routing, governor enforcement (those run
+  inside ``process_completed_bar``).
+- The market-data stream lifecycle (the hub owns that).
 """
 
 from __future__ import annotations
@@ -32,44 +34,47 @@ from __future__ import annotations
 from collections import defaultdict
 from collections.abc import Iterable
 from threading import Lock
-from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from backend.app.brokers import BrokerStreamRunner
 from backend.app.features import NormalizedBar
-from backend.app.market_data import AlpacaMarketDataAdapter, MarketDataStreamRunner
+from backend.app.market_data import MarketDataStreamHub
 
 from .broker_runtime_orchestrator import BrokerRuntimeDeployment, BrokerRuntimeOrchestrator
 
 
-class PaperRuntimeSupervisorError(RuntimeError):
+class BrokerRuntimeSupervisorError(RuntimeError):
     """Raised when the supervisor cannot start, stop, or dispatch safely."""
 
 
-class PaperRuntimeSupervisor:
-    """Owns the start/stop lifecycle for a set of paper deployments."""
+class BrokerRuntimeSupervisor:
+    """Owns broker-stream + deployment lifecycle for one broker account."""
 
     def __init__(
         self,
         *,
         broker_runtime: BrokerRuntimeOrchestrator,
-        market_data_adapter: AlpacaMarketDataAdapter,
+        market_data_hub: MarketDataStreamHub,
         broker_stream_runner: BrokerStreamRunner | None = None,
-        market_data_stream_factory: Any | None = None,
+        consumer_id: str | None = None,
     ) -> None:
         self._broker_runtime = broker_runtime
-        self._market_data_adapter = market_data_adapter
+        self._market_data_hub = market_data_hub
         self._broker_runner = broker_stream_runner
-        self._market_data_stream_factory = market_data_stream_factory
-        self._market_data_runner: MarketDataStreamRunner | None = None
+        self._consumer_id = consumer_id or f"broker-runtime-supervisor:{uuid4().hex[:8]}"
         self._deployments: dict[UUID, BrokerRuntimeDeployment] = {}
         self._symbol_index: dict[str, set[UUID]] = defaultdict(set)
         self._running = False
         self._lock = Lock()
+        self.blocked_at_start: dict[UUID, str] = {}
 
     @property
     def is_running(self) -> bool:
         return self._running
+
+    @property
+    def consumer_id(self) -> str:
+        return self._consumer_id
 
     @property
     def active_deployment_ids(self) -> tuple[UUID, ...]:
@@ -80,17 +85,21 @@ class PaperRuntimeSupervisor:
         return tuple(sorted(self._symbol_index))
 
     def start(self, deployments: Iterable[BrokerRuntimeDeployment]) -> None:
-        """Start the broker + market-data streams and bring deployments online.
+        """Bring deployments online and register with the hub.
 
         Each deployment is preflight-checked through
-        ``BrokerRuntimeOrchestrator.start_deployment_runtime``. A deployment
-        that is blocked at preflight is logged in
-        ``self.blocked_at_start`` rather than raising, so other deployments
-        in the same supervisor can still come up.
+        ``BrokerRuntimeOrchestrator.start_deployment_runtime``. Deployments
+        that fail preflight land in ``self.blocked_at_start`` rather than
+        raising, so other deployments in the same supervisor still come up.
+
+        The hub is **not** started here — that's the caller's job. The
+        same hub may be shared with other consumers (sim-lab live, chart-lab
+        live preview), and the lifecycle owner of the hub is whoever
+        composed it.
         """
         with self._lock:
             if self._running:
-                raise PaperRuntimeSupervisorError("supervisor is already running")
+                raise BrokerRuntimeSupervisorError("supervisor is already running")
 
             blocked: dict[UUID, str] = {}
             for entry in deployments:
@@ -102,32 +111,35 @@ class PaperRuntimeSupervisor:
                 if not status.running:
                     blocked[deployment_id] = status.last_error or status.state.value
 
-            self.blocked_at_start: dict[UUID, str] = blocked
+            self.blocked_at_start = blocked
 
             if self._broker_runner is not None:
                 self._broker_runner.start()
 
             if self._symbol_index:
-                stream = self._market_data_adapter.subscribe_bars(
+                self._market_data_hub.register(
+                    self._consumer_id,
                     sorted(self._symbol_index),
-                    emit=self._dispatch_bar,
+                    self._dispatch_bar,
                 )
-                runner_factory = self._market_data_stream_factory or MarketDataStreamRunner
-                self._market_data_runner = runner_factory(stream)
-                self._market_data_runner.start()
 
             self._running = True
 
     def stop(self, *, timeout: float = 5.0) -> None:
-        """Stop streams and bring deployments down. Idempotent."""
+        """Stop the broker stream and bring deployments down. Idempotent.
+
+        Does **not** stop the hub — the hub may be shared. The hub's
+        lifecycle is the caller's responsibility.
+        """
         with self._lock:
             if not self._running:
                 return
             for deployment_id in list(self._deployments):
                 self._broker_runtime.stop_deployment_runtime(deployment_id)
-            if self._market_data_runner is not None:
-                self._market_data_runner.stop(timeout=timeout)
-                self._market_data_runner = None
+            try:
+                self._market_data_hub.unregister(self._consumer_id)
+            except Exception:  # noqa: BLE001 - hub may already be torn down
+                pass
             if self._broker_runner is not None:
                 self._broker_runner.stop(timeout=timeout)
             self._symbol_index.clear()
@@ -135,7 +147,7 @@ class PaperRuntimeSupervisor:
             self._running = False
 
     def dispatch_bar(self, bar: NormalizedBar) -> None:
-        """Public hook used by tests to feed a single bar without a real stream."""
+        """Public dispatch hook used by tests to bypass the hub."""
         self._dispatch_bar(bar)
 
     def _dispatch_bar(self, bar: NormalizedBar) -> None:
