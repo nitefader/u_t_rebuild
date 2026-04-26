@@ -176,6 +176,12 @@ export function mountSettings(root, api) {
       const feed = (state.status.alpaca_data_feed || "iex").toUpperCase();
       live.textContent = `Live: ${state.status.alpaca_test_stream ? "FAKEPACA test stream" : `${feed} feed`} · endpoint ${state.status.alpaca_endpoint}`;
       panel.appendChild(live);
+
+      const note = document.createElement("p");
+      note.className = "settings-help";
+      note.style.marginTop = "6px";
+      note.textContent = "Precedence: .env always wins; the values above only take effect for knobs not set in .env. To override .env, comment the line out and restart uvicorn.";
+      panel.appendChild(note);
     }
 
     return panel;

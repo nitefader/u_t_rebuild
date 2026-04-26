@@ -73,16 +73,19 @@ def get_store() -> SystemSettingsStore:
 
 
 def setting(key: str, *, fallback_env: str | None = None, default: Any = None) -> Any:
-    """Resolve a runtime setting: store → env var → default.
+    """Resolve a runtime setting: env var → store → default.
 
-    The store always wins so the UI is the single source of truth for
-    operator-editable knobs.
+    Env wins so ``.env`` edits always take effect after a uvicorn restart.
+    The store is consulted only when the env var is unset/empty — it acts
+    as the operator-overridable default for knobs nobody pinned in
+    ``.env``. This avoids the trap where a single Settings-page Save
+    silently locks subsequent ``.env`` edits out of effect.
     """
-    value = _default_store.load().get(key)
-    if value is not None and value != "":
-        return value
     if fallback_env is not None:
         env_value = os.getenv(fallback_env)
         if env_value not in (None, ""):
             return env_value
+    value = _default_store.load().get(key)
+    if value is not None and value != "":
+        return value
     return default

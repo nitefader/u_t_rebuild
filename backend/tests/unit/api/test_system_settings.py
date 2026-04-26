@@ -66,17 +66,21 @@ def test_put_route_rejects_unsupported_data_feed(tmp_path) -> None:
     assert "moonbeam" in str(excinfo.value)
 
 
-def test_setting_helper_returns_store_value_then_env_then_default(monkeypatch, tmp_path) -> None:
+def test_setting_helper_resolves_env_then_store_then_default(monkeypatch, tmp_path) -> None:
+    """env wins over store; store fills in when env is unset; default is last resort."""
     import backend.app.api.system_settings_store as module
 
     fresh_store = SystemSettingsStore(tmp_path / "settings.json")
     monkeypatch.setattr(module, "_default_store", fresh_store)
 
+    # Default: env unset, store empty.
     monkeypatch.delenv("ALPACA_DATA_FEED", raising=False)
     assert setting("alpaca_data_feed", fallback_env="ALPACA_DATA_FEED", default="iex") == "iex"
 
-    monkeypatch.setenv("ALPACA_DATA_FEED", "delayed_sip")
-    assert setting("alpaca_data_feed", fallback_env="ALPACA_DATA_FEED", default="iex") == "delayed_sip"
-
+    # Store-only: still no env.
     fresh_store.update(alpaca_data_feed="sip")
     assert setting("alpaca_data_feed", fallback_env="ALPACA_DATA_FEED", default="iex") == "sip"
+
+    # Env wins over store — operator's .env edit always takes effect.
+    monkeypatch.setenv("ALPACA_DATA_FEED", "delayed_sip")
+    assert setting("alpaca_data_feed", fallback_env="ALPACA_DATA_FEED", default="iex") == "delayed_sip"
