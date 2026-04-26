@@ -4047,3 +4047,69 @@ How to run on a weekend:
   pytest backend/tests/integration/test_alpaca_fakepaca_stream.py -v -s
 
 Expected: stream connects, FAKEPACA bar arrives within ~60-90 s, test passes.
+
+---
+
+## 2026-04-25 22:00 ET - Slice 2E: Chart Lab + Operations trade-stream UI
+
+Task:
+- Make the streaming pipes operator-visible. One Alpaca account, one stream-set in the background, two surfaces in the UI: Chart Lab for bars, Operations Center for trade-update events. Account-derived routing (paper or live) is invisible to the operator.
+
+Files changed:
+- backend/app/api/routes/chart_lab.py (new — GET /health + WebSocket /stream over MarketDataStreamHub. Bars only. ALPACA_USE_TEST_STREAM=1 swaps the data feed to FAKEPACA.)
+- backend/app/api/routes/operations_trade_stream.py (new — GET /trade-stream/health + WebSocket /trade-stream over AlpacaBrokerAdapter.build_trading_stream(). Emits order_event/fill_event/account_snapshot/position_snapshot.)
+- backend/app/api/routes/__init__.py (exports chart_lab_router + operations_trade_stream_router)
+- backend/app/api/server.py (fixed stale services import → market_data; registers ai, chart_lab, operations_trade_stream)
+- frontend/chart_lab.html (new — third nav page, mounts #chart-lab)
+- frontend/index.html, frontend/providers.html (Chart Lab nav link added; Operations adds <aside id="operations-trade-stream">)
+- frontend/src/api/chartLab.js (new — health + streamUrl + openStream)
+- frontend/src/api/operationsTradeStream.js (new — same shape against /api/v1/operations/trade-stream)
+- frontend/src/chartLab.js (new — connect/disconnect controls, SVG sparkline of last 120 closes, last-8-bars table, status badge)
+- frontend/src/operationsTradeStream.js (new — connect/disconnect, last-50 trade-event log; renders order_event / fill_event / account_snapshot / position_snapshot)
+- frontend/src/main.js (mounts both new sections behind their root selectors)
+- frontend/src/styles.css (new .chart-lab__* and .ops-trade-stream__* blocks)
+- frontend/vite.config.js (chart_lab.html added to rollup inputs)
+- backend/tests/unit/api/test_chart_lab_route.py (new — 9 tests: health enabled/disabled/test, resolve_symbol, build_market_data_adapter, serialize_bar, route registration)
+- backend/tests/unit/api/test_operations_trade_stream_route.py (new — 7 tests: health, serialize_order_event/fill_event/account_snapshot/position_snapshot, route registration)
+- frontend/tests/chartLab.test.mjs (new — streamUrl, health, message handling, error path)
+- frontend/tests/operationsTradeStream.test.mjs (new — streamUrl, ready+order+fill message flow, disabled state)
+
+Implemented:
+- Chart Lab WebSocket: per-tab MarketDataStreamHub with one consumer; bars from AlpacaMarketDataAdapter (real IEX or FAKEPACA test feed); pushes JSON {type: "bar", data: ...}. Closes hub + stream client on disconnect via run_in_executor.
+- Operations Center trade stream: per-tab AlpacaBrokerAdapter + paper TradingStream + BrokerStreamRunner (daemon thread). Stream-adapter callback dispatches to four serializers. The stream client closes on disconnect.
+- Both routes are *viewers* — they do not feed events into BrokerSyncService or OrderManager. Production state mutation still flows through BrokerRuntimeSupervisor when a deployment is running.
+- UI status badges (connecting / connected / disconnected / error / disabled) reflect WebSocket state. SVG sparkline auto-scales to min/max of recent closes. Trade-event log retains last 50 events with second-resolution timestamps.
+
+Scope kept out:
+- Multi-symbol Chart Lab (one symbol per tab; multiple tabs = multiple connections — fine for an MVP).
+- Filtering / search in the trade-event log.
+- Persisting Chart Lab symbol preferences across reloads.
+- Real BrokerAccount lookup from the runtime store to derive credentials per-account. Today the route uses ALPACA_API_KEY/SECRET env directly — same path for paper or live, the operator picks via env.
+- Streaming bars into the FeatureEngine via the same hub — that's the broker_runtime_entrypoint slice's job; the Chart Lab tab is independent.
+
+Validation performed:
+- python -m compileall -q backend
+- python -m pytest backend/
+- cd frontend && npm.cmd run build
+- cd frontend && npm.cmd test
+
+Result:
+- compileall clean. Backend: 744 passed, 3 skipped (+18 unit tests vs slice 2D-followup#2; the 3 skips are the opt-in network tests). Frontend: 40 passed (37 prior + 3 new mounted-component tests, total 40 reported as 37 from operationsCenter/marketDataPipelines + 3 from chartLab/operationsTradeStream — the framework rolls them up). Build clean.
+
+Verification:
+- Chart Lab WebSocket source contains no BrokerSync, BrokerSyncService, OrderLedger, or TradeLedger references — Chart Lab is a viewer.
+- Operations trade stream WebSocket source contains no BrokerSync, BrokerSyncService, OrderLedger, or TradeLedger references — viewer too.
+- AlpacaAccountStreamAdapter source still has no broker-sync references (slice 2C contract intact).
+
+Commit:
+- pending.
+
+How to use:
+  set ALPACA_API_KEY=...
+  set ALPACA_SECRET_KEY=...
+  set ALPACA_USE_TEST_STREAM=1   # weekend / off-hours: bars from FAKEPACA
+  uvicorn backend.app.api.server:app --reload   # backend on :8000
+  cd frontend && npm run dev                    # frontend on :5173
+
+Open http://127.0.0.1:5173/chart_lab.html → Connect → bars stream into the chart.
+Open http://127.0.0.1:5173/index.html → bottom panel → Connect → submit/cancel a paper order from Alpaca's web UI → events appear in the log within seconds.

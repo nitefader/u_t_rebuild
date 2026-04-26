@@ -6,7 +6,8 @@ export default defineConfig({
     rollupOptions: {
       input: {
         main: resolve(__dirname, "index.html"),
-        providers: resolve(__dirname, "providers.html")
+        providers: resolve(__dirname, "providers.html"),
+        chart_lab: resolve(__dirname, "chart_lab.html")
       }
     }
   },

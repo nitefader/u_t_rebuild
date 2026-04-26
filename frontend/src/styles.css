@@ -677,3 +677,191 @@ pre {
     flex-direction: column;
   }
 }
+
+.chart-lab__shell {
+  max-width: 960px;
+  margin: 24px auto;
+  padding: 0 16px 32px;
+}
+
+.chart-lab__header h1 {
+  margin: 0 0 4px;
+}
+
+.chart-lab__subtitle {
+  margin: 0 0 16px;
+  color: #4a5b66;
+}
+
+.chart-lab__controls {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+}
+
+.chart-lab__symbol-input {
+  min-height: 36px;
+  padding: 0 10px;
+  border: 1px solid #9aa8b0;
+  border-radius: 6px;
+  font: inherit;
+  background: #ffffff;
+  color: #182026;
+  min-width: 180px;
+}
+
+.chart-lab__status {
+  margin: 0 0 12px;
+  font-size: 13px;
+  padding: 6px 10px;
+  border-radius: 4px;
+  background: #eef2f4;
+  color: #2c3a44;
+}
+
+.chart-lab__status--connected { background: #e0f0e6; color: #1f5a35; }
+.chart-lab__status--connecting { background: #fff7e0; color: #6a4f00; }
+.chart-lab__status--error { background: #fbe1e1; color: #7a1f1f; }
+.chart-lab__status--disconnected,
+.chart-lab__status--disabled { background: #eef2f4; color: #4a5b66; }
+
+.chart-lab__svg {
+  display: block;
+  width: 100%;
+  height: 240px;
+  background: #ffffff;
+  border: 1px solid #d6dee2;
+  border-radius: 6px;
+  margin-bottom: 12px;
+}
+
+.chart-lab__placeholder {
+  fill: #9aa8b0;
+  font-size: 14px;
+}
+
+.chart-lab__table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  background: #ffffff;
+  border: 1px solid #d6dee2;
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.chart-lab__table th,
+.chart-lab__table td {
+  padding: 6px 10px;
+  text-align: right;
+  border-bottom: 1px solid #e3e8eb;
+}
+
+.chart-lab__table th:first-child,
+.chart-lab__table td:first-child {
+  text-align: left;
+}
+
+.chart-lab__table thead {
+  background: #f0f3f5;
+}
+
+.chart-lab__help {
+  margin: 12px 0 0;
+  color: #6a4f00;
+  background: #fff7e0;
+  padding: 10px 12px;
+  border-radius: 6px;
+  font-size: 13px;
+}
+
+.operations-trade-stream-shell {
+  max-width: 960px;
+  margin: 24px auto;
+  padding: 0 16px 32px;
+}
+
+.ops-trade-stream {
+  background: #ffffff;
+  border: 1px solid #d6dee2;
+  border-radius: 6px;
+  padding: 16px;
+}
+
+.ops-trade-stream__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+
+.ops-trade-stream__header h2 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.ops-trade-stream__controls {
+  display: flex;
+  gap: 8px;
+}
+
+.ops-trade-stream__status {
+  margin: 0 0 12px;
+  font-size: 13px;
+  padding: 6px 10px;
+  border-radius: 4px;
+  background: #eef2f4;
+  color: #2c3a44;
+}
+
+.ops-trade-stream__status--connected { background: #e0f0e6; color: #1f5a35; }
+.ops-trade-stream__status--connecting { background: #fff7e0; color: #6a4f00; }
+.ops-trade-stream__status--error { background: #fbe1e1; color: #7a1f1f; }
+.ops-trade-stream__status--disconnected,
+.ops-trade-stream__status--disabled { background: #eef2f4; color: #4a5b66; }
+
+.ops-trade-stream__placeholder,
+.ops-trade-stream__help {
+  margin: 12px 0 0;
+  color: #4a5b66;
+  font-size: 13px;
+}
+
+.ops-trade-stream__help {
+  background: #fff7e0;
+  color: #6a4f00;
+  padding: 10px 12px;
+  border-radius: 6px;
+}
+
+.ops-trade-stream__events {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  max-height: 280px;
+  overflow-y: auto;
+}
+
+.ops-trade-stream__events li {
+  display: flex;
+  gap: 12px;
+  align-items: baseline;
+  font-size: 13px;
+  padding: 6px 4px;
+  border-bottom: 1px solid #e3e8eb;
+}
+
+.ops-trade-stream__event-meta {
+  color: #6a7783;
+  min-width: 90px;
+  font-variant-numeric: tabular-nums;
+}
+
+.ops-trade-stream__event--order_event { color: #1f3f6a; }
+.ops-trade-stream__event--fill_event { color: #1f5a35; font-weight: 600; }
+.ops-trade-stream__event--account_snapshot,
+.ops-trade-stream__event--position_snapshot { color: #4a5b66; }
