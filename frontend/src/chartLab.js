@@ -83,14 +83,60 @@ export function mountChartLab(root, api) {
     svg.setAttribute("role", "img");
     svg.setAttribute("aria-label", `Live price chart for ${state.symbol || "selected symbol"}`);
 
-    if (state.bars.length < 2) {
+    if (state.bars.length === 0) {
       const text = document.createElementNS(SVG_NS, "text");
       text.setAttribute("x", "300");
       text.setAttribute("y", "120");
       text.setAttribute("text-anchor", "middle");
       text.setAttribute("class", "chart-lab__placeholder");
-      text.textContent = state.bars.length === 1 ? "Waiting for next bar…" : "Waiting for first bar…";
+      text.textContent = "Waiting for first bar…";
       svg.appendChild(text);
+      return svg;
+    }
+
+    if (state.bars.length === 1) {
+      // Single bar: draw an OHLC candle stub at the center so the chart
+      // isn't empty while we wait for the second bar.
+      const bar = state.bars[0];
+      const padding = 24;
+      const span = Math.max(bar.high - bar.low, 0.0001);
+      const hi = padding;
+      const lo = 240 - padding;
+      const yFor = (price) => lo - ((price - bar.low) / span) * (lo - hi);
+      const cx = 300;
+      const wickTop = yFor(bar.high);
+      const wickBottom = yFor(bar.low);
+      const openY = yFor(bar.open);
+      const closeY = yFor(bar.close);
+      const isUp = bar.close >= bar.open;
+      const color = isUp ? "#1f5a35" : "#8c1d1d";
+
+      const wick = document.createElementNS(SVG_NS, "line");
+      wick.setAttribute("x1", String(cx));
+      wick.setAttribute("x2", String(cx));
+      wick.setAttribute("y1", wickTop.toFixed(2));
+      wick.setAttribute("y2", wickBottom.toFixed(2));
+      wick.setAttribute("stroke", color);
+      wick.setAttribute("stroke-width", "1.2");
+      svg.appendChild(wick);
+
+      const body = document.createElementNS(SVG_NS, "rect");
+      const bodyTop = Math.min(openY, closeY);
+      const bodyHeight = Math.max(Math.abs(closeY - openY), 1.5);
+      body.setAttribute("x", String(cx - 10));
+      body.setAttribute("y", bodyTop.toFixed(2));
+      body.setAttribute("width", "20");
+      body.setAttribute("height", bodyHeight.toFixed(2));
+      body.setAttribute("fill", color);
+      svg.appendChild(body);
+
+      const note = document.createElementNS(SVG_NS, "text");
+      note.setAttribute("x", "300");
+      note.setAttribute("y", "230");
+      note.setAttribute("text-anchor", "middle");
+      note.setAttribute("class", "chart-lab__placeholder");
+      note.textContent = "Waiting for next bar — line draws once we have 2 minutes of data";
+      svg.appendChild(note);
       return svg;
     }
 
