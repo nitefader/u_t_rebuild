@@ -1600,3 +1600,9 @@ pre {
   background: #f5e8c1;
   color: #8a6d1c;
 }
+
+/* Broker Accounts — explicit light chrome. Dark Providers styling is scoped to body.providers-page only. */
+body.brokers-page {
+  color: #182026;
+  background: #f5f7f8;
+}

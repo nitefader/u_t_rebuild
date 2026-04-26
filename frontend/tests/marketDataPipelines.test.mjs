@@ -16,13 +16,15 @@ const aiId = "cccccccc-cccc-cccc-cccc-cccccccccccc";
 
 function state(overrides = {}) {
   return {
-    activeTab: "pipelines",
+    activeTab: "market-data",
     pipelines: {
       pipelines: [
         {
           id: pipelineId,
           display_name: "Alpaca Premium",
           provider: "alpaca",
+          service_id: marketServiceId,
+          data_feed: "iex",
           trading_mode: "BROKER_PAPER",
           status: "active",
           is_default_for_provider: true,
@@ -113,25 +115,32 @@ test("Resolver Result Panel is exported by providers.js, not the deleted service
 // Providers page rendering
 // ---------------------------------------------------------------------------
 
-test("Providers page renders three tabs and summary cards", () => {
+test("Providers page renders integrated Market Data Providers + AI Providers tabs and stats", () => {
   const html = renderProviders(state());
   assert.match(html, /<h1>Providers<\/h1>/);
-  assert.match(html, /Market Data Pipelines/);
-  assert.match(html, /Market Data Services/);
+  assert.match(html, /Market Data Providers/);
   assert.match(html, /AI Providers/);
-  assert.match(html, /Pipelines/);
-  assert.match(html, /Service Health/);
+  assert.match(html, /market data providers/);
+  assert.match(html, /streams/);
 });
 
-test("Pipelines tab renders pipeline rows with provider, trading_mode, default flag, and pipeline_id", () => {
+test("Integrated Market Data catalog shows bound stream and provider row", () => {
   const html = renderProviders(state());
-  assert.match(html, /Alpaca Premium/);
+  assert.match(html, /Market Data Providers/);
+  assert.match(html, /Alpaca Main/);
   assert.match(html, /BROKER_PAPER/);
-  assert.match(html, /Default for provider/);
+  assert.match(html, /iex/);
+});
+
+test("Detached pipeline cards still expose pipeline id for unbound streams", () => {
+  const fixture = state();
+  fixture.pipelines.pipelines[0].service_id = null;
+  const html = renderProviders(fixture);
+  assert.match(html, /Detached streams/);
   assert.match(html, new RegExp(pipelineId));
 });
 
-test("Pipelines tab activate-stream form does not let operator pick a banned standalone mode", () => {
+test("Activate stream form does not let operator pick a banned standalone mode", () => {
   const html = renderProviders(state({ pipelineFormState: { visible: true, provider: "alpaca" } }));
   assert.match(html, /Activate Market Data Stream/);
   assert.match(html, /option value="BROKER_PAPER"/);
@@ -141,35 +150,34 @@ test("Pipelines tab activate-stream form does not let operator pick a banned sta
   assert.doesNotMatch(html, /option value="live"/);
 });
 
-test("Pipelines tab activate-stream form lists registered Alpaca services in the Service dropdown", () => {
+test("Activate stream form lists registered Alpaca services in the Service dropdown", () => {
   const html = renderProviders(state({ pipelineFormState: { visible: true } }));
   // The fixture state() seeds an "Alpaca Main" service.
   assert.match(html, /name="service_id"/);
   assert.match(html, /Alpaca Main/);
 });
 
-test("Pipeline row surfaces service_id and data_feed", () => {
+test("Stream column reflects pipeline data_feed when pipeline binds to service", () => {
   const fixture = state();
-  // Add service_id + data_feed to the fixture pipeline.
-  fixture.pipelines.pipelines[0].service_id = "11111111-1111-1111-1111-111111111111";
+  fixture.pipelines.pipelines[0].service_id = marketServiceId;
   fixture.pipelines.pipelines[0].data_feed = "sip";
   const html = renderProviders(fixture);
-  assert.match(html, /11111111-1111-1111-1111-111111111111/);
-  assert.match(html, /<dt>Data Feed<\/dt><dd>sip<\/dd>/);
+  assert.match(html, /sip/);
+  assert.match(html, /BROKER_PAPER/);
 });
 
-test("Market Data tab still renders without a Mode field", () => {
+test("Market Data surface still renders catalog without a spurious Mode label on service rows", () => {
   const html = renderProviders(state({ activeTab: "market-data" }));
-  assert.match(html, /Market Data Services/);
+  assert.match(html, /Market Data Providers/);
   assert.match(html, /Alpaca Main/);
   assert.doesNotMatch(html, /<dt>Mode<\/dt>/);
 });
 
-test("AI Providers tab renders provider records and advisory copy", () => {
+test("AI Providers tab renders provider records, advisory badge, and copy", () => {
   const html = renderProviders(state({ activeTab: "ai" }));
   assert.match(html, /AI Providers/);
   assert.match(html, /Groq Fast/);
-  assert.match(html, /advisory only/i);
+  assert.match(html, /Advisory only/);
 });
 
 // ---------------------------------------------------------------------------

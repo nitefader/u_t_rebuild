@@ -1,15 +1,9 @@
 /**
- * Providers page — replaces the deprecated Services Center per plan_review §J
- * ("Mounted under Providers → Market Data Pipelines, not as a separate Services
- * Center page").
+ * Providers — unified Market Data + Resolver + AI (single integrated surface).
+ * Services, purpose tags, and pipelines are one workflow; resolver preview sits above the catalog.
  *
- * Hosts three tabs:
- *   - Market Data Pipelines (default; carries the Resolver Result Panel)
- *   - Market Data Services (provider credentials catalog)
- *   - AI Providers
- *
- * The Resolver Result Panel reads only from `resolution.per_symbol_rows` —
- * top-level mirrors are forbidden (see resolver determinism contract).
+ * Visual IA and tokens follow `docs/architecture/UI_VISUAL_DIRECTION.md` (tabs, badges,
+ * dense tables, restrained accents, 6–8px radii, subtle borders).
  */
 
 import { createPipelinesApi } from "./api/pipelines.js";
@@ -132,7 +126,7 @@ function capabilityChips(capabilities = {}) {
 }
 
 // ---------------------------------------------------------------------------
-// Tab: Market Data Pipelines (the canonical Phase 1 surface)
+// Pipeline row (detached streams + cards)
 // ---------------------------------------------------------------------------
 
 function renderPipelineRow(pipeline) {
@@ -197,23 +191,8 @@ function renderPipelineForm(formState = {}, services = []) {
   </form>`;
 }
 
-function renderPipelinesTab(state) {
-  const pipelines = state.pipelines?.pipelines || [];
-  const formVisible = Boolean(state.pipelineFormState?.visible);
-  return `<section class="service-workspace">
-    <div class="service-toolbar">
-      <h2>Market Data Pipelines</h2>
-      <button type="button" data-action="show-pipeline-form">+ Add Pipeline</button>
-    </div>
-    ${formVisible ? renderPipelineForm(state.pipelineFormState, state.marketData?.services || []) : ""}
-    <div class="service-table">${pipelines.length ? pipelines.map(renderPipelineRow).join("") : `<p class="empty">No pipelines configured. Add a pipeline so resolver results carry a real pipeline_id.</p>`}</div>
-  </section>
-  ${DataIntentPanel(state)}
-  ${ResolverResultPanel(state.resolution || {}, state.activeResolverStrategy || "auto", pipelines)}`;
-}
-
 // ---------------------------------------------------------------------------
-// Tab: Market Data Services (credentials catalog)
+// Market data catalog + resolver (integrated)
 // ---------------------------------------------------------------------------
 
 function serviceStatusClass(status) {
@@ -221,30 +200,6 @@ function serviceStatusClass(status) {
   if (status === "invalid") return "status-blocked";
   if (status === "valid") return "status-running";
   return "";
-}
-
-function renderServiceFlags(service) {
-  const status = service.status || "unknown";
-  const credentialed = service.has_api_key || service.has_api_secret ? "keyed" : "no credentials";
-  return `<div class="service-flags">
-    <span class="service-flag flag-market">${escapeHtml(service.provider || "unknown")}</span>
-    <span class="service-flag flag-${status}">${escapeHtml(status)}</span>
-    <span class="service-flag flag-credentials">${escapeHtml(credentialed)}</span>
-  </div>`;
-}
-
-function renderServicePurposeChips(service) {
-  const tags = Array.isArray(service.default_for) ? service.default_for : [];
-  if (!tags.length) {
-    return `<p class="helper">Not tagged for any purpose. Click "Configure purposes" to mark this service as default for live, test, or batch context.</p>`;
-  }
-  return `<div class="chip-row" aria-label="Default for purposes">${tags
-    .map((tag) => {
-      const meta = SERVICE_PURPOSE_TAGS.find(([value]) => value === tag);
-      const label = meta ? meta[1] : tag;
-      return `<span class="status">${escapeHtml(label)}</span>`;
-    })
-    .join("")}</div>`;
 }
 
 function renderPurposeForm(service) {
@@ -262,39 +217,6 @@ function renderPurposeForm(service) {
       <button type="submit">Save purposes</button>
     </div>
   </form>`;
-}
-
-function renderMarketDataRow(service, expandedPurposesFor = null) {
-  const status = service.status || "unknown";
-  const isExpanded = expandedPurposesFor === service.id;
-  return `<article class="summary-card service-card ${status === "disabled" ? "service-disabled" : ""}">
-    <header>
-      <div class="service-header">
-        <span class="service-icon service-icon-market">M</span>
-        <h3>${escapeHtml(service.name)}</h3>
-      </div>
-      <span class="status ${serviceStatusClass(status)}">${escapeHtml(status)}</span>
-    </header>
-    ${renderServiceFlags(service)}
-    <dl class="detail-grid">
-      <div><dt>Provider</dt><dd>${escapeHtml(service.provider || "unknown")}</dd></div>
-      <div><dt>Credentials</dt><dd>${service.has_api_key || service.has_api_secret ? MASKED : "not required"}</dd></div>
-      <div><dt>Validation</dt><dd>${escapeHtml(service.validation_status || "not validated")} - ${escapeHtml(service.validation_message || "pending verification")}</dd></div>
-      <div><dt>Last validated</dt><dd>${formatDate(service.last_validated_at)}</dd></div>
-    </dl>
-    <section class="service-purposes">
-      <h4>Default for</h4>
-      ${renderServicePurposeChips(service)}
-    </section>
-    ${isExpanded ? renderPurposeForm(service) : ""}
-    <div class="chip-row" aria-label="Capability summary">${capabilityChips(service.capabilities)}</div>
-    <div class="button-row">
-      <button type="button" data-action="validate-market-data" data-id="${escapeHtml(service.id)}">Validate</button>
-      <button type="button" data-action="${isExpanded ? "cancel-purposes-form" : "configure-purposes"}" data-id="${escapeHtml(service.id)}">${isExpanded ? "Cancel" : "Configure purposes"}</button>
-      <button type="button" data-action="activate-as-stream" data-id="${escapeHtml(service.id)}" title="Open the Pipeline form pre-filled with this service">Activate as Stream…</button>
-      <button type="button" data-action="disable-market-data" data-id="${escapeHtml(service.id)}">Disable</button>
-    </div>
-  </article>`;
 }
 
 function renderMarketDataForm(formState = {}) {
@@ -332,56 +254,9 @@ function renderMarketDataForm(formState = {}) {
   </form>`;
 }
 
-function renderMarketDataTab(state) {
-  const services = state.marketData?.services || [];
-  const formVisible = Boolean(state.marketDataFormState?.visible);
-  const expandedPurposesFor = state.expandedPurposesFor || null;
-  const emptyState = `<section class="empty-state-card">
-    <h3>No Market Data Services yet</h3>
-    <p class="helper">Register your provider credentials here. The runtime no longer reads .env for streaming credentials — Services are operator-driven and tagged with a purpose (live streaming, test streaming, batch historical, etc.) so the right credential is picked for each context.</p>
-    <div class="button-row">
-      <button type="button" data-action="show-market-data-form">+ Add your first Market Data Service</button>
-    </div>
-  </section>`;
-  return `<section class="service-workspace">
-    <div class="service-toolbar">
-      <h2>Market Data Services</h2>
-      <button type="button" data-action="show-market-data-form">+ Add Market Data Service</button>
-    </div>
-    ${formVisible ? renderMarketDataForm(state.marketDataFormState) : ""}
-    <div class="service-table">${services.length ? services.map((svc) => renderMarketDataRow(svc, expandedPurposesFor)).join("") : emptyState}</div>
-  </section>`;
-}
-
 // ---------------------------------------------------------------------------
 // Tab: AI Providers
 // ---------------------------------------------------------------------------
-
-function renderAiRow(service) {
-  const status = service.status || "unknown";
-  return `<article class="summary-card service-card ${service.is_default ? "service-default" : ""} ${status === "disabled" ? "service-disabled" : ""}">
-    <header>
-      <div class="service-header">
-        <span class="service-icon service-icon-ai">AI</span>
-        <h3>${escapeHtml(service.name)}</h3>
-      </div>
-      <span class="status ${serviceStatusClass(status)}">${escapeHtml(status)}</span>
-    </header>
-    <dl class="detail-grid">
-      <div><dt>Provider</dt><dd>${escapeHtml(service.provider || "unknown")}</dd></div>
-      <div><dt>Default</dt><dd>${service.is_default ? "yes" : "no"}</dd></div>
-      <div><dt>Capability</dt><dd>${escapeHtml(service.capability_label || "unknown")}</dd></div>
-      <div><dt>Credentials</dt><dd>${service.has_api_key ? MASKED : "not saved"}</dd></div>
-      <div><dt>Validation</dt><dd>${escapeHtml(service.validation_status || "not validated")} - ${escapeHtml(service.validation_message || "pending verification")}</dd></div>
-    </dl>
-    <p class="helper">AI providers are advisory only. They cannot approve trades, override the Governor, or submit orders.</p>
-    <div class="button-row">
-      <button type="button" data-action="validate-ai" data-id="${escapeHtml(service.id)}">Validate</button>
-      <button type="button" data-action="default-ai" data-id="${escapeHtml(service.id)}">Set Default</button>
-      <button type="button" data-action="disable-ai" data-id="${escapeHtml(service.id)}">Disable</button>
-    </div>
-  </article>`;
-}
 
 function renderAiForm(formState = {}) {
   const provider = (formState.provider || "groq").toLowerCase();
@@ -403,16 +278,7 @@ function renderAiForm(formState = {}) {
 }
 
 function renderAiTab(state) {
-  const providers = state.ai?.services || [];
-  const formVisible = Boolean(state.aiFormState?.visible);
-  return `<section class="service-workspace">
-    <div class="service-toolbar">
-      <h2>AI Providers</h2>
-      <button type="button" data-action="show-ai-form">+ Add AI Provider</button>
-    </div>
-    ${formVisible ? renderAiForm(state.aiFormState) : ""}
-    <div class="service-table">${providers.length ? providers.map(renderAiRow).join("") : `<p class="empty">No AI providers configured.</p>`}</div>
-  </section>`;
+  return renderIntegratedAi(state);
 }
 
 // ---------------------------------------------------------------------------
@@ -444,7 +310,7 @@ function renderPerSymbolTable(rows) {
       </tr>`;
     })
     .join("");
-  return `<table class="per-symbol-table">
+  return `<table class="per-symbol-table prov-per-symbol-table">
     <thead><tr><th>Symbol</th><th>Decision</th><th>Service</th><th>Provider</th><th>Pipeline</th><th>Reason</th><th>Why</th><th>Rejected</th></tr></thead>
     <tbody>${body}</tbody>
   </table>`;
@@ -473,7 +339,7 @@ export function ResolverResultPanel(result, selectedStrategy, pipelines = []) {
         </dl>
       </details>`
     : "";
-  return `<section class="panel data-intent-panel">
+  return `<section class="panel data-intent-panel prov-resolver-result">
     <h3>Resolver Result</h3>
     <div class="resolver-grid">
       <section class="resolver-block">
@@ -504,9 +370,9 @@ function DataIntentPanel(state) {
   const intent = normalizeIntent(state.resolutionPayload?.intent || DEFAULT_INTENT);
   const selected = state.activeResolverStrategy || "auto";
   const candidatePipelines = state.pipelines?.pipelines || [];
-  return `<section class="panel">
+  return `<section class="panel prov-data-intent">
     <header>
-      <h2>Data Source Decision</h2>
+      <h2>Resolver intent</h2>
       <div class="segmented-control" role="group" aria-label="Selection Strategy">
         ${Object.entries(RESOLVER_STRATEGIES)
           .map(([strategy, label]) => `<button type="button" data-action="set-resolver-strategy" data-strategy="${strategy}" class="${selected === strategy ? "active" : ""}" aria-pressed="${selected === strategy ? "true" : "false"}">${label}</button>`)
@@ -530,61 +396,262 @@ function DataIntentPanel(state) {
   </section>`;
 }
 
+function provCapabilityPills(capabilities = {}) {
+  const items = capabilityList(capabilities);
+  if (!items.length) return `<span class="prov-muted">—</span>`;
+  return items.map((item) => `<span class="prov-pill prov-pill--cap">${escapeHtml(item)}</span>`).join(" ");
+}
+
+function purposeTagsHtml(service) {
+  const tags = Array.isArray(service.default_for) ? service.default_for : [];
+  if (!tags.length) return `<span class="prov-pill prov-pill--muted">no role tags</span>`;
+  return tags
+    .map((t) => {
+      const meta = SERVICE_PURPOSE_TAGS.find(([v]) => v === t);
+      const label = meta ? meta[1] : t;
+      return `<span class="prov-pill prov-pill--role">${escapeHtml(label)}</span>`;
+    })
+    .join("");
+}
+
+function streamSummaryForService(service, pipelines) {
+  const list = (pipelines || []).filter((p) => p.service_id === service.id && p.status !== "disabled");
+  if (!list.length) return `<span class="prov-muted">No active stream</span>`;
+  return list
+    .map((p) => {
+      const bits = [p.data_feed || "iex"];
+      if (p.trading_mode) bits.push(p.trading_mode);
+      if (p.is_default_for_provider) bits.push("stream default");
+      return `<span class="prov-pill prov-pill--stream">${escapeHtml(bits.join(" · "))}</span>`;
+    })
+    .join(" ");
+}
+
+function healthBadgeForStatus(status) {
+  const s = String(status || "unknown").toLowerCase();
+  if (s === "valid") return `<span class="prov-health prov-health--ok">Healthy</span>`;
+  if (s === "invalid") return `<span class="prov-health prov-health--bad">Invalid</span>`;
+  if (s === "disabled") return `<span class="prov-health prov-health--off">Disabled</span>`;
+  if (s === "draft") return `<span class="prov-health prov-health--warn">Draft</span>`;
+  return `<span class="prov-health">${escapeHtml(status)}</span>`;
+}
+
+function renderCompactStats(state) {
+  const pipelines = state.pipelines?.pipelines || [];
+  const services = state.marketData?.services || [];
+  const ai = state.ai?.services || [];
+  const defect = [...services, ...ai].filter((svc) => svc.status === "invalid" || svc.status === "disabled" || svc.status === "draft").length;
+  return `<div class="prov-stats" role="status">
+    <span><strong>${services.length}</strong> market data providers</span>
+    <span aria-hidden="true">·</span>
+    <span><strong>${pipelines.length}</strong> streams</span>
+    <span aria-hidden="true">·</span>
+    <span><strong>${ai.length}</strong> AI providers</span>
+    <span aria-hidden="true">·</span>
+    <span class="${defect ? "prov-stats--warn" : ""}"><strong>${defect}</strong> need attention</span>
+  </div>`;
+}
+
+function renderResolverLeadIn(state) {
+  const resolution = state.resolution;
+  const rows = Array.isArray(resolution?.per_symbol_rows) ? resolution.per_symbol_rows : [];
+  const intent = normalizeIntent(resolution?.intent || state.resolutionPayload?.intent || DEFAULT_INTENT);
+  if (!resolution || !rows.length) {
+    return `<p class="prov-lead">Capability tags and streams drive Auto-pick. Set intent below, then <strong>Preview Resolution</strong>.</p>`;
+  }
+  const first = rows.find((r) => r.decision === "selected") || rows[0];
+  const rejected =
+    Array.isArray(first?.rejected_providers) && first.rejected_providers.length
+      ? `<p class="prov-last-decision__meta"><strong>Rejected candidates</strong> — ${first.rejected_providers
+          .map((c) => escapeHtml(c.service_name || c.service_id || "candidate"))
+          .join(", ")}</p>`
+      : "";
+  return `<div class="prov-last-decision">
+    <p class="prov-last-decision__line"><strong>Requested</strong> — ${escapeHtml(intent.symbols.join(", "))} · ${escapeHtml(intent.timeframe)} · ${escapeHtml(intent.purpose)}</p>
+    <p class="prov-last-decision__line"><strong>Selected</strong> — ${escapeHtml(first?.selected_service_name || "—")} <span class="prov-muted">(${escapeHtml(first?.selected_provider || "—")})</span></p>
+    <p class="prov-last-decision__line"><strong>Pipeline</strong> — <code>${escapeHtml(first?.pipeline_id || "—")}</code></p>
+    <p class="prov-last-decision__line"><strong>Reason</strong> — ${escapeHtml(first?.reason || resolution.decision || "—")}: ${escapeHtml(first?.explanation || "")}</p>
+    ${rejected}
+  </div>`;
+}
+
+function renderMarketDataServiceRows(state) {
+  const services = state.marketData?.services || [];
+  const pipelines = state.pipelines?.pipelines || [];
+  const expanded = state.expandedPurposesFor || null;
+  if (!services.length) {
+    return `<tr><td colspan="8" class="prov-table-empty">
+      <p>No market data providers yet. Register a vendor, assign role tags, then activate a stream.</p>
+      <button type="button" data-action="show-market-data-form">+ Add market data provider</button>
+    </td></tr>`;
+  }
+  return services
+    .map((service) => {
+      const isOpen = expanded === service.id;
+      const main = `<tr class="prov-md-row">
+        <td><strong>${escapeHtml(service.name)}</strong></td>
+        <td>${escapeHtml(service.provider || "—")}</td>
+        <td class="prov-cell-stream">${streamSummaryForService(service, pipelines)}</td>
+        <td><div class="prov-pill-stack">${provCapabilityPills(service.capabilities)}${purposeTagsHtml(service)}</div></td>
+        <td class="prov-center">${service.is_default ? `<span class="prov-yes">Yes</span>` : `<span class="prov-no">No</span>`}
+          ${service.is_default ? "" : `<button type="button" class="prov-inline-btn" data-action="set-default-market-data" data-id="${escapeHtml(service.id)}">Set default</button>`}</td>
+        <td><div class="prov-valid">${formatDate(service.last_validated_at)}</div><div class="prov-muted prov-small">${escapeHtml(service.validation_status || "—")}</div></td>
+        <td>${healthBadgeForStatus(service.status)}</td>
+        <td class="prov-actions">
+          <button type="button" data-action="validate-market-data" data-id="${escapeHtml(service.id)}">Validate</button>
+          <button type="button" data-action="${isOpen ? "cancel-purposes-form" : "configure-purposes"}" data-id="${escapeHtml(service.id)}">${isOpen ? "Close" : "Roles"}</button>
+          <button type="button" data-action="activate-as-stream" data-id="${escapeHtml(service.id)}">Stream</button>
+          <button type="button" class="prov-btn-danger" data-action="disable-market-data" data-id="${escapeHtml(service.id)}">Disable</button>
+        </td>
+      </tr>`;
+      const sub = isOpen ? `<tr class="prov-md-sub"><td colspan="8"><div class="prov-subcard">${renderPurposeForm(service)}</div></td></tr>` : "";
+      return main + sub;
+    })
+    .join("");
+}
+
+function renderDetachedPipelines(state) {
+  const pipelines = state.pipelines?.pipelines || [];
+  const orphans = pipelines.filter((p) => !p.service_id);
+  if (!orphans.length) return "";
+  return `<section class="prov-detached" aria-labelledby="prov-detached-heading">
+    <h3 id="prov-detached-heading">Detached streams</h3>
+    <p class="prov-muted prov-small">Pipelines without a bound provider row.</p>
+    <div class="prov-detached-grid">${orphans.map(renderPipelineRow).join("")}</div>
+  </section>`;
+}
+
+function renderIntegratedMarketData(state) {
+  const pipelines = state.pipelines?.pipelines || [];
+  const services = state.marketData?.services || [];
+  return `<div class="prov-md-integrated">
+    ${renderCompactStats(state)}
+    <section class="prov-panel prov-panel--resolver">
+      <h2 class="prov-h2">Resolver — last preview</h2>
+      ${renderResolverLeadIn(state)}
+    </section>
+    ${DataIntentPanel(state)}
+    ${ResolverResultPanel(state.resolution || {}, state.activeResolverStrategy || "auto", pipelines)}
+    <section class="prov-panel">
+      <div class="prov-toolbar">
+        <h2 class="prov-h2">Market Data Providers</h2>
+        <div class="prov-toolbar-actions">
+          <button type="button" data-action="show-market-data-form">+ Provider</button>
+          <button type="button" data-action="show-pipeline-form">+ Stream</button>
+        </div>
+      </div>
+      ${state.marketDataFormState?.visible ? renderMarketDataForm(state.marketDataFormState) : ""}
+      ${state.pipelineFormState?.visible ? renderPipelineForm(state.pipelineFormState, services) : ""}
+      <div class="prov-table-scroller">
+        <table class="prov-table" aria-label="Market data providers">
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th>Vendor</th>
+              <th>Stream / feed</th>
+              <th>Roles &amp; capabilities</th>
+              <th>Catalog default</th>
+              <th>Validated</th>
+              <th>Health</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody>${renderMarketDataServiceRows(state)}</tbody>
+        </table>
+      </div>
+    </section>
+    ${renderDetachedPipelines(state)}
+  </div>`;
+}
+
+function renderAiServiceRows(providers) {
+  if (!providers.length) {
+    return `<tr><td colspan="8" class="prov-table-empty"><p>No AI providers configured.</p><button type="button" data-action="show-ai-form">+ Add AI provider</button></td></tr>`;
+  }
+  return providers
+    .map(
+      (svc) => `<tr class="prov-md-row">
+      <td><strong>${escapeHtml(svc.name)}</strong></td>
+      <td>${escapeHtml(svc.provider || "—")}</td>
+      <td>${escapeHtml(svc.capability_label || "—")}</td>
+      <td class="prov-center">${svc.is_default ? `<span class="prov-yes">Yes</span>` : `<span class="prov-no">No</span>`}</td>
+      <td>${svc.has_api_key ? MASKED : "—"}</td>
+      <td><div class="prov-valid">${formatDate(svc.last_validated_at)}</div><div class="prov-muted prov-small">${escapeHtml(svc.validation_status || "—")}</div></td>
+      <td>${healthBadgeForStatus(svc.status)}</td>
+      <td class="prov-actions">
+        <button type="button" data-action="validate-ai" data-id="${escapeHtml(svc.id)}">Validate</button>
+        <button type="button" data-action="default-ai" data-id="${escapeHtml(svc.id)}">Default</button>
+        <button type="button" class="prov-btn-danger" data-action="disable-ai" data-id="${escapeHtml(svc.id)}">Disable</button>
+      </td>
+    </tr>`
+    )
+    .join("");
+}
+
+function renderIntegratedAi(state) {
+  const providers = state.ai?.services || [];
+  const formVisible = Boolean(state.aiFormState?.visible);
+  return `<div class="prov-ai-integrated">
+    <p class="prov-lead">AI cannot approve trades, override the Governor, or submit orders.</p>
+    <div class="prov-toolbar">
+      <div class="prov-toolbar-title">
+        <h2 class="prov-h2">AI Providers</h2>
+        <span class="prov-badge prov-badge--advisory" title="Advisory only — no trade authority">Advisory only</span>
+      </div>
+      <button type="button" data-action="show-ai-form">+ Add Provider</button>
+    </div>
+    ${formVisible ? renderAiForm(state.aiFormState) : ""}
+    <div class="prov-table-scroller">
+      <table class="prov-table" aria-label="AI providers">
+        <thead>
+          <tr>
+            <th>Name</th>
+            <th>Provider</th>
+            <th>Capability</th>
+            <th>Default</th>
+            <th>Key</th>
+            <th>Validated</th>
+            <th>Health</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody>${renderAiServiceRows(providers)}</tbody>
+      </table>
+    </div>
+  </div>`;
+}
+
 // ---------------------------------------------------------------------------
 // Top-level renderer + mount
 // ---------------------------------------------------------------------------
 
-function renderSummaryCards(state) {
-  const pipelines = state.pipelines?.pipelines || [];
-  const services = state.marketData?.services || [];
-  const ai = state.ai?.services || [];
-  const defaultPipelinesByProvider = pipelines.filter((p) => p.is_default_for_provider);
-  const issues = [...services, ...ai].filter((svc) => svc.status === "invalid" || svc.status === "disabled" || svc.status === "draft").length;
-  return `<section class="state-strip">
-    <article>
-      <span>Pipelines</span>
-      <strong>${pipelines.length} configured · ${defaultPipelinesByProvider.length} default</strong>
-      <p class="helper">Shared market-data subscriptions. One pipeline can serve many Deployments.</p>
-    </article>
-    <article>
-      <span>Market Data Services</span>
-      <strong>${services.length} configured</strong>
-      <p class="helper">Provider credentials catalog (separate from pipelines).</p>
-    </article>
-    <article>
-      <span>AI Providers</span>
-      <strong>${ai.length} configured</strong>
-      <p class="helper">Advisory only — never approves trades or submits orders.</p>
-    </article>
-    <article>
-      <span>Service Health</span>
-      <strong>${issues} issues</strong>
-      <p class="helper">Invalid / disabled / draft services across both market-data and AI.</p>
-    </article>
-  </section>`;
-}
-
 export function renderProviders(state = {}) {
-  const activeTab = state.activeTab || "pipelines";
-  return `<section class="page-heading">
+  const activeTab = state.activeTab || "market-data";
+  const tabBtn = (id, tabKey, label) =>
+    `<button type="button" role="tab" id="providers-tab-${id}" data-tab="${tabKey}" class="${activeTab === tabKey ? "active" : ""}" aria-selected="${activeTab === tabKey ? "true" : "false"}" aria-controls="providers-tabpanel-${id}" tabindex="${activeTab === tabKey ? "0" : "-1"}">${label}</button>`;
+  return `<div class="prov-layout">
+  <section class="page-heading prov-page-heading">
     <div>
-      <p class="eyebrow">Providers</p>
+      <p class="eyebrow">Admin</p>
       <h1>Providers</h1>
-      <p class="helper">Market Data Pipelines and AI Providers. Register provider credentials below and tag each Service for the contexts it serves (live, test, batch). The runtime no longer bootstraps from .env.</p>
+      <p class="helper">Market data and AI configuration in one place. Role tags and streams drive resolver Auto-pick; broker accounts stay on the Brokers page.</p>
     </div>
   </section>
-  ${renderSummaryCards(state)}
-  <section class="panel">
-    <header>
-      <h2>Provider Surfaces</h2>
-      <div class="segmented-control" role="tablist">
-        <button type="button" data-tab="pipelines" class="${activeTab === "pipelines" ? "active" : ""}">Market Data Pipelines</button>
-        <button type="button" data-tab="market-data" class="${activeTab === "market-data" ? "active" : ""}">Market Data Services</button>
-        <button type="button" data-tab="ai" class="${activeTab === "ai" ? "active" : ""}">AI Providers</button>
+  <section class="prov-main-panel">
+    <header class="prov-main-tabs">
+      <div class="segmented-control prov-tabs" role="tablist" aria-label="Provider domains">
+        ${tabBtn("market-data", "market-data", "Market Data Providers")}
+        ${tabBtn("ai", "ai", "AI Providers")}
       </div>
     </header>
-    ${activeTab === "ai" ? renderAiTab(state) : activeTab === "market-data" ? renderMarketDataTab(state) : renderPipelinesTab(state)}
-  </section>`;
+    <div id="providers-tabpanel-market-data" role="tabpanel" aria-labelledby="providers-tab-market-data" ${activeTab === "market-data" ? "" : "hidden"}>
+      ${renderIntegratedMarketData(state)}
+    </div>
+    <div id="providers-tabpanel-ai" role="tabpanel" aria-labelledby="providers-tab-ai" ${activeTab === "ai" ? "" : "hidden"}>
+      ${renderAiTab(state)}
+    </div>
+  </section>
+  </div>`;
 }
 
 function normalizePipelinePayload(data) {
@@ -654,7 +721,7 @@ export async function mountProviders(root, deps = {}) {
   const servicesApi = deps.servicesApi || createServicesApi();
   const systemStatusApi = deps.systemStatusApi || null;
   const state = {
-    activeTab: "pipelines",
+    activeTab: "market-data",
     pipelines: { pipelines: [] },
     marketData: { services: [] },
     ai: { services: [] },
@@ -689,7 +756,7 @@ export async function mountProviders(root, deps = {}) {
           <h1>Providers</h1>
           <p>Could not load Providers data.</p>
           <p class="loading-shell__hint">${escapeHtml(err.message || String(err))}</p>
-          <p class="loading-shell__hint">Check that the API server is running on port 8000 and the routes /api/v1/market-data and /api/v1/ai are reachable.</p>
+          <p class="loading-shell__hint">Check that the API server is running, routes /api/v1/market-data and /api/v1/ai are reachable, and Settings documents VITE_API_BASE if the UI is not same-origin.</p>
         </div>
       </section>`;
     }
@@ -774,8 +841,7 @@ export async function mountProviders(root, deps = {}) {
     if (action === "validate-market-data" && id) await servicesApi.validateMarketData(id);
     if (action === "disable-market-data" && id) await servicesApi.disableMarketData(id);
     if (action === "activate-as-stream" && id) {
-      // Switch to the Pipelines tab and pre-fill the form with this service.
-      state.activeTab = "pipelines";
+      state.activeTab = "market-data";
       state.pipelineFormState = {
         visible: true,
         service_id: id,
@@ -784,6 +850,10 @@ export async function mountProviders(root, deps = {}) {
       };
       root.innerHTML = renderProviders(state);
       return;
+    }
+
+    if (action === "set-default-market-data" && id) {
+      await servicesApi.setDefaultMarketData(id);
     }
 
     if (action === "show-ai-form") state.aiFormState = { visible: true, provider: "groq", capability_label: "fast" };
