@@ -133,6 +133,28 @@ class MarketDataPipelineWrite(BaseModel):
         return (value or DEFAULT_DATA_FEED).lower()
 
 
+class MarketDataPipelineEdit(BaseModel):
+    """Operator-supplied PATCH for a Pipeline (cosmetic fields only).
+
+    PUT /pipelines/{id} is intentionally narrowed to the two safe fields
+    that don't change the stream's identity tuple
+    ``(service_id, trading_mode, data_feed)``. Identity changes go
+    through dedicated endpoints:
+
+    - ``service_id`` rebind → ``POST /pipelines/{id}/attach-service``
+    - ``service_id`` / ``trading_mode`` / ``data_feed`` change → disable
+      this pipeline and create a new one (subscribers are bound to the
+      old pipeline_id and need to migrate explicitly).
+
+    Both fields are optional; omitted fields preserve the current value.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    display_name: str | None = Field(default=None, min_length=1)
+    capabilities: MarketDataCapabilities | None = None
+
+
 class MarketDataPipelineList(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 

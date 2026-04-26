@@ -297,50 +297,57 @@ def test_attach_service_id_enforces_invariant(tmp_path) -> None:
         reg.attach_service_id(legacy.id, service_id)
 
 
-def test_update_pipeline_rebind_to_existing_identity_is_rejected(tmp_path) -> None:
-    """Per DE round-3 B8: update_pipeline must enforce the invariant on rebind.
-
-    If the operator rebinds a pipeline to (service_id, mode, feed) that's
-    already taken by another ACTIVE pipeline, registry must reject — not
-    silently allow drift.
-    """
+def test_update_pipeline_only_changes_display_name_and_capabilities(tmp_path) -> None:
+    """PUT is now a narrow PATCH on cosmetic fields only — identity is fixed."""
     from uuid import uuid4
 
+    from backend.app.market_data import MarketDataCapabilities
+    from backend.app.market_data.pipeline import MarketDataPipelineEdit
+
     reg = _registry(tmp_path)
-    service_a = uuid4()
-    service_b = uuid4()
-    occupant = reg.create_pipeline(
+    service_id = uuid4()
+    pipeline = reg.create_pipeline(
         MarketDataPipelineWrite(
-            display_name="Occupant",
+            display_name="Original",
             provider=Provider.ALPACA,
-            service_id=service_a,
+            service_id=service_id,
+            data_feed="sip",
+            trading_mode=TradingMode.BROKER_PAPER,
+        )
+    )
+    new_caps = MarketDataCapabilities(supports_streaming=False, supports_historical=True)
+    updated = reg.update_pipeline(pipeline.id, MarketDataPipelineEdit(display_name="Renamed", capabilities=new_caps))
+    assert updated.display_name == "Renamed"
+    assert updated.capabilities.supports_streaming is False
+    # Identity preserved: service_id, data_feed, trading_mode all unchanged.
+    assert updated.service_id == service_id
+    assert updated.data_feed == "sip"
+    assert updated.trading_mode == TradingMode.BROKER_PAPER
+
+
+def test_update_pipeline_omitted_fields_preserve_existing(tmp_path) -> None:
+    """PATCH semantics — omitting a field doesn't clear it."""
+    from uuid import uuid4
+
+    from backend.app.market_data.pipeline import MarketDataPipelineEdit
+
+    reg = _registry(tmp_path)
+    pipeline = reg.create_pipeline(
+        MarketDataPipelineWrite(
+            display_name="Keep me",
+            provider=Provider.ALPACA,
+            service_id=uuid4(),
             data_feed="iex",
             trading_mode=TradingMode.BROKER_PAPER,
         )
     )
-    other = reg.create_pipeline(
-        MarketDataPipelineWrite(
-            display_name="Other",
-            provider=Provider.ALPACA,
-            service_id=service_b,
-            data_feed="iex",
-            trading_mode=TradingMode.BROKER_PAPER,
-        )
-    )
-    # Rebind 'other' to service_a → would collide with 'occupant'.
-    with pytest.raises(PipelineRegistryError, match="duplicate active streams"):
-        reg.update_pipeline(
-            other.id,
-            MarketDataPipelineWrite(
-                display_name="Other (rebound)",
-                provider=Provider.ALPACA,
-                service_id=service_a,
-                data_feed="iex",
-                trading_mode=TradingMode.BROKER_PAPER,
-            ),
-        )
-    # 'occupant' untouched.
-    assert reg.get_pipeline(occupant.id).display_name == "Occupant"
+    # Edit nothing — no-op return.
+    same = reg.update_pipeline(pipeline.id, MarketDataPipelineEdit())
+    assert same.display_name == "Keep me"
+    # Edit only display_name; capabilities untouched.
+    renamed = reg.update_pipeline(pipeline.id, MarketDataPipelineEdit(display_name="Renamed"))
+    assert renamed.display_name == "Renamed"
+    assert renamed.capabilities == pipeline.capabilities
 
 
 def test_disabled_pipeline_does_not_block_invariant_check(tmp_path) -> None:

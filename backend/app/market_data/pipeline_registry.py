@@ -26,6 +26,7 @@ from backend.app.domain._base import utc_now
 from .pipeline import (
     DEFAULT_DATA_FEED,
     MarketDataPipeline,
+    MarketDataPipelineEdit,
     MarketDataPipelineList,
     MarketDataPipelineWrite,
     PipelineStatus,
@@ -136,27 +137,26 @@ class MarketDataPipelineRegistry:
             raise PipelineRegistryError(f"unknown pipeline: {pipeline_id}")
         return self._records[pipeline_id]
 
-    def update_pipeline(self, pipeline_id: UUID, request: MarketDataPipelineWrite) -> MarketDataPipeline:
+    def update_pipeline(self, pipeline_id: UUID, request: MarketDataPipelineEdit) -> MarketDataPipeline:
+        """Partial update: ``display_name`` and ``capabilities`` only.
+
+        Identity-changing fields (``service_id``, ``trading_mode``,
+        ``data_feed``) are intentionally not editable here — they
+        determine which physical stream the pipeline maps to, and
+        subscribers hold ``pipeline_id`` references for fan-out.
+        Changing identity = a different stream = use ``attach_service_id``
+        for the legacy-bind path or disable+create for everything else.
+        """
         existing = self.get_pipeline(pipeline_id)
-        # If the operator is rebinding to a new (service, mode, feed), the
-        # invariant must hold under the new key as well.
-        self._enforce_pipeline_key_uniqueness(
-            service_id=request.service_id,
-            trading_mode=request.trading_mode,
-            data_feed=request.data_feed,
-            ignore_pipeline_id=pipeline_id,
-        )
-        updated = existing.model_copy(
-            update={
-                "display_name": request.display_name,
-                "provider": request.provider,
-                "service_id": request.service_id if request.service_id is not None else existing.service_id,
-                "data_feed": request.data_feed,
-                "trading_mode": request.trading_mode,
-                "capabilities": request.capabilities or existing.capabilities,
-                "updated_at": utc_now(),
-            }
-        )
+        changes: dict[str, object] = {}
+        if request.display_name is not None:
+            changes["display_name"] = request.display_name
+        if request.capabilities is not None:
+            changes["capabilities"] = request.capabilities
+        if not changes:
+            return existing  # no-op edit
+        changes["updated_at"] = utc_now()
+        updated = existing.model_copy(update=changes)
         self._records[pipeline_id] = updated
         self._save()
         return updated

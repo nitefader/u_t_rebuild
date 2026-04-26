@@ -23,6 +23,7 @@ from backend.app.market_data import (
     ResolveMarketDataRequest,
     ResolverResult,
 )
+from backend.app.market_data.pipeline import MarketDataPipelineEdit
 
 if TYPE_CHECKING:
     from backend.app.market_data import MarketDataPipelineRegistry, MarketDataServiceCatalog
@@ -183,11 +184,16 @@ def get_pipeline(pipeline_id: UUID, pipelines: PipelineDependency) -> MarketData
 @router.put("/pipelines/{pipeline_id}", response_model=MarketDataPipeline)
 def update_pipeline(
     pipeline_id: UUID,
-    request: MarketDataPipelineWrite,
-    catalog: CatalogDependency,
+    request: MarketDataPipelineEdit,
     pipelines: PipelineDependency,
 ) -> MarketDataPipeline:
-    request = _derive_provider_from_service(request, catalog)
+    """Partial update: ``display_name`` and ``capabilities`` only.
+
+    Identity changes are *not* available on this endpoint:
+    - service rebind → ``POST /pipelines/{id}/attach-service``
+    - data_feed / trading_mode change → disable this pipeline and
+      create a new one (subscribers won't migrate silently).
+    """
     try:
         return pipelines.update_pipeline(pipeline_id, request)
     except PipelineRegistryError as exc:
