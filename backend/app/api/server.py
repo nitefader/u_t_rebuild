@@ -20,6 +20,7 @@ from backend.app.api.routes import (
     market_data,
     operations,
     operations_trade_stream,
+    system_migration,
     system_settings,
     system_status,
 )
@@ -29,6 +30,7 @@ app = FastAPI(title="Trading OS API")
 
 app.include_router(system_status.router)
 app.include_router(system_settings.router)
+app.include_router(system_migration.router)
 app.include_router(broker_accounts.router)
 app.include_router(operations.router)
 app.include_router(operations_trade_stream.router)
