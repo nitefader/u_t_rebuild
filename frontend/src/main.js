@@ -3,21 +3,28 @@ import { createOperationsApi } from "./api/operations.js";
 import { createOperationsTradeStreamApi } from "./api/operationsTradeStream.js";
 import { createPipelinesApi } from "./api/pipelines.js";
 import { createServicesApi } from "./api/services.js";
+import { createSystemSettingsApi } from "./api/systemSettings.js";
 import { createSystemStatusApi } from "./api/systemStatus.js";
 import { mountSystemStatusBadge } from "./appShell.js";
 import { mountChartLab } from "./chartLab.js";
 import { mountOperationsCenter } from "./operationsCenter.js";
 import { mountOperationsTradeStream } from "./operationsTradeStream.js";
 import { mountProviders } from "./providers.js";
+import { mountSettings } from "./settings.js";
 
 const operationsRoot = document.querySelector("#operations-center");
 const operationsTradeStreamRoot = document.querySelector("#operations-trade-stream");
 const providersRoot = document.querySelector("#providers");
 const chartLabRoot = document.querySelector("#chart-lab");
+const settingsRoot = document.querySelector("#settings");
 const statusBadgeRoot = document.querySelector("[data-system-status]");
 
 if (statusBadgeRoot) {
   mountSystemStatusBadge(statusBadgeRoot, createSystemStatusApi());
+}
+
+if (settingsRoot) {
+  mountSettings(settingsRoot, createSystemSettingsApi());
 }
 
 if (operationsRoot) {

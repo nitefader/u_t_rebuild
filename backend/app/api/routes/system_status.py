@@ -13,6 +13,8 @@ import os
 
 from pydantic import BaseModel, ConfigDict
 
+from backend.app.api.system_settings_store import setting
+
 
 try:  # pragma: no cover - exercised when FastAPI is installed.
     from fastapi import APIRouter
@@ -32,14 +34,15 @@ class SystemStatusResponse(BaseModel):
 
 def system_status() -> SystemStatusResponse:
     has_creds = bool(os.getenv("ALPACA_API_KEY") and os.getenv("ALPACA_SECRET_KEY"))
-    test_stream = os.getenv("ALPACA_USE_TEST_STREAM") == "1"
+    test_stream_raw = setting("alpaca_use_test_stream", fallback_env="ALPACA_USE_TEST_STREAM", default="0")
+    test_stream = str(test_stream_raw) in ("1", "true", "True", True)
     endpoint = os.getenv("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
     is_paper = "paper-api" in endpoint
     operator_environment = os.getenv("UTOS_ENVIRONMENT") or ("paper" if is_paper else "live")
     if test_stream:
         data_feed = "test"
     else:
-        data_feed = (os.getenv("ALPACA_DATA_FEED") or "iex").lower()
+        data_feed = str(setting("alpaca_data_feed", fallback_env="ALPACA_DATA_FEED", default="iex")).lower()
     return SystemStatusResponse(
         alpaca_credentials_present=has_creds,
         alpaca_test_stream=test_stream,

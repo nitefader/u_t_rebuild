@@ -7,7 +7,8 @@ export default defineConfig({
       input: {
         main: resolve(__dirname, "index.html"),
         providers: resolve(__dirname, "providers.html"),
-        chart_lab: resolve(__dirname, "chart_lab.html")
+        chart_lab: resolve(__dirname, "chart_lab.html"),
+        settings: resolve(__dirname, "settings.html")
       }
     }
   },

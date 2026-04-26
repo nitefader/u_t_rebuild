@@ -935,3 +935,145 @@ pre {
 .ops-trade-stream__event--fill_event { color: #1f5a35; font-weight: 600; }
 .ops-trade-stream__event--account_snapshot,
 .ops-trade-stream__event--position_snapshot { color: #4a5b66; }
+
+.settings-shell {
+  max-width: 760px;
+  margin: 24px auto;
+  padding: 0 16px 48px;
+  display: grid;
+  gap: 18px;
+}
+
+.settings-shell__header {
+  background: #ffffff;
+  border: 1px solid #d6dee2;
+  border-radius: 8px;
+  padding: 18px 20px;
+}
+
+.settings-shell__header h1 {
+  margin: 0 0 4px;
+  font-size: 22px;
+}
+
+.settings-shell__subtitle {
+  margin: 0;
+  color: #52646e;
+  font-size: 13px;
+}
+
+.settings-panel {
+  margin-top: 0;
+}
+
+.settings-form {
+  display: grid;
+  gap: 16px;
+  margin-top: 4px;
+}
+
+.settings-toggle {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 12px;
+  align-items: start;
+  background: #fafcfd;
+  border: 1px solid #e3e8eb;
+  border-radius: 6px;
+  padding: 12px 14px;
+}
+
+.settings-toggle input[type="checkbox"] {
+  margin-top: 4px;
+  width: 18px;
+  height: 18px;
+}
+
+.settings-field {
+  display: grid;
+  gap: 6px;
+}
+
+.settings-field > span {
+  display: grid;
+  gap: 2px;
+}
+
+.settings-field input,
+.settings-field select {
+  min-height: 36px;
+  border: 1px solid #9aa8b0;
+  border-radius: 6px;
+  font: inherit;
+  padding: 0 10px;
+  background: #ffffff;
+  color: #182026;
+}
+
+.settings-help {
+  display: block;
+  font-size: 12px;
+  color: #6a7783;
+  margin-top: 2px;
+}
+
+.settings-form__actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.settings-form__notice {
+  font-size: 13px;
+  color: #1f5a35;
+  background: #ecf6ef;
+  padding: 6px 10px;
+  border-radius: 4px;
+}
+
+.settings-form__live {
+  margin: 12px 0 0;
+  padding: 8px 10px;
+  background: #f0f3f5;
+  border-radius: 4px;
+  color: #2c3a44;
+  font-size: 12px;
+}
+
+.settings-panel--secrets {
+  background: #fafcfd;
+}
+
+.settings-credentials {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: 1fr 1fr;
+  margin: 8px 0;
+}
+
+.settings-credentials > div {
+  border: 1px solid #e3e8eb;
+  border-radius: 6px;
+  padding: 8px 12px;
+}
+
+.settings-credentials dt {
+  font-size: 11px;
+  text-transform: uppercase;
+  color: #6a7783;
+  margin-bottom: 2px;
+}
+
+.settings-credentials dd {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.settings-shell code {
+  background: #eef2f4;
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-size: 12px;
+}

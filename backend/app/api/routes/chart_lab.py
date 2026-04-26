@@ -31,6 +31,7 @@ from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict
 
+from backend.app.api.system_settings_store import setting
 from backend.app.features import NormalizedBar
 from backend.app.market_data import AlpacaMarketDataAdapter, MarketDataStreamHub
 
@@ -97,10 +98,12 @@ class ChartLabConfig:
 
     @classmethod
     def from_env(cls) -> "ChartLabConfig":
-        test_stream = os.getenv("ALPACA_USE_TEST_STREAM") == "1"
+        test_stream_raw = setting("alpaca_use_test_stream", fallback_env="ALPACA_USE_TEST_STREAM", default="0")
+        test_stream = str(test_stream_raw) in ("1", "true", "True", True)
         has_creds = bool(os.getenv("ALPACA_API_KEY") and os.getenv("ALPACA_SECRET_KEY"))
-        default_symbol = AlpacaMarketDataAdapter.TEST_SYMBOL if test_stream else os.getenv("CHART_LAB_DEFAULT_SYMBOL", "SPY")
-        data_feed = "test" if test_stream else (os.getenv("ALPACA_DATA_FEED") or "iex").lower()
+        configured_symbol = setting("chart_lab_default_symbol", fallback_env="CHART_LAB_DEFAULT_SYMBOL", default="SPY")
+        default_symbol = AlpacaMarketDataAdapter.TEST_SYMBOL if test_stream else str(configured_symbol)
+        data_feed = "test" if test_stream else str(setting("alpaca_data_feed", fallback_env="ALPACA_DATA_FEED", default="iex")).lower()
         return cls(
             streaming_enabled=has_creds,
             test_stream=test_stream,
