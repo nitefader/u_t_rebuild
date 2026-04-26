@@ -169,7 +169,12 @@ class AIProviderCatalog:
                 f"only understands up to {CURRENT_AI_PROVIDER_CATALOG_SCHEMA_VERSION}; "
                 "rolling back? upgrade the binary or restore an older snapshot."
             )
-        snapshot = AIProviderCatalogSnapshot.model_validate(payload)
+        try:
+            snapshot = AIProviderCatalogSnapshot.model_validate(payload)
+        except Exception as exc:  # noqa: BLE001
+            raise AIProviderCatalogError(
+                f"AI provider catalog at {self._store_path} could not be parsed: {exc}"
+            ) from exc
         self._records = self._dedupe(snapshot.ai_services)
 
     @staticmethod

@@ -251,7 +251,12 @@ class MarketDataServiceCatalog:
                 f"only understands up to {CURRENT_MARKET_DATA_CATALOG_SCHEMA_VERSION}; "
                 "rolling back? upgrade the binary or restore an older snapshot."
             )
-        snapshot = MarketDataCatalogSnapshot.model_validate(payload)
+        try:
+            snapshot = MarketDataCatalogSnapshot.model_validate(payload)
+        except Exception as exc:  # noqa: BLE001 - pydantic ValidationError + json sanity
+            raise MarketDataCatalogError(
+                f"market data catalog at {self._store_path} could not be parsed: {exc}"
+            ) from exc
         self._records = self._dedupe(snapshot.market_data_services)
 
     @staticmethod

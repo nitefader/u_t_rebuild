@@ -103,6 +103,19 @@ def test_ai_provider_catalog_rejects_newer_schema_version(tmp_path) -> None:
     assert "schema_version=99" in str(excinfo.value)
 
 
+def test_ai_provider_catalog_ignores_unknown_top_level_fields(tmp_path) -> None:
+    _write(
+        tmp_path / "ai.json",
+        {
+            "schema_version": CURRENT_AI_PROVIDER_CATALOG_SCHEMA_VERSION,
+            "ai_services": [],
+            "future_field": {"experimental": True},
+        },
+    )
+    catalog = AIProviderCatalog(store_path=tmp_path / "ai.json")
+    assert catalog.list_services().services == ()
+
+
 # ---------------------------------------------------------------------------
 # Pipeline registry
 # ---------------------------------------------------------------------------
@@ -126,3 +139,16 @@ def test_pipeline_registry_rejects_newer_schema_version(tmp_path) -> None:
     with pytest.raises(PipelineRegistryError) as excinfo:
         MarketDataPipelineRegistry(store_path=tmp_path / "pipelines.json")
     assert "schema_version=42" in str(excinfo.value)
+
+
+def test_pipeline_registry_ignores_unknown_top_level_fields(tmp_path) -> None:
+    _write(
+        tmp_path / "pipelines.json",
+        {
+            "schema_version": CURRENT_PIPELINE_REGISTRY_SCHEMA_VERSION,
+            "pipelines": [],
+            "future_field": "ignored",
+        },
+    )
+    registry = MarketDataPipelineRegistry(store_path=tmp_path / "pipelines.json")
+    assert registry.list_pipelines().pipelines == ()

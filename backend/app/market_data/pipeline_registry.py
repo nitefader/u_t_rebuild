@@ -175,7 +175,12 @@ class MarketDataPipelineRegistry:
                 f"only understands up to {CURRENT_PIPELINE_REGISTRY_SCHEMA_VERSION}; "
                 "rolling back? upgrade the binary or restore an older snapshot."
             )
-        snapshot = PipelineRegistrySnapshot.model_validate(payload)
+        try:
+            snapshot = PipelineRegistrySnapshot.model_validate(payload)
+        except Exception as exc:  # noqa: BLE001
+            raise PipelineRegistryError(
+                f"pipeline registry at {self._store_path} could not be parsed: {exc}"
+            ) from exc
         self._records = {pipeline.id: pipeline for pipeline in snapshot.pipelines}
 
     def _save(self) -> None:
