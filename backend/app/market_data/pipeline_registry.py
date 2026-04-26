@@ -20,9 +20,11 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict
 
+from backend.app.domain import TradingMode
 from backend.app.domain._base import utc_now
 
 from .pipeline import (
+    DEFAULT_DATA_FEED,
     MarketDataPipeline,
     MarketDataPipelineList,
     MarketDataPipelineWrite,
@@ -35,7 +37,7 @@ class PipelineRegistryError(ValueError):
     """Operator-readable Pipeline registry failure."""
 
 
-CURRENT_PIPELINE_REGISTRY_SCHEMA_VERSION = 1
+CURRENT_PIPELINE_REGISTRY_SCHEMA_VERSION = 2  # v2 added service_id + data_feed
 
 
 class PipelineRegistrySnapshot(BaseModel):
@@ -73,9 +75,18 @@ class MarketDataPipelineRegistry:
         from .capability_profiles import provider_capability_profile
 
         capabilities = request.capabilities or provider_capability_profile(request.provider).capabilities
+        # Invariant: ≤1 ACTIVE pipeline per (service_id, trading_mode, data_feed).
+        # Reject create that would create a duplicate ACTIVE stream identity.
+        self._enforce_pipeline_key_uniqueness(
+            service_id=request.service_id,
+            trading_mode=request.trading_mode,
+            data_feed=request.data_feed,
+        )
         pipeline = MarketDataPipeline(
             display_name=request.display_name,
             provider=request.provider,
+            service_id=request.service_id,
+            data_feed=request.data_feed,
             trading_mode=request.trading_mode,
             capabilities=capabilities,
             status=PipelineStatus.ACTIVE,
@@ -84,6 +95,42 @@ class MarketDataPipelineRegistry:
         self._save()
         return pipeline
 
+    def _enforce_pipeline_key_uniqueness(
+        self,
+        *,
+        service_id: UUID | None,
+        trading_mode: TradingMode | None,
+        data_feed: str,
+        ignore_pipeline_id: UUID | None = None,
+    ) -> None:
+        """Reject duplicate ACTIVE pipelines for the same stream identity.
+
+        ``service_id=None`` (vendor-only / not yet bound) is exempt — at most
+        one such legacy pipeline is allowed via dedup-on-load, but the
+        invariant only fires when a Service is bound. Once Round-2
+        backfill assigns service_id everywhere this becomes total.
+        """
+        if service_id is None:
+            return
+        normalized_feed = (data_feed or DEFAULT_DATA_FEED).lower()
+        for pipeline_id, existing in self._records.items():
+            if pipeline_id == ignore_pipeline_id:
+                continue
+            if existing.status == PipelineStatus.DISABLED:
+                continue
+            if existing.service_id != service_id:
+                continue
+            if existing.trading_mode != trading_mode:
+                continue
+            if (existing.data_feed or DEFAULT_DATA_FEED).lower() != normalized_feed:
+                continue
+            raise PipelineRegistryError(
+                f"a pipeline already exists for service={service_id} "
+                f"mode={trading_mode.value if trading_mode else 'none'} "
+                f"feed={normalized_feed!r} (id={pipeline_id}); "
+                "duplicate active streams are not allowed"
+            )
+
     def get_pipeline(self, pipeline_id: UUID) -> MarketDataPipeline:
         if pipeline_id not in self._records:
             raise PipelineRegistryError(f"unknown pipeline: {pipeline_id}")
@@ -91,10 +138,20 @@ class MarketDataPipelineRegistry:
 
     def update_pipeline(self, pipeline_id: UUID, request: MarketDataPipelineWrite) -> MarketDataPipeline:
         existing = self.get_pipeline(pipeline_id)
+        # If the operator is rebinding to a new (service, mode, feed), the
+        # invariant must hold under the new key as well.
+        self._enforce_pipeline_key_uniqueness(
+            service_id=request.service_id,
+            trading_mode=request.trading_mode,
+            data_feed=request.data_feed,
+            ignore_pipeline_id=pipeline_id,
+        )
         updated = existing.model_copy(
             update={
                 "display_name": request.display_name,
                 "provider": request.provider,
+                "service_id": request.service_id if request.service_id is not None else existing.service_id,
+                "data_feed": request.data_feed,
                 "trading_mode": request.trading_mode,
                 "capabilities": request.capabilities or existing.capabilities,
                 "updated_at": utc_now(),
@@ -181,7 +238,29 @@ class MarketDataPipelineRegistry:
             raise PipelineRegistryError(
                 f"pipeline registry at {self._store_path} could not be parsed: {exc}"
             ) from exc
+        # v1 → v2 backfill: legacy pipelines have no service_id and a default
+        # data_feed. We don't auto-bind service_id here (that requires the
+        # catalog, which the registry doesn't see). attach_service_id() is
+        # the explicit operator action that backfills.
         self._records = {pipeline.id: pipeline for pipeline in snapshot.pipelines}
+
+    def attach_service_id(self, pipeline_id: UUID, service_id: UUID) -> MarketDataPipeline:
+        """Backfill ``service_id`` on a legacy pipeline that loaded without one.
+
+        Composes with ``_enforce_pipeline_key_uniqueness`` so the operator
+        can't bind the same Service+mode+feed twice via two pipelines.
+        """
+        existing = self.get_pipeline(pipeline_id)
+        self._enforce_pipeline_key_uniqueness(
+            service_id=service_id,
+            trading_mode=existing.trading_mode,
+            data_feed=existing.data_feed,
+            ignore_pipeline_id=pipeline_id,
+        )
+        updated = existing.model_copy(update={"service_id": service_id, "updated_at": utc_now()})
+        self._records[pipeline_id] = updated
+        self._save()
+        return updated
 
     def _save(self) -> None:
         if self._store_path is None:

@@ -46,12 +46,39 @@ class PipelineStatus(StrEnum):
     DISABLED = "disabled"
 
 
+DEFAULT_DATA_FEED = "iex"
+
+
 class MarketDataPipeline(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
+    """Persisted Pipeline.
+
+    Per the DE round-2 verdict: a Pipeline is the *subscription identity*
+    bound to a credentialed ``MarketDataServiceRecord``. The
+    ``service_id`` foreign key is what makes "one paid stream serves
+    many accounts" tractable — two Pipelines pointing at the same
+    Service share authentication; two pointing at different Services
+    are physically different streams.
+
+    ``data_feed`` keys the actual stream endpoint (``iex`` / ``sip`` /
+    ``delayed_sip`` / ``boats`` / ``overnight`` / ``otc`` for Alpaca).
+    Two consumers on different feeds for the same symbol must not share
+    a hub; the hub registry uses ``(provider, trading_mode, data_feed)``
+    today, the matching tuple in the catalog is ``(service_id,
+    trading_mode, data_feed)``.
+
+    ``provider`` is retained as a denormalized field for
+    backward-compat reads of legacy snapshots; new code should derive
+    it from the linked Service. ``capabilities`` is similarly
+    deprecated — capability scoring belongs on the Service.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="ignore")
 
     id: UUID = Field(default_factory=uuid4)
     display_name: str = Field(min_length=1)
     provider: Provider
+    service_id: UUID | None = None
+    data_feed: str = DEFAULT_DATA_FEED
     trading_mode: TradingMode | None = None
     capabilities: MarketDataCapabilities = Field(default_factory=MarketDataCapabilities)
     status: PipelineStatus = PipelineStatus.DRAFT
@@ -72,6 +99,11 @@ class MarketDataPipeline(BaseModel):
             )
         return value
 
+    @field_validator("data_feed")
+    @classmethod
+    def data_feed_normalize(cls, value: str) -> str:
+        return (value or DEFAULT_DATA_FEED).lower()
+
 
 class MarketDataPipelineWrite(BaseModel):
     """Operator-supplied payload for creating or updating a pipeline."""
@@ -80,6 +112,8 @@ class MarketDataPipelineWrite(BaseModel):
 
     display_name: str = Field(min_length=1)
     provider: Provider
+    service_id: UUID | None = None
+    data_feed: str = DEFAULT_DATA_FEED
     trading_mode: TradingMode | None = None
     capabilities: MarketDataCapabilities | None = None
 
@@ -92,6 +126,11 @@ class MarketDataPipelineWrite(BaseModel):
             f"MarketDataPipeline.trading_mode must be None or a BROKER mode "
             f"(BROKER_PAPER / BROKER_LIVE); got {value.value}"
         )
+
+    @field_validator("data_feed")
+    @classmethod
+    def data_feed_normalize(cls, value: str) -> str:
+        return (value or DEFAULT_DATA_FEED).lower()
 
 
 class MarketDataPipelineList(BaseModel):

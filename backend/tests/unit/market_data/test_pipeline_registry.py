@@ -138,3 +138,160 @@ def test_unknown_pipeline_id_raises(tmp_path) -> None:
 
     with pytest.raises(PipelineRegistryError, match="unknown pipeline"):
         reg.get_pipeline(uuid4())
+
+
+# ---------------------------------------------------------------------------
+# Round 2: service_id FK + (service_id, trading_mode, data_feed) invariant
+# ---------------------------------------------------------------------------
+
+
+def test_pipeline_carries_service_id_and_data_feed_when_supplied(tmp_path) -> None:
+    from uuid import uuid4
+
+    reg = _registry(tmp_path)
+    service_id = uuid4()
+    pipeline = reg.create_pipeline(
+        MarketDataPipelineWrite(
+            display_name="Alpaca paper SIP",
+            provider=Provider.ALPACA,
+            service_id=service_id,
+            data_feed="sip",
+            trading_mode=TradingMode.BROKER_PAPER,
+        )
+    )
+    assert pipeline.service_id == service_id
+    assert pipeline.data_feed == "sip"
+
+
+def test_pipeline_data_feed_defaults_to_iex(tmp_path) -> None:
+    reg = _registry(tmp_path)
+    pipeline = reg.create_pipeline(MarketDataPipelineWrite(display_name="Alpaca", provider=Provider.ALPACA))
+    assert pipeline.data_feed == "iex"
+
+
+def test_create_pipeline_rejects_duplicate_service_mode_feed_when_existing_active(tmp_path) -> None:
+    from uuid import uuid4
+
+    reg = _registry(tmp_path)
+    service_id = uuid4()
+    reg.create_pipeline(
+        MarketDataPipelineWrite(
+            display_name="Alpaca paper IEX",
+            provider=Provider.ALPACA,
+            service_id=service_id,
+            data_feed="iex",
+            trading_mode=TradingMode.BROKER_PAPER,
+        )
+    )
+    with pytest.raises(PipelineRegistryError, match="duplicate active streams"):
+        reg.create_pipeline(
+            MarketDataPipelineWrite(
+                display_name="Same identity duplicate",
+                provider=Provider.ALPACA,
+                service_id=service_id,
+                data_feed="iex",
+                trading_mode=TradingMode.BROKER_PAPER,
+            )
+        )
+
+
+def test_create_pipeline_allows_different_data_feed_for_same_service(tmp_path) -> None:
+    """Two pipelines on the same Alpaca account can run simultaneously on different feeds."""
+    from uuid import uuid4
+
+    reg = _registry(tmp_path)
+    service_id = uuid4()
+    iex = reg.create_pipeline(
+        MarketDataPipelineWrite(
+            display_name="IEX",
+            provider=Provider.ALPACA,
+            service_id=service_id,
+            data_feed="iex",
+            trading_mode=TradingMode.BROKER_PAPER,
+        )
+    )
+    sip = reg.create_pipeline(
+        MarketDataPipelineWrite(
+            display_name="SIP",
+            provider=Provider.ALPACA,
+            service_id=service_id,
+            data_feed="sip",
+            trading_mode=TradingMode.BROKER_PAPER,
+        )
+    )
+    assert iex.data_feed != sip.data_feed
+
+
+def test_disabled_pipeline_does_not_block_re_creation_for_same_identity(tmp_path) -> None:
+    from uuid import uuid4
+
+    reg = _registry(tmp_path)
+    service_id = uuid4()
+    first = reg.create_pipeline(
+        MarketDataPipelineWrite(
+            display_name="A",
+            provider=Provider.ALPACA,
+            service_id=service_id,
+            data_feed="iex",
+            trading_mode=TradingMode.BROKER_PAPER,
+        )
+    )
+    reg.disable_pipeline(first.id)
+    # After disable, creating a new active pipeline for the same identity is allowed.
+    second = reg.create_pipeline(
+        MarketDataPipelineWrite(
+            display_name="A2",
+            provider=Provider.ALPACA,
+            service_id=service_id,
+            data_feed="iex",
+            trading_mode=TradingMode.BROKER_PAPER,
+        )
+    )
+    assert second.id != first.id
+
+
+def test_pipeline_with_no_service_id_is_exempt_from_invariant(tmp_path) -> None:
+    """Legacy / vendor-only pipelines (no service_id) don't dedup against each other."""
+    reg = _registry(tmp_path)
+    a = reg.create_pipeline(
+        MarketDataPipelineWrite(display_name="Vendor A", provider=Provider.YAHOO, trading_mode=None)
+    )
+    b = reg.create_pipeline(
+        MarketDataPipelineWrite(display_name="Vendor B", provider=Provider.YAHOO, trading_mode=None)
+    )
+    assert a.id != b.id
+
+
+def test_attach_service_id_backfills_legacy_pipeline(tmp_path) -> None:
+    from uuid import uuid4
+
+    reg = _registry(tmp_path)
+    legacy = reg.create_pipeline(
+        MarketDataPipelineWrite(display_name="Legacy", provider=Provider.ALPACA, trading_mode=TradingMode.BROKER_PAPER)
+    )
+    assert legacy.service_id is None
+    service_id = uuid4()
+    updated = reg.attach_service_id(legacy.id, service_id)
+    assert updated.service_id == service_id
+
+
+def test_attach_service_id_enforces_invariant(tmp_path) -> None:
+    """Backfilling can't create a duplicate active stream identity."""
+    from uuid import uuid4
+
+    reg = _registry(tmp_path)
+    service_id = uuid4()
+    reg.create_pipeline(
+        MarketDataPipelineWrite(
+            display_name="Existing",
+            provider=Provider.ALPACA,
+            service_id=service_id,
+            data_feed="iex",
+            trading_mode=TradingMode.BROKER_PAPER,
+        )
+    )
+    legacy = reg.create_pipeline(
+        MarketDataPipelineWrite(display_name="Legacy", provider=Provider.ALPACA, trading_mode=TradingMode.BROKER_PAPER)
+    )
+    with pytest.raises(PipelineRegistryError, match="duplicate active streams"):
+        reg.attach_service_id(legacy.id, service_id)
