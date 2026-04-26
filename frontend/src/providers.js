@@ -492,6 +492,7 @@ export function renderProviders(state = {}) {
       <p class="helper">Market Data Pipelines and AI Providers. Pipelines drive shared market-data fan-out; AI is advisory only.</p>
     </div>
   </section>
+  ${renderBootstrapBanner(state)}
   ${renderSummaryCards(state)}
   <section class="panel">
     <header>
@@ -503,6 +504,37 @@ export function renderProviders(state = {}) {
       </div>
     </header>
     ${activeTab === "ai" ? renderAiTab(state) : activeTab === "market-data" ? renderMarketDataTab(state) : renderPipelinesTab(state)}
+  </section>`;
+}
+
+function renderBootstrapBanner(state) {
+  const status = state.systemStatus;
+  const services = state.marketData?.services || [];
+  const pipelines = state.pipelines?.pipelines || [];
+  const hasAlpacaService = services.some((svc) => svc.provider === "alpaca");
+  const hasAlpacaPipeline = pipelines.some((p) => p.provider === "alpaca");
+  const credsPresent = !!(status && status.alpaca_credentials_present);
+
+  if (!credsPresent || (hasAlpacaService && hasAlpacaPipeline)) {
+    return state.bootstrapNotice
+      ? `<section class="bootstrap-banner bootstrap-banner--success" role="status">${escapeHtml(state.bootstrapNotice)}</section>`
+      : "";
+  }
+
+  const detail = [];
+  if (!hasAlpacaService) detail.push("Market Data Service");
+  if (!hasAlpacaPipeline) detail.push("Pipeline");
+  return `<section class="bootstrap-banner" role="status">
+    <div>
+      <strong>Alpaca credentials detected in .env</strong>
+      <p>No Alpaca ${detail.join(" or ")} registered in the catalog yet. Click below to register the env-based credentials as a default Alpaca Market Data Service and Pipeline.</p>
+    </div>
+    <div class="bootstrap-banner__actions">
+      <button type="button" data-action="bootstrap-from-env"${state.bootstrapping ? " disabled" : ""}>
+        ${state.bootstrapping ? "Bootstrapping…" : "Bootstrap from .env"}
+      </button>
+    </div>
+    ${state.bootstrapError ? `<p class="warning" role="alert">${escapeHtml(state.bootstrapError)}</p>` : ""}
   </section>`;
 }
 
@@ -565,6 +597,7 @@ function normalizeResolverPayload(formData, strategy) {
 export async function mountProviders(root, deps = {}) {
   const pipelinesApi = deps.pipelinesApi || createPipelinesApi();
   const servicesApi = deps.servicesApi || createServicesApi();
+  const systemStatusApi = deps.systemStatusApi || null;
   const state = {
     activeTab: "pipelines",
     pipelines: { pipelines: [] },
@@ -575,7 +608,11 @@ export async function mountProviders(root, deps = {}) {
     aiFormState: null,
     activeResolverStrategy: "auto",
     resolutionPayload: { intent: DEFAULT_INTENT },
-    resolution: null
+    resolution: null,
+    systemStatus: null,
+    bootstrapping: false,
+    bootstrapError: null,
+    bootstrapNotice: null
   };
 
   async function refresh() {
@@ -583,6 +620,13 @@ export async function mountProviders(root, deps = {}) {
       state.pipelines = await pipelinesApi.listPipelines();
       state.marketData = await servicesApi.listMarketData();
       state.ai = await servicesApi.listAi();
+      if (systemStatusApi) {
+        try {
+          state.systemStatus = await systemStatusApi.status();
+        } catch {
+          state.systemStatus = null;
+        }
+      }
       root.innerHTML = renderProviders(state);
     } catch (err) {
       // eslint-disable-next-line no-console
@@ -637,6 +681,32 @@ export async function mountProviders(root, deps = {}) {
 
     if (action === "run-resolution") {
       await resolveFromForm();
+      return;
+    }
+
+    if (action === "bootstrap-from-env") {
+      state.bootstrapping = true;
+      state.bootstrapError = null;
+      state.bootstrapNotice = null;
+      root.innerHTML = renderProviders(state);
+      try {
+        const result = await pipelinesApi.bootstrapFromEnv();
+        if (result.skipped_reason === "missing_credentials") {
+          state.bootstrapError = "Backend reports no Alpaca credentials in .env.";
+        } else {
+          const parts = [];
+          if (result.created_service) parts.push("registered Alpaca Market Data Service");
+          if (result.created_pipeline) parts.push("created default Pipeline");
+          state.bootstrapNotice = parts.length
+            ? `Bootstrap complete — ${parts.join(", ")}.`
+            : "Bootstrap complete — Alpaca catalog entries already existed.";
+        }
+      } catch (err) {
+        state.bootstrapError = err.message || String(err);
+      } finally {
+        state.bootstrapping = false;
+      }
+      await refresh();
       return;
     }
 

@@ -38,7 +38,8 @@ if (operationsTradeStreamRoot) {
 if (providersRoot) {
   mountProviders(providersRoot, {
     pipelinesApi: createPipelinesApi(),
-    servicesApi: createServicesApi()
+    servicesApi: createServicesApi(),
+    systemStatusApi: createSystemStatusApi()
   });
 }
 

@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import os
 from typing import TYPE_CHECKING, Any
 from typing import Annotated
 from uuid import UUID
 
+from pydantic import BaseModel, ConfigDict
+
+from backend.app.domain import TradingMode
 from backend.app.market_data import (
     MarketDataCatalogError,
     MarketDataPipeline,
@@ -15,6 +19,7 @@ from backend.app.market_data import (
     MarketDataServiceRecord,
     MarketDataServiceWrite,
     PipelineRegistryError,
+    Provider,
     ResolveMarketDataRequest,
     ResolverResult,
 )
@@ -163,6 +168,89 @@ def disable_pipeline(pipeline_id: UUID, pipelines: PipelineDependency) -> Market
         return pipelines.disable_pipeline(pipeline_id)
     except PipelineRegistryError as exc:
         raise _operator_error(str(exc)) from exc
+
+
+# ---------------------------------------------------------------------------
+# Bootstrap from .env — register the env-based Alpaca creds as a catalog
+# entry + default pipeline so the operator doesn't have to re-enter them on
+# the Providers page just to populate the catalog.
+# ---------------------------------------------------------------------------
+
+
+class BootstrapFromEnvResponse(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    created_service: bool
+    created_pipeline: bool
+    skipped_reason: str | None = None
+    service: MarketDataServiceRecord | None = None
+    pipeline: MarketDataPipeline | None = None
+
+
+@router.post("/bootstrap-from-env", response_model=BootstrapFromEnvResponse)
+def bootstrap_from_env(
+    catalog: CatalogDependency,
+    pipelines: PipelineDependency,
+) -> BootstrapFromEnvResponse:
+    api_key = os.getenv("ALPACA_API_KEY")
+    api_secret = os.getenv("ALPACA_SECRET_KEY")
+    if not api_key or not api_secret:
+        return BootstrapFromEnvResponse(
+            created_service=False,
+            created_pipeline=False,
+            skipped_reason="missing_credentials",
+        )
+
+    existing_services = catalog.list_services().services
+    existing_alpaca = next(
+        (svc for svc in existing_services if svc.provider == Provider.ALPACA),
+        None,
+    )
+    if existing_alpaca is not None:
+        service = existing_alpaca
+        created_service = False
+    else:
+        try:
+            service = catalog.create_service(
+                MarketDataServiceWrite(
+                    name="Alpaca (from .env)",
+                    provider=Provider.ALPACA,
+                    api_key=api_key,
+                    api_secret=api_secret,
+                )
+            )
+            created_service = True
+        except MarketDataCatalogError as exc:
+            raise _operator_error(str(exc)) from exc
+
+    existing_pipelines = pipelines.list_pipelines().pipelines
+    existing_alpaca_pipeline = next(
+        (p for p in existing_pipelines if p.provider == Provider.ALPACA),
+        None,
+    )
+    if existing_alpaca_pipeline is not None:
+        pipeline = existing_alpaca_pipeline
+        created_pipeline = False
+    else:
+        try:
+            pipeline = pipelines.create_pipeline(
+                MarketDataPipelineWrite(
+                    display_name="Alpaca paper market data",
+                    provider=Provider.ALPACA,
+                    trading_mode=TradingMode.BROKER_PAPER,
+                )
+            )
+            created_pipeline = True
+        except PipelineRegistryError as exc:
+            raise _operator_error(str(exc)) from exc
+
+    return BootstrapFromEnvResponse(
+        created_service=created_service,
+        created_pipeline=created_pipeline,
+        skipped_reason=None,
+        service=service,
+        pipeline=pipeline,
+    )
 
 
 def _operator_error(message: str) -> Exception:

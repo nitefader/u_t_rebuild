@@ -1077,3 +1077,47 @@ pre {
   border-radius: 3px;
   font-size: 12px;
 }
+
+.bootstrap-banner {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 16px;
+  align-items: center;
+  background: #fff7e0;
+  border: 1px solid #d4ae6a;
+  border-left: 4px solid #b58731;
+  border-radius: 8px;
+  padding: 14px 18px;
+  margin-bottom: 12px;
+}
+
+.bootstrap-banner strong {
+  font-size: 14px;
+  color: #5b4017;
+}
+
+.bootstrap-banner p {
+  margin: 4px 0 0;
+  color: #6a4f00;
+  font-size: 13px;
+}
+
+.bootstrap-banner__actions button {
+  background: #b58731;
+  color: #fff;
+  border-color: #8a651f;
+}
+
+.bootstrap-banner__actions button:hover {
+  background: #976e1f;
+}
+
+.bootstrap-banner--success {
+  background: #ecf6ef;
+  border-color: #6fb287;
+  border-left-color: #2f7a4d;
+  color: #1f5a35;
+  padding: 10px 14px;
+  font-size: 13px;
+  display: block;
+}
