@@ -1,13 +1,18 @@
 from __future__ import annotations
 
 try:  # pragma: no cover - optional dotenv support; tests don't depend on it.
+    import os as _os
+
     from dotenv import load_dotenv
 
-    # override=True so edits to .env always win over stale shell-session
-    # env vars. The operator UI treats .env as the source of truth — if
-    # they need to inject a one-off override they can `set FOO=...` then
-    # comment out the .env line.
-    load_dotenv(override=True)
+    # In dev / paper, edits to .env always win over stale shell-session
+    # env vars (override=True). In production, .env (if present at all)
+    # must NOT silently overwrite vars set by the deployment environment
+    # — that would mask credential rotation accidents. Guard by
+    # UTOS_ENVIRONMENT: production / prod / live disable override.
+    _env = (_os.getenv("UTOS_ENVIRONMENT") or "").lower()
+    _override = _env not in {"production", "prod", "live"}
+    load_dotenv(override=_override)
 except ImportError:  # pragma: no cover
     pass
 
