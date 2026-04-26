@@ -3,7 +3,11 @@ from __future__ import annotations
 try:  # pragma: no cover - optional dotenv support; tests don't depend on it.
     from dotenv import load_dotenv
 
-    load_dotenv()
+    # override=True so edits to .env always win over stale shell-session
+    # env vars. The operator UI treats .env as the source of truth — if
+    # they need to inject a one-off override they can `set FOO=...` then
+    # comment out the .env line.
+    load_dotenv(override=True)
 except ImportError:  # pragma: no cover
     pass
 
