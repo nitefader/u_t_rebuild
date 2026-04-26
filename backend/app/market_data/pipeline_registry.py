@@ -35,9 +35,22 @@ class PipelineRegistryError(ValueError):
     """Operator-readable Pipeline registry failure."""
 
 
-class PipelineRegistrySnapshot(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
+CURRENT_PIPELINE_REGISTRY_SCHEMA_VERSION = 1
 
+
+class PipelineRegistrySnapshot(BaseModel):
+    """Persisted pipeline registry envelope.
+
+    ``extra="ignore"`` on the snapshot so a newer file written with
+    additional top-level fields can still be loaded by older code.
+    Field additions on persisted records still need a tolerant reader,
+    but ``schema_version`` lets ``_load`` distinguish "old, fine" from
+    "newer than this binary understands" without a Pydantic crash.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="ignore")
+
+    schema_version: int = CURRENT_PIPELINE_REGISTRY_SCHEMA_VERSION
     pipelines: tuple[MarketDataPipeline, ...] = ()
 
 
@@ -155,6 +168,13 @@ class MarketDataPipelineRegistry:
         if self._store_path is None or not self._store_path.exists():
             return
         payload = json.loads(self._store_path.read_text(encoding="utf-8"))
+        version = payload.get("schema_version", 0)
+        if version > CURRENT_PIPELINE_REGISTRY_SCHEMA_VERSION:
+            raise PipelineRegistryError(
+                f"pipeline registry on disk is schema_version={version}, but this binary "
+                f"only understands up to {CURRENT_PIPELINE_REGISTRY_SCHEMA_VERSION}; "
+                "rolling back? upgrade the binary or restore an older snapshot."
+            )
         snapshot = PipelineRegistrySnapshot.model_validate(payload)
         self._records = {pipeline.id: pipeline for pipeline in snapshot.pipelines}
 

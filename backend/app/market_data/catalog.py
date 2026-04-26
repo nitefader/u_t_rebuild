@@ -39,9 +39,22 @@ class MarketDataCatalogError(ValueError):
     """Operator-readable Market Data catalog failure."""
 
 
-class MarketDataCatalogSnapshot(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
+CURRENT_MARKET_DATA_CATALOG_SCHEMA_VERSION = 1
 
+
+class MarketDataCatalogSnapshot(BaseModel):
+    """Persisted market-data catalog envelope.
+
+    ``extra="ignore"`` so a newer file written with additional top-level
+    fields can still be loaded by older code. Field additions on persisted
+    records use the same pattern; ``schema_version`` lets ``_load``
+    distinguish "old, fine" from "newer than this binary understands"
+    without a Pydantic crash.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="ignore")
+
+    schema_version: int = CURRENT_MARKET_DATA_CATALOG_SCHEMA_VERSION
     market_data_services: tuple[MarketDataServiceRecord, ...] = ()
 
 
@@ -231,6 +244,13 @@ class MarketDataServiceCatalog:
         if self._store_path is None or not self._store_path.exists():
             return
         payload = json.loads(self._store_path.read_text(encoding="utf-8"))
+        version = payload.get("schema_version", 0)
+        if version > CURRENT_MARKET_DATA_CATALOG_SCHEMA_VERSION:
+            raise MarketDataCatalogError(
+                f"market data catalog on disk is schema_version={version}, but this binary "
+                f"only understands up to {CURRENT_MARKET_DATA_CATALOG_SCHEMA_VERSION}; "
+                "rolling back? upgrade the binary or restore an older snapshot."
+            )
         snapshot = MarketDataCatalogSnapshot.model_validate(payload)
         self._records = self._dedupe(snapshot.market_data_services)
 

@@ -29,8 +29,21 @@ class AIProviderCatalogError(ValueError):
     """Operator-readable AI provider catalog failure."""
 
 
+CURRENT_AI_PROVIDER_CATALOG_SCHEMA_VERSION = 1
+
+
 class AIProviderCatalogSnapshot(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
+    """Persisted AI-provider catalog envelope.
+
+    ``extra="ignore"`` so a newer file written with additional top-level
+    fields can still be loaded by older code; ``schema_version`` lets
+    ``_load`` distinguish "old, fine" from "newer than this binary
+    understands" without a Pydantic crash.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="ignore")
+
+    schema_version: int = CURRENT_AI_PROVIDER_CATALOG_SCHEMA_VERSION
 
     ai_services: tuple[AIServiceRecord, ...] = ()
 
@@ -149,6 +162,13 @@ class AIProviderCatalog:
         if self._store_path is None or not self._store_path.exists():
             return
         payload = json.loads(self._store_path.read_text(encoding="utf-8"))
+        version = payload.get("schema_version", 0)
+        if version > CURRENT_AI_PROVIDER_CATALOG_SCHEMA_VERSION:
+            raise AIProviderCatalogError(
+                f"AI provider catalog on disk is schema_version={version}, but this binary "
+                f"only understands up to {CURRENT_AI_PROVIDER_CATALOG_SCHEMA_VERSION}; "
+                "rolling back? upgrade the binary or restore an older snapshot."
+            )
         snapshot = AIProviderCatalogSnapshot.model_validate(payload)
         self._records = self._dedupe(snapshot.ai_services)
 

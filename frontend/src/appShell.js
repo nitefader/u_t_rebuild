@@ -25,6 +25,7 @@ export async function mountSystemStatusBadge(navElement, api) {
 
 function badgeClass(status) {
   if (!status.alpaca_credentials_present) return "nav-status nav-status--warn";
+  if (status.operator_environment_conflict) return "nav-status nav-status--warn";
   if (status.alpaca_test_stream) return "nav-status nav-status--test";
   return "nav-status nav-status--ok";
 }
@@ -33,15 +34,23 @@ function badgeLabel(status) {
   if (!status.alpaca_credentials_present) return "Alpaca not configured";
   if (status.alpaca_test_stream) return `Alpaca · ${status.operator_environment} · TEST stream`;
   const feed = (status.alpaca_data_feed || "iex").toUpperCase();
-  return `Alpaca · ${status.operator_environment} · ${feed}`;
+  const suffix = status.operator_environment_conflict ? " · ⚠ env conflict" : "";
+  return `Alpaca · ${status.operator_environment} · ${feed}${suffix}`;
 }
 
 function badgeTooltip(status) {
+  const envSource = status.operator_environment_source === "explicit"
+    ? "UTOS_ENVIRONMENT (explicit)"
+    : "inferred from ALPACA_BASE_URL";
   const parts = [
     `Endpoint: ${status.alpaca_endpoint}`,
+    `Environment: ${status.operator_environment} (${envSource})`,
     `Credentials: ${status.alpaca_credentials_present ? "configured" : "missing — set ALPACA_API_KEY and ALPACA_SECRET_KEY"}`,
     `Market data: ${status.alpaca_test_stream ? "FAKEPACA test stream (24/7)" : `${(status.alpaca_data_feed || "iex").toUpperCase()} feed`}`
   ];
+  if (status.operator_environment_conflict) {
+    parts.push(`Conflict: ${status.operator_environment_conflict}`);
+  }
   return parts.join("\n");
 }
 

@@ -64,3 +64,44 @@ def test_status_recognizes_live_endpoint(monkeypatch) -> None:
     monkeypatch.delenv("UTOS_ENVIRONMENT", raising=False)
     response = system_status()
     assert response.operator_environment == "live"
+    assert response.operator_environment_source == "inferred_from_endpoint"
+    assert response.operator_environment_conflict is None
+
+
+def test_status_uses_explicit_utos_environment_over_url(monkeypatch) -> None:
+    monkeypatch.setenv("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
+    monkeypatch.setenv("UTOS_ENVIRONMENT", "paper")
+    response = system_status()
+    assert response.operator_environment == "paper"
+    assert response.operator_environment_source == "explicit"
+    assert response.operator_environment_conflict is None
+
+
+def test_status_normalizes_production_alias_to_live(monkeypatch) -> None:
+    monkeypatch.setenv("ALPACA_BASE_URL", "https://api.alpaca.markets")
+    monkeypatch.setenv("UTOS_ENVIRONMENT", "production")
+    response = system_status()
+    assert response.operator_environment == "live"
+    assert response.operator_environment_source == "explicit"
+    assert response.operator_environment_conflict is None
+
+
+def test_status_surfaces_conflict_when_explicit_disagrees_with_url(monkeypatch) -> None:
+    """UTOS_ENVIRONMENT wins, but the conflict is surfaced for the operator."""
+    monkeypatch.setenv("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
+    monkeypatch.setenv("UTOS_ENVIRONMENT", "live")
+    response = system_status()
+    assert response.operator_environment == "live"  # explicit wins
+    assert response.operator_environment_source == "explicit"
+    assert "disagrees" in (response.operator_environment_conflict or "")
+    assert "paper" in (response.operator_environment_conflict or "")
+
+
+def test_status_warns_on_unknown_utos_environment(monkeypatch) -> None:
+    monkeypatch.setenv("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
+    monkeypatch.setenv("UTOS_ENVIRONMENT", "staging")
+    response = system_status()
+    assert response.operator_environment == "staging"  # used as-is
+    assert response.operator_environment_source == "explicit"
+    assert response.operator_environment_conflict is not None
+    assert "not one of" in response.operator_environment_conflict

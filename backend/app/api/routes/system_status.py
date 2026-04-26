@@ -30,6 +30,44 @@ class SystemStatusResponse(BaseModel):
     alpaca_endpoint: str
     alpaca_data_feed: str
     operator_environment: str
+    operator_environment_source: str
+    operator_environment_conflict: str | None = None
+
+
+_PAPER_ENDPOINT_HINT = "paper-api"
+_KNOWN_ENVIRONMENTS = {"paper", "live"}
+
+
+def _resolve_operator_environment(endpoint: str) -> tuple[str, str, str | None]:
+    """Return (environment, source, conflict_message).
+
+    UTOS_ENVIRONMENT is the source of truth. When unset, paper-vs-live is
+    inferred from the URL substring (legacy fallback). When both are set
+    and disagree, the explicit env wins but a conflict_message surfaces
+    so the operator notices the misconfiguration instead of silently
+    operating against the wrong account.
+    """
+    raw = os.getenv("UTOS_ENVIRONMENT")
+    inferred = "paper" if _PAPER_ENDPOINT_HINT in endpoint else "live"
+    if raw is None or raw == "":
+        return inferred, "inferred_from_endpoint", None
+    normalized = raw.strip().lower()
+    if normalized in {"prod", "production"}:
+        normalized = "live"
+    if normalized not in _KNOWN_ENVIRONMENTS:
+        return (
+            normalized,
+            "explicit",
+            f"UTOS_ENVIRONMENT={raw!r} is not one of {sorted(_KNOWN_ENVIRONMENTS)}; using as-is",
+        )
+    if normalized != inferred:
+        return (
+            normalized,
+            "explicit",
+            f"UTOS_ENVIRONMENT={normalized!r} disagrees with ALPACA_BASE_URL "
+            f"(URL implies {inferred!r}); using UTOS_ENVIRONMENT but please reconcile",
+        )
+    return normalized, "explicit", None
 
 
 def system_status() -> SystemStatusResponse:
@@ -37,8 +75,7 @@ def system_status() -> SystemStatusResponse:
     test_stream_raw = setting("alpaca_use_test_stream", fallback_env="ALPACA_USE_TEST_STREAM", default="0")
     test_stream = str(test_stream_raw) in ("1", "true", "True", True)
     endpoint = os.getenv("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
-    is_paper = "paper-api" in endpoint
-    operator_environment = os.getenv("UTOS_ENVIRONMENT") or ("paper" if is_paper else "live")
+    operator_environment, source, conflict = _resolve_operator_environment(endpoint)
     if test_stream:
         data_feed = "test"
     else:
@@ -49,6 +86,8 @@ def system_status() -> SystemStatusResponse:
         alpaca_endpoint=endpoint,
         alpaca_data_feed=data_feed,
         operator_environment=operator_environment,
+        operator_environment_source=source,
+        operator_environment_conflict=conflict,
     )
 
 
