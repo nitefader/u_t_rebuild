@@ -51,16 +51,39 @@ class AIProviderCatalog:
         return AIServiceList(services=tuple(sorted(self._records.values(), key=lambda service: service.created_at)))
 
     def create_service(self, request: AIServiceWrite) -> AIServiceRecord:
+        new_ref = _credential_ref(request.api_key)
+        existing = self.find_by_credentials(request.provider, new_ref)
+        if existing is not None:
+            if existing.name != request.name:
+                raise AIProviderCatalogError(
+                    f"a {request.provider.value} provider with these credentials already exists "
+                    f"as '{existing.name}' (id={existing.id}); duplicates are not allowed"
+                )
+            return existing
         record = AIServiceRecord(
             name=request.name,
             provider=request.provider,
-            credentials_ref=_credential_ref(request.api_key),
+            credentials_ref=new_ref,
             has_api_key=bool(request.api_key),
             capability_label=request.capability_label,
         )
         self._records[record.id] = record
         self._save()
         return record
+
+    def find_by_credentials(self, provider, credentials_ref: str | None) -> AIServiceRecord | None:
+        if credentials_ref is None:
+            return None
+        target_hash = _credential_hash_from_ref(credentials_ref)
+        if target_hash is None:
+            return None
+        for service in self._records.values():
+            if service.provider != provider:
+                continue
+            existing_hash = _credential_hash_from_ref(service.credentials_ref)
+            if existing_hash == target_hash:
+                return service
+        return None
 
     def get_service(self, service_id: UUID) -> AIServiceRecord:
         return self._records[_known(service_id, self._records, "AI service")]
@@ -127,7 +150,28 @@ class AIProviderCatalog:
             return
         payload = json.loads(self._store_path.read_text(encoding="utf-8"))
         snapshot = AIProviderCatalogSnapshot.model_validate(payload)
-        self._records = {service.id: service for service in snapshot.ai_services}
+        self._records = self._dedupe(snapshot.ai_services)
+
+    @staticmethod
+    def _dedupe(services: tuple[AIServiceRecord, ...]) -> dict[UUID, AIServiceRecord]:
+        groups: dict[tuple, list[AIServiceRecord]] = {}
+        unkeyed: list[AIServiceRecord] = []
+        for service in services:
+            ref_hash = _credential_hash_from_ref(service.credentials_ref)
+            if ref_hash is None:
+                unkeyed.append(service)
+                continue
+            groups.setdefault((service.provider, ref_hash), []).append(service)
+        result: dict[UUID, AIServiceRecord] = {}
+        for service in unkeyed:
+            result[service.id] = service
+        for group in groups.values():
+            group.sort(key=lambda s: s.created_at)
+            kept = group[0]
+            if any(other.is_default for other in group[1:]):
+                kept = kept.model_copy(update={"is_default": True})
+            result[kept.id] = kept
+        return result
 
     def _save(self) -> None:
         if self._store_path is None:
@@ -141,6 +185,20 @@ def _credential_ref(secret: str | None) -> str | None:
     if not secret:
         return None
     return f"ai-provider-credential:{sha256(secret.encode('utf-8')).hexdigest()[:12]}"
+
+
+def _credential_hash_from_ref(ref: str | None) -> str | None:
+    """Strip the prefix from a ``credentials_ref`` to get just the hash.
+
+    Older records used the ``service-credential:`` prefix; newer ones use
+    ``ai-provider-credential:``. Both refer to the same logical account
+    when the hash matches.
+    """
+    if not ref:
+        return None
+    if ":" in ref:
+        return ref.split(":", 1)[1]
+    return ref
 
 
 def _known(service_id: UUID, records: dict[UUID, AIServiceRecord], label: str) -> UUID:

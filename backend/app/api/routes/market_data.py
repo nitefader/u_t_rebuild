@@ -201,11 +201,14 @@ def bootstrap_from_env(
             skipped_reason="missing_credentials",
         )
 
-    existing_services = catalog.list_services().services
-    existing_alpaca = next(
-        (svc for svc in existing_services if svc.provider == Provider.ALPACA),
-        None,
-    )
+    # Dedup by (provider, credentials hash). If the operator already has an
+    # Alpaca service registered with these exact env credentials (under any
+    # name), reuse it rather than creating a second record. The catalog
+    # itself enforces this; we mirror it here so the response correctly
+    # reports `created_service=False`.
+    from backend.app.market_data.catalog import _credential_ref  # local helper
+    candidate_ref = _credential_ref(api_key)
+    existing_alpaca = catalog.find_by_credentials(Provider.ALPACA, candidate_ref)
     if existing_alpaca is not None:
         service = existing_alpaca
         created_service = False

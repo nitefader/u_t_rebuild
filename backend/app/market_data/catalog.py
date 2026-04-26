@@ -74,10 +74,23 @@ class MarketDataServiceCatalog:
     def create_service(self, request: MarketDataServiceWrite) -> MarketDataServiceRecord:
         profile = provider_capability_profile(request.provider)
         manual_capabilities = request.capabilities is not None
+        new_ref = _credential_ref(request.api_key)
+        # Duplicate prevention: same provider + same credentials hash is the
+        # same logical account. Re-registering returns the existing record
+        # (idempotent for bootstrap-from-env, hard rejection for distinct
+        # service names sharing one credential).
+        existing = self.find_by_credentials(request.provider, new_ref)
+        if existing is not None:
+            if existing.name != request.name:
+                raise MarketDataCatalogError(
+                    f"a {request.provider.value} service with these credentials already exists "
+                    f"as '{existing.name}' (id={existing.id}); duplicates are not allowed"
+                )
+            return existing
         record = MarketDataServiceRecord(
             name=request.name,
             provider=request.provider,
-            credentials_ref=_credential_ref(request.api_key),
+            credentials_ref=new_ref,
             has_api_key=bool(request.api_key),
             has_api_secret=bool(request.api_secret),
             api_key_shape_valid=(not request.api_key or len(request.api_key.strip()) >= 6),
@@ -91,6 +104,26 @@ class MarketDataServiceCatalog:
         self._records[record.id] = record
         self._save()
         return record
+
+    def find_by_credentials(self, provider: Provider, credentials_ref: str | None) -> MarketDataServiceRecord | None:
+        """Return the existing service matching ``(provider, creds-hash)``, if any.
+
+        Compares only the credential hash suffix (after the colon) so that
+        legacy ``service-credential:HASH`` records dedupe against current
+        ``market-data-credential:HASH`` records sharing the same secret.
+        """
+        if credentials_ref is None:
+            return None
+        target_hash = _credential_hash_from_ref(credentials_ref)
+        if target_hash is None:
+            return None
+        for service in self._records.values():
+            if service.provider != provider:
+                continue
+            existing_hash = _credential_hash_from_ref(service.credentials_ref)
+            if existing_hash == target_hash:
+                return service
+        return None
 
     def get_service(self, service_id: UUID) -> MarketDataServiceRecord:
         return self._records[_known(service_id, self._records, "market data service")]
@@ -199,7 +232,35 @@ class MarketDataServiceCatalog:
             return
         payload = json.loads(self._store_path.read_text(encoding="utf-8"))
         snapshot = MarketDataCatalogSnapshot.model_validate(payload)
-        self._records = {service.id: service for service in snapshot.market_data_services}
+        self._records = self._dedupe(snapshot.market_data_services)
+
+    @staticmethod
+    def _dedupe(services: tuple[MarketDataServiceRecord, ...]) -> dict[UUID, MarketDataServiceRecord]:
+        """Drop duplicates by ``(provider, credentials_hash)``.
+
+        Keeps the oldest (by ``created_at``) record so an
+        operator-customized name and is_default flag survive when a
+        bootstrap-from-env later registered a generic copy. Defaults are
+        preserved if any duplicate is marked default.
+        """
+        groups: dict[tuple[Provider, str | None], list[MarketDataServiceRecord]] = {}
+        unkeyed: list[MarketDataServiceRecord] = []
+        for service in services:
+            ref_hash = _credential_hash_from_ref(service.credentials_ref)
+            if ref_hash is None:
+                unkeyed.append(service)
+                continue
+            groups.setdefault((service.provider, ref_hash), []).append(service)
+        result: dict[UUID, MarketDataServiceRecord] = {}
+        for service in unkeyed:
+            result[service.id] = service
+        for group in groups.values():
+            group.sort(key=lambda s: s.created_at)
+            kept = group[0]
+            if any(other.is_default for other in group[1:]):
+                kept = kept.model_copy(update={"is_default": True})
+            result[kept.id] = kept
+        return result
 
     def _save(self) -> None:
         if self._store_path is None:
@@ -213,6 +274,20 @@ def _credential_ref(secret: str | None) -> str | None:
     if not secret:
         return None
     return f"market-data-credential:{sha256(secret.encode('utf-8')).hexdigest()[:12]}"
+
+
+def _credential_hash_from_ref(ref: str | None) -> str | None:
+    """Strip the prefix from a ``credentials_ref`` to get just the hash.
+
+    Legacy records use ``service-credential:HASH``, current code uses
+    ``market-data-credential:HASH``. Both refer to the same logical
+    account when HASH matches; we dedup on the hash alone.
+    """
+    if not ref:
+        return None
+    if ":" in ref:
+        return ref.split(":", 1)[1]
+    return ref
 
 
 def _known(service_id: UUID, records: dict[UUID, MarketDataServiceRecord], label: str) -> UUID:
