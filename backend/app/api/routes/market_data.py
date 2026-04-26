@@ -103,6 +103,14 @@ def validate_service(service_id: UUID, catalog: CatalogDependency) -> MarketData
 
 @router.post("/services/{service_id}/set-default", response_model=MarketDataServiceRecord)
 def set_default_service(service_id: UUID, catalog: CatalogDependency) -> MarketDataServiceRecord:
+    """DEPRECATED. "Default" is a Pipeline concern (which stream is the
+    canonical one for a provider), not a Service concern (a Service is
+    just a credential record). Use POST /pipelines/{id}/set-default.
+
+    This endpoint still mutates the legacy ``is_default`` flag for
+    backward compat, but new clients should not call it. The frontend
+    no longer surfaces the action.
+    """
     try:
         return catalog.set_default(service_id)
     except MarketDataCatalogError as exc:
