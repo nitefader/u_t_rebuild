@@ -116,8 +116,8 @@ class MarketDataPipelineRegistry:
         for pipeline_id, existing in self._records.items():
             if pipeline_id == ignore_pipeline_id:
                 continue
-            if existing.status == PipelineStatus.DISABLED:
-                continue
+            if existing.status != PipelineStatus.ACTIVE:
+                continue  # invariant only fires against ACTIVE pipelines (per DE B2)
             if existing.service_id != service_id:
                 continue
             if existing.trading_mode != trading_mode:

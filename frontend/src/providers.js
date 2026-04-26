@@ -146,6 +146,7 @@ function renderPipelineRow(pipeline) {
     </dl>
     <div class="chip-row" aria-label="Capability summary">${capabilityChips(pipeline.capabilities)}</div>
     <div class="button-row">
+      ${!pipeline.service_id ? `<button type="button" data-action="bind-pipeline-service" data-id="${escapeHtml(pipeline.id)}" title="Backfill service_id on this legacy pipeline">Bind to Service…</button>` : ""}
       <button type="button" data-action="default-pipeline" data-id="${escapeHtml(pipeline.id)}">Set Default</button>
       <button type="button" data-action="disable-pipeline" data-id="${escapeHtml(pipeline.id)}">Disable</button>
     </div>
@@ -525,24 +526,24 @@ export function renderProviders(state = {}) {
 function renderBootstrapBanner(state) {
   const status = state.systemStatus;
   const services = state.marketData?.services || [];
-  const pipelines = state.pipelines?.pipelines || [];
   const hasAlpacaService = services.some((svc) => svc.provider === "alpaca");
-  const hasAlpacaPipeline = pipelines.some((p) => p.provider === "alpaca");
   const credsPresent = !!(status && status.alpaca_credentials_present);
 
-  if (!credsPresent || (hasAlpacaService && hasAlpacaPipeline)) {
+  // Bootstrap is a one-shot for the *Service*. Pipeline creation is a
+  // separate explicit action ("Activate as Stream…" on each Service row).
+  // The banner shows only when creds exist and no Alpaca Service is
+  // registered yet. Once the Service exists, the banner stays hidden;
+  // operators activate streams from the Services tab.
+  if (!credsPresent || hasAlpacaService) {
     return state.bootstrapNotice
       ? `<section class="bootstrap-banner bootstrap-banner--success" role="status">${escapeHtml(state.bootstrapNotice)}</section>`
       : "";
   }
 
-  const detail = [];
-  if (!hasAlpacaService) detail.push("Market Data Service");
-  if (!hasAlpacaPipeline) detail.push("Pipeline");
   return `<section class="bootstrap-banner" role="status">
     <div>
       <strong>Alpaca credentials detected in .env</strong>
-      <p>No Alpaca ${detail.join(" or ")} registered in the catalog yet. Click below to register the env-based credentials as a default Alpaca Market Data Service and Pipeline.</p>
+      <p>No Alpaca Market Data Service is registered yet. Click below to register the env credentials as an Alpaca Service. Then "Activate as Stream…" on the Services tab to create one or more Pipelines (one per data feed: IEX, SIP, etc.).</p>
     </div>
     <div class="bootstrap-banner__actions">
       <button type="button" data-action="bootstrap-from-env"${state.bootstrapping ? " disabled" : ""}>
@@ -710,13 +711,10 @@ export async function mountProviders(root, deps = {}) {
         const result = await pipelinesApi.bootstrapFromEnv();
         if (result.skipped_reason === "missing_credentials") {
           state.bootstrapError = "Backend reports no Alpaca credentials in .env.";
+        } else if (result.created_service) {
+          state.bootstrapNotice = "Bootstrap complete — Alpaca Market Data Service registered. Use \"Activate as Stream…\" on the Services tab to create one or more Pipelines.";
         } else {
-          const parts = [];
-          if (result.created_service) parts.push("registered Alpaca Market Data Service");
-          if (result.created_pipeline) parts.push("created default Pipeline");
-          state.bootstrapNotice = parts.length
-            ? `Bootstrap complete — ${parts.join(", ")}.`
-            : "Bootstrap complete — Alpaca catalog entries already existed.";
+          state.bootstrapNotice = "Bootstrap complete — Alpaca Service was already registered.";
         }
       } catch (err) {
         state.bootstrapError = err.message || String(err);
@@ -731,6 +729,22 @@ export async function mountProviders(root, deps = {}) {
     if (action === "cancel-pipeline-form") state.pipelineFormState = null;
     if (action === "default-pipeline" && id) await pipelinesApi.setDefaultPipeline(id);
     if (action === "disable-pipeline" && id) await pipelinesApi.disablePipeline(id);
+    if (action === "bind-pipeline-service" && id) {
+      const services = (state.marketData?.services || []).filter((svc) => svc.status !== "disabled");
+      if (services.length === 0) {
+        alert("No Market Data Services registered. Add one first.");
+        return;
+      }
+      const choices = services.map((svc) => `${svc.id}  —  ${svc.name} (${svc.provider})`).join("\n");
+      const picked = window.prompt(`Bind pipeline ${id} to which Service?\n\n${choices}\n\nPaste the service id (the UUID before the dash):`);
+      if (!picked) return;
+      const serviceId = picked.trim().split(/\s/)[0];
+      try {
+        await pipelinesApi.attachServiceToPipeline(id, serviceId);
+      } catch (err) {
+        alert(`Bind failed: ${err.message || err}`);
+      }
+    }
 
     if (action === "show-market-data-form") state.marketDataFormState = { visible: true, provider: "alpaca" };
     if (action === "cancel-market-data-form") state.marketDataFormState = null;

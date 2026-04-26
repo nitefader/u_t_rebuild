@@ -295,3 +295,83 @@ def test_attach_service_id_enforces_invariant(tmp_path) -> None:
     )
     with pytest.raises(PipelineRegistryError, match="duplicate active streams"):
         reg.attach_service_id(legacy.id, service_id)
+
+
+def test_update_pipeline_rebind_to_existing_identity_is_rejected(tmp_path) -> None:
+    """Per DE round-3 B8: update_pipeline must enforce the invariant on rebind.
+
+    If the operator rebinds a pipeline to (service_id, mode, feed) that's
+    already taken by another ACTIVE pipeline, registry must reject — not
+    silently allow drift.
+    """
+    from uuid import uuid4
+
+    reg = _registry(tmp_path)
+    service_a = uuid4()
+    service_b = uuid4()
+    occupant = reg.create_pipeline(
+        MarketDataPipelineWrite(
+            display_name="Occupant",
+            provider=Provider.ALPACA,
+            service_id=service_a,
+            data_feed="iex",
+            trading_mode=TradingMode.BROKER_PAPER,
+        )
+    )
+    other = reg.create_pipeline(
+        MarketDataPipelineWrite(
+            display_name="Other",
+            provider=Provider.ALPACA,
+            service_id=service_b,
+            data_feed="iex",
+            trading_mode=TradingMode.BROKER_PAPER,
+        )
+    )
+    # Rebind 'other' to service_a → would collide with 'occupant'.
+    with pytest.raises(PipelineRegistryError, match="duplicate active streams"):
+        reg.update_pipeline(
+            other.id,
+            MarketDataPipelineWrite(
+                display_name="Other (rebound)",
+                provider=Provider.ALPACA,
+                service_id=service_a,
+                data_feed="iex",
+                trading_mode=TradingMode.BROKER_PAPER,
+            ),
+        )
+    # 'occupant' untouched.
+    assert reg.get_pipeline(occupant.id).display_name == "Occupant"
+
+
+def test_disabled_pipeline_does_not_block_invariant_check(tmp_path) -> None:
+    """Per DE round-3 B2: invariant must filter on ACTIVE, not 'not DISABLED'.
+
+    A DRAFT pipeline (theoretical today, but the enum value exists) does
+    not count as an active stream.
+    """
+    from uuid import uuid4
+
+    reg = _registry(tmp_path)
+    # Manually inject a DRAFT pipeline so the invariant check sees it.
+    service_id = uuid4()
+    draft_pipeline = MarketDataPipeline(
+        display_name="Draft",
+        provider=Provider.ALPACA,
+        service_id=service_id,
+        data_feed="iex",
+        trading_mode=TradingMode.BROKER_PAPER,
+        status=PipelineStatus.DRAFT,
+    )
+    reg._records[draft_pipeline.id] = draft_pipeline
+    # Creating an ACTIVE pipeline with the same identity must succeed —
+    # the DRAFT does not occupy the active-stream slot.
+    active = reg.create_pipeline(
+        MarketDataPipelineWrite(
+            display_name="Active",
+            provider=Provider.ALPACA,
+            service_id=service_id,
+            data_feed="iex",
+            trading_mode=TradingMode.BROKER_PAPER,
+        )
+    )
+    assert active.id != draft_pipeline.id

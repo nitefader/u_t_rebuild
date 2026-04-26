@@ -142,8 +142,34 @@ def list_pipelines(pipelines: PipelineDependency) -> MarketDataPipelineList:
 
 
 @router.post("/pipelines", response_model=MarketDataPipeline)
-def create_pipeline(request: MarketDataPipelineWrite, pipelines: PipelineDependency) -> MarketDataPipeline:
-    return pipelines.create_pipeline(request)
+def create_pipeline(
+    request: MarketDataPipelineWrite,
+    catalog: CatalogDependency,
+    pipelines: PipelineDependency,
+) -> MarketDataPipeline:
+    """Create a Pipeline. If ``service_id`` is bound, ``provider`` is
+    derived from the Service rather than trusted from the request — the
+    FK is the source of truth, the denormalized field cannot drift."""
+    request = _derive_provider_from_service(request, catalog)
+    try:
+        return pipelines.create_pipeline(request)
+    except PipelineRegistryError as exc:
+        raise _operator_error(str(exc)) from exc
+
+
+def _derive_provider_from_service(
+    request: MarketDataPipelineWrite,
+    catalog: "MarketDataServiceCatalog",
+) -> MarketDataPipelineWrite:
+    if request.service_id is None:
+        return request
+    try:
+        service = catalog.get_service(request.service_id)
+    except MarketDataCatalogError as exc:
+        raise _operator_error(str(exc)) from exc
+    if service.provider == request.provider:
+        return request
+    return request.model_copy(update={"provider": service.provider})
 
 
 @router.get("/pipelines/{pipeline_id}", response_model=MarketDataPipeline)
@@ -155,7 +181,13 @@ def get_pipeline(pipeline_id: UUID, pipelines: PipelineDependency) -> MarketData
 
 
 @router.put("/pipelines/{pipeline_id}", response_model=MarketDataPipeline)
-def update_pipeline(pipeline_id: UUID, request: MarketDataPipelineWrite, pipelines: PipelineDependency) -> MarketDataPipeline:
+def update_pipeline(
+    pipeline_id: UUID,
+    request: MarketDataPipelineWrite,
+    catalog: CatalogDependency,
+    pipelines: PipelineDependency,
+) -> MarketDataPipeline:
+    request = _derive_provider_from_service(request, catalog)
     try:
         return pipelines.update_pipeline(pipeline_id, request)
     except PipelineRegistryError as exc:
@@ -254,6 +286,37 @@ class CreatePipelineFromServiceRequest(BaseModel):
     display_name: str | None = None
 
 
+class AttachServiceRequest(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    service_id: UUID
+
+
+@router.post("/pipelines/{pipeline_id}/attach-service", response_model=MarketDataPipeline)
+def attach_service_to_pipeline(
+    pipeline_id: UUID,
+    request: AttachServiceRequest,
+    catalog: CatalogDependency,
+    pipelines: PipelineDependency,
+) -> MarketDataPipeline:
+    """Backfill ``service_id`` on a legacy v1 pipeline that loaded without one.
+
+    Per DE round-3 B6: pre-R2-A pipelines load with ``service_id=None``
+    and the operator had no path forward except delete-and-recreate.
+    This endpoint binds the pipeline to a registered Service; the
+    registry's ``(service_id, trading_mode, data_feed)`` invariant
+    rejects bindings that would create a duplicate active stream.
+    """
+    try:
+        catalog.get_service(request.service_id)
+    except MarketDataCatalogError as exc:
+        raise _operator_error(str(exc)) from exc
+    try:
+        return pipelines.attach_service_id(pipeline_id, request.service_id)
+    except PipelineRegistryError as exc:
+        raise _operator_error(str(exc)) from exc
+
+
 @router.post("/pipelines/from-service", response_model=MarketDataPipeline)
 def create_pipeline_from_service(
     request: CreatePipelineFromServiceRequest,
@@ -269,8 +332,8 @@ def create_pipeline_from_service(
     """
     try:
         service = catalog.get_service(request.service_id)
-    except KeyError as exc:
-        raise _operator_error(f"unknown service: {request.service_id}") from exc
+    except MarketDataCatalogError as exc:
+        raise _operator_error(str(exc)) from exc
 
     display_name = request.display_name or f"{service.name} · {request.data_feed}"
     write = MarketDataPipelineWrite(
