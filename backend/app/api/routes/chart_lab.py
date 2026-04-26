@@ -171,17 +171,36 @@ if APIRouter is not None:  # pragma: no cover - WebSocket only registers with re
             await websocket.close()
             return
 
+        from backend.app.domain import TradingMode
+        from backend.app.runtime.runtime_context import HubKey, hub_registry
+
         loop = asyncio.get_running_loop()
-        hub = MarketDataStreamHub(market_data_adapter=build_market_data_adapter(config))
+        # All Chart Lab tabs sharing the same (provider, mode, feed) share one
+        # underlying StockDataStream connection — the singleton hub fans out
+        # bars to per-tab subscribers by symbol.
+        hub = hub_registry().get_or_create(
+            HubKey(
+                provider="alpaca",
+                trading_mode=TradingMode.BROKER_PAPER.value,
+                data_feed=config.data_feed,
+            )
+        )
         consumer_id = f"chart-lab:{uuid4().hex[:8]}"
+        ws_open = True
 
         def on_bar(bar: NormalizedBar) -> None:
+            if not ws_open:
+                return
             payload = json.dumps({"type": "bar", "data": serialize_bar(bar)})
-            asyncio.run_coroutine_threadsafe(websocket.send_text(payload), loop)
+            try:
+                asyncio.run_coroutine_threadsafe(websocket.send_text(payload), loop)
+            except Exception:  # noqa: BLE001 - loop closed mid-shutdown
+                pass
 
         try:
             hub.register(consumer_id, [symbol], on_bar)
-            hub.start()
+            if not hub.is_running:
+                hub.start()
             await websocket.send_text(json.dumps({"type": "ready", "symbol": symbol, "test_stream": config.test_stream}))
             while True:
                 await websocket.receive_text()
@@ -193,4 +212,8 @@ if APIRouter is not None:  # pragma: no cover - WebSocket only registers with re
             except Exception:  # noqa: BLE001
                 pass
         finally:
-            await loop.run_in_executor(None, hub.stop)
+            ws_open = False
+            try:
+                hub.unregister(consumer_id)
+            except Exception:  # noqa: BLE001 - best-effort
+                pass

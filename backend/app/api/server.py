@@ -28,6 +28,14 @@ from backend.app.api.routes import (
 
 app = FastAPI(title="Trading OS API")
 
+
+@app.on_event("shutdown")
+def _shutdown_runtime_singletons() -> None:  # pragma: no cover
+    from backend.app.runtime.runtime_context import shutdown_runtime_context
+
+    shutdown_runtime_context()
+
+
 app.include_router(system_status.router)
 app.include_router(system_settings.router)
 app.include_router(system_migration.router)

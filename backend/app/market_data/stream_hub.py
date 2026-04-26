@@ -55,6 +55,7 @@ class MarketDataStreamHub:
         self._consumers: dict[str, _ConsumerEntry] = {}
         self._symbol_index: dict[str, set[str]] = defaultdict(set)
         self._runner: Any | None = None
+        self._stream: Any | None = None
         self._lock = Lock()
 
     @property
@@ -77,33 +78,39 @@ class MarketDataStreamHub:
     ) -> None:
         """Register ``on_bar`` to receive bars for ``symbols``.
 
+        Live-safe — supports register / unregister while the hub is running.
         Re-registering with the same ``consumer_id`` replaces the prior
-        subscription — useful when a consumer's symbol set changes (a new
-        deployment came online with a fresh universe).
-
-        Must be called before ``start``. Once the hub is running, the
-        adapter subscription is fixed; mutate the consumer set by stopping
-        the hub, re-registering, and starting again. (Live add/remove of
-        symbols on a running stream is a future hub capability.)
+        subscription. Symbols not previously subscribed to are added to
+        the underlying stream client; symbols no longer needed by any
+        consumer are removed.
         """
+        if not consumer_id:
+            raise MarketDataStreamHubError("consumer_id is required")
+        normalized = frozenset(str(symbol).upper() for symbol in symbols)
+        if not normalized:
+            raise MarketDataStreamHubError(f"consumer {consumer_id!r} requires at least one symbol")
         with self._lock:
-            if self.is_running:
-                raise MarketDataStreamHubError("cannot register a consumer while the hub is running")
-            if not consumer_id:
-                raise MarketDataStreamHubError("consumer_id is required")
-            normalized = frozenset(str(symbol).upper() for symbol in symbols)
-            if not normalized:
-                raise MarketDataStreamHubError(f"consumer {consumer_id!r} requires at least one symbol")
+            symbols_before = set(self._symbol_index)
             self._unregister_locked(consumer_id)
             self._consumers[consumer_id] = _ConsumerEntry(consumer_id=consumer_id, symbols=normalized, on_bar=on_bar)
             for symbol in normalized:
                 self._symbol_index[symbol].add(consumer_id)
+            if self._stream is not None:
+                added = set(self._symbol_index) - symbols_before
+                dropped = symbols_before - set(self._symbol_index)
+                if added:
+                    self._adapter.subscribe_bars(sorted(added), emit=self._dispatch, timeframe=self._timeframe, stream=self._stream)
+                if dropped:
+                    self._unsubscribe_symbols(dropped)
 
     def unregister(self, consumer_id: str) -> None:
         with self._lock:
-            if self.is_running:
-                raise MarketDataStreamHubError("cannot unregister a consumer while the hub is running")
+            symbols_before = set(self._symbol_index)
             self._unregister_locked(consumer_id)
+            if self._stream is not None:
+                dropped = symbols_before - set(self._symbol_index)
+                if dropped:
+                    self._unsubscribe_symbols(dropped)
 
     def start(self) -> None:
         with self._lock:
@@ -123,16 +130,35 @@ class MarketDataStreamHub:
                 raise MarketDataStreamHubError(str(exc)) from exc
             runner = self._runner_factory(stream)
             runner.start()
+            self._stream = stream
             self._runner = runner
 
     def stop(self, *, timeout: float = 5.0) -> None:
+        # Don't hold the registration lock for the full join — a slow stream
+        # shutdown shouldn't block parallel register/unregister calls.
         with self._lock:
-            if self._runner is None:
-                return
-            try:
-                self._runner.stop(timeout=timeout)
-            finally:
-                self._runner = None
+            runner = self._runner
+            self._runner = None
+            self._stream = None
+        if runner is not None:
+            runner.stop(timeout=timeout)
+
+    def _unsubscribe_symbols(self, symbols: set[str]) -> None:
+        """Best-effort: ask the underlying stream to drop ``symbols``.
+
+        alpaca-py's StockDataStream exposes ``unsubscribe_bars(*symbols)``;
+        if the client doesn't, log-and-skip rather than crash. Either way,
+        the hub's dispatch already skips symbols with no consumers.
+        """
+        if self._stream is None:
+            return
+        method = getattr(self._stream, "unsubscribe_bars", None)
+        if method is None:
+            return
+        try:
+            method(*sorted(symbols))
+        except Exception:  # noqa: BLE001 - best-effort
+            pass
 
     def dispatch_bar(self, bar: NormalizedBar) -> None:
         """Public dispatch hook so tests can feed bars without a real stream."""

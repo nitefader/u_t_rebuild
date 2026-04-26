@@ -145,21 +145,18 @@ if APIRouter is not None:  # pragma: no cover - WebSocket only registers with re
             await websocket.close()
             return
 
+        from backend.app.runtime.runtime_context import trade_event_dispatcher
+
         loop = asyncio.get_running_loop()
+        ws_open = True
 
         def emit(payload: dict[str, Any]) -> None:
-            asyncio.run_coroutine_threadsafe(websocket.send_text(json.dumps(payload)), loop)
-
-        broker_adapter = AlpacaBrokerAdapter()
-        trading_stream_client = broker_adapter.build_trading_stream()
-        # Operations Center tags events with a fresh viewer id; it does not
-        # mutate the system's BrokerAccount registry.
-        viewer_account_id = uuid4()
-        stream_adapter = AlpacaAccountStreamAdapter(
-            account_id=viewer_account_id,
-            stream_client=trading_stream_client,
-            normalizer=broker_adapter,
-        )
+            if not ws_open:
+                return
+            try:
+                asyncio.run_coroutine_threadsafe(websocket.send_text(json.dumps(payload)), loop)
+            except Exception:  # noqa: BLE001 - loop closed mid-shutdown
+                pass
 
         def on_event(event: object) -> None:
             if isinstance(event, BrokerOrderUpdateEvent):
@@ -171,11 +168,13 @@ if APIRouter is not None:  # pragma: no cover - WebSocket only registers with re
             elif isinstance(event, BrokerPositionSnapshot):
                 emit({"type": "position_snapshot", "data": serialize_position_snapshot(event)})
 
-        stream_adapter.subscribe(on_event)
-        runner = BrokerStreamRunner(trading_stream_client)
+        # All Operations trade-stream tabs share one TradingStream connection.
+        # The dispatcher lazy-builds the stream on first subscribe and stops
+        # it when the last subscriber disconnects.
+        dispatcher = trade_event_dispatcher()
+        subscriber_id = dispatcher.subscribe(on_event)
 
         try:
-            runner.start()
             await websocket.send_text(json.dumps({"type": "ready", "account_provider": "alpaca_paper"}))
             while True:
                 await websocket.receive_text()
@@ -187,4 +186,8 @@ if APIRouter is not None:  # pragma: no cover - WebSocket only registers with re
             except Exception:  # noqa: BLE001
                 pass
         finally:
-            await loop.run_in_executor(None, runner.stop)
+            ws_open = False
+            try:
+                dispatcher.unsubscribe(subscriber_id)
+            except Exception:  # noqa: BLE001
+                pass

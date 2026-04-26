@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from typing import Any
 
 import pytest
 
@@ -26,17 +27,29 @@ class _RecordingAdapter:
         self.subscribed_symbols: tuple[str, ...] | None = None
         self.subscribed_timeframe: str | None = None
         self.emit_callback = None
+        self.subscribe_calls: list[tuple[str, ...]] = []
+        self.unsubscribe_calls: list[tuple[str, ...]] = []
+        self._stream: Any | None = None
 
-    def subscribe_bars(self, symbols, *, emit, timeframe="1m"):  # type: ignore[no-untyped-def]
-        self.subscribed_symbols = tuple(symbols)
+    def subscribe_bars(self, symbols, *, emit, timeframe="1m", stream=None):  # type: ignore[no-untyped-def]
+        normalized = tuple(symbols)
+        self.subscribed_symbols = normalized
         self.subscribed_timeframe = timeframe
         self.emit_callback = emit
+        self.subscribe_calls.append(normalized)
+
+        adapter = self
 
         class _FakeStream:
             def run(self) -> None: ...
             def stop(self) -> None: ...
+            def unsubscribe_bars(self, *symbols) -> None:  # type: ignore[no-untyped-def]
+                adapter.unsubscribe_calls.append(tuple(symbols))
 
-        return _FakeStream()
+        if stream is None:
+            stream = _FakeStream()
+            self._stream = stream
+        return stream
 
 
 class _FakeRunner:
@@ -120,15 +133,31 @@ def test_unregister_removes_consumer_and_drops_unused_symbols() -> None:
     assert hub.subscribed_symbols == ("QQQ", "SPY")  # SPY still needed by sim-lab
 
 
-def test_register_during_run_is_rejected() -> None:
-    hub, _, _ = _make_hub()
-    hub.register("broker", ["SPY"], lambda bar: None)
+def test_register_while_running_adds_symbols_to_underlying_stream() -> None:
+    """Live register adds new symbols to the running stream client."""
+    hub, adapter, _ = _make_hub()
+    received: list[str] = []
+    hub.register("broker", ["SPY"], lambda bar: received.append(bar.symbol))
     hub.start()
     try:
-        with pytest.raises(MarketDataStreamHubError):
-            hub.register("sim-lab-live", ["QQQ"], lambda bar: None)
-        with pytest.raises(MarketDataStreamHubError):
-            hub.unregister("broker")
+        hub.register("sim-lab-live", ["QQQ"], lambda bar: received.append(bar.symbol))
+        assert hub.subscribed_symbols == ("QQQ", "SPY")
+        # Adapter.subscribe_bars should have been called twice — once at start
+        # (with SPY) and once on the live register (with QQQ).
+        assert adapter.subscribed_symbols == ("QQQ",)  # last call's symbols
+    finally:
+        hub.stop()
+
+
+def test_unregister_while_running_drops_unused_symbols() -> None:
+    hub, _, _ = _make_hub()
+    hub.register("broker", ["SPY"], lambda bar: None)
+    hub.register("sim-lab-live", ["QQQ"], lambda bar: None)
+    hub.start()
+    try:
+        hub.unregister("broker")
+        assert hub.subscribed_symbols == ("QQQ",)
+        assert hub.consumer_ids == ("sim-lab-live",)
     finally:
         hub.stop()
 

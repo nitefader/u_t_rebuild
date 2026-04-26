@@ -185,6 +185,7 @@ class AlpacaMarketDataAdapter:
         *,
         emit: Callable[[NormalizedBar], None],
         timeframe: str = "1m",
+        stream: Any | None = None,
     ) -> Any:
         """Subscribe a normalize-and-emit handler for ``symbols`` on the data stream.
 
@@ -193,11 +194,16 @@ class AlpacaMarketDataAdapter:
         registered with the SDK is async (alpaca-py's ``subscribe_bars``
         invokes the handler with ``await``); the emit callback is a
         synchronous function and runs inside the async handler.
+
+        Pass ``stream=`` to reuse an already-constructed stream client for
+        live symbol additions on a running stream — avoids opening a
+        second WebSocket connection to the provider.
         """
         normalized_symbols = tuple(str(symbol).upper() for symbol in symbols)
         if not normalized_symbols:
             raise AlpacaMarketDataError("subscribe_bars requires at least one symbol")
-        stream = self._stream_client or self._build_stream_client()
+        if stream is None:
+            stream = self._stream_client or self._build_stream_client()
 
         async def _handler(bar: object) -> None:
             try:
