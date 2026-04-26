@@ -1,5 +1,12 @@
 from __future__ import annotations
 
+try:  # pragma: no cover - optional dotenv support; tests don't depend on it.
+    from dotenv import load_dotenv
+
+    load_dotenv()
+except ImportError:  # pragma: no cover
+    pass
+
 from fastapi import FastAPI
 
 from backend.app.api.routes import (

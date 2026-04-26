@@ -1,0 +1,21 @@
+# Trading OS — Python runtime dependencies
+#
+# Install:
+#   pip install -r backend/requirements.txt
+#
+# Tests pass without any of these (the code guards optional imports for
+# unit-test isolation), but the live backend needs them all to actually
+# run uvicorn, hit Alpaca, and serve the FastAPI routes.
+
+# Core data validation (already required by tests)
+pydantic>=2.0,<3.0
+
+# Web framework + ASGI server
+fastapi>=0.110
+uvicorn[standard]>=0.27
+
+# Alpaca SDK (REST + TradingStream + StockDataStream)
+alpaca-py>=0.30
+
+# Env file loader
+python-dotenv>=1.0

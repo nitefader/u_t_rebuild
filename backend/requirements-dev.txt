@@ -1,0 +1,8 @@
+# Trading OS — dev-only dependencies (testing).
+#
+# Install:
+#   pip install -r backend/requirements-dev.txt
+
+-r requirements.txt
+
+pytest>=8.0
