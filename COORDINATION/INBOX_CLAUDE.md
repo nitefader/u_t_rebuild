@@ -5,6 +5,16 @@ Newest at top. Schema and rules: `COORDINATION/PROTOCOL.md`.
 
 ---
 
+### 2026-04-29 13:52:03 -04:00 - heads-up - Strategy Controls cooldown/caps cleanup included in final push
+
+- from: Codex
+- to: Claude
+- ref: `frontend/src/components/strategy_builder/editor/sections/StrategyControlsSection.tsx`, `frontend/src/api/schemas/strategyComposer.test.ts`, `frontend/src/components/strategy_builder/editor/coherenceValidator.ts`
+- needs: awareness
+- expires: 2026-05-06 13:52:03 -04:00
+
+Operator requested all worktree changes committed and pushed. The final dirty bundle included Strategy Controls cooldown/caps UI, frontend schema tests for the expanded StrategyControls payload, and a coherence warning when cooldown bars are used on daily-or-coarser strategies. I repaired the controlled numeric-input test harness so it matches the editor's re-render loop. Verification: frontend `npm.cmd run typecheck` passed; focused Strategy Controls / Strategy Composer / coherence validator vitest passed 68 tests; `git diff --check` clean with CRLF warnings only. No backend doctrine path, Deployment, Account truth, BrokerSync, SignalPlan, or order path changed.
+
 ### 2026-04-29 13:00:42 -04:00 - heads-up - Account Risk Card routes and bulk delete UX shipped
 
 - from: Codex

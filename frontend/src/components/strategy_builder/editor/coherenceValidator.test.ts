@@ -775,3 +775,39 @@ describe("dismissal", () => {
     expect(w?.dismissed).toBe(true);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Rule: cooldown_bars_on_coarse_timeframe (warn)
+// ---------------------------------------------------------------------------
+
+describe("cooldown_bars_on_coarse_timeframe", () => {
+  it("fires when cooldown_bars is set on a 1d strategy", () => {
+    const state = makeState({}, { timeframe: "1d", cooldown_bars: 3 });
+    const warnings = validateCoherence(state, emptyCatalog, dismissed);
+    expect(findById(warnings, "cooldown_bars_on_coarse_timeframe")).toBeDefined();
+  });
+
+  it("fires on 1w as well (>= 1d rank)", () => {
+    const state = makeState({}, { timeframe: "1w", cooldown_bars: 1 });
+    const warnings = validateCoherence(state, emptyCatalog, dismissed);
+    expect(findById(warnings, "cooldown_bars_on_coarse_timeframe")).toBeDefined();
+  });
+
+  it("does NOT fire on intraday timeframes", () => {
+    const state = makeState({}, { timeframe: "5m", cooldown_bars: 3 });
+    const warnings = validateCoherence(state, emptyCatalog, dismissed);
+    expect(findById(warnings, "cooldown_bars_on_coarse_timeframe")).toBeUndefined();
+  });
+
+  it("does NOT fire when cooldown_bars is unset", () => {
+    const state = makeState({}, { timeframe: "1d" });
+    const warnings = validateCoherence(state, emptyCatalog, dismissed);
+    expect(findById(warnings, "cooldown_bars_on_coarse_timeframe")).toBeUndefined();
+  });
+
+  it("does NOT fire when only cooldown_minutes is set on a daily strategy", () => {
+    const state = makeState({}, { timeframe: "1d", cooldown_minutes: 1440 });
+    const warnings = validateCoherence(state, emptyCatalog, dismissed);
+    expect(findById(warnings, "cooldown_bars_on_coarse_timeframe")).toBeUndefined();
+  });
+});

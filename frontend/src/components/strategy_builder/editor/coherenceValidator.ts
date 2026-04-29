@@ -476,6 +476,25 @@ export function validateCoherence(
     }
   }
 
+  // ------------------------------------------------------------------ §16
+  // cooldown_bars_on_coarse_timeframe
+  // cooldown_bars is set on a strategy whose base timeframe is daily or coarser.
+  // On 1d+ timeframes, "wait N bars" is N days — almost certainly not the
+  // operator's intent. cooldown_minutes is the right unit there.
+  // ------------------------------------------------------------------ §16
+  {
+    const tf = controls?.timeframe;
+    const tfRank = tf ? TIMEFRAME_RANK[tf] ?? 0 : 0;
+    if (controls?.cooldown_bars != null && tfRank >= TIMEFRAME_RANK["1d"]!) {
+      push(
+        "cooldown_bars_on_coarse_timeframe",
+        "warn",
+        "section-strategy-controls",
+        `Cooldown bars on a ${tf} strategy means N days between trades. Use cooldown minutes (or hours via 60×) for wall-clock throttling.`,
+      );
+    }
+  }
+
   // ------------------------------------------------------------------ §15
   // multi_target_slices_below_100 (info — stop IS present)
   // multi_target_scale_out: sum < 1.0 AND stop_pct is NOT null

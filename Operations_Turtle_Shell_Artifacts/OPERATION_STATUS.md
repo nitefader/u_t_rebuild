@@ -1,6 +1,6 @@
 # Operation Turtle Shell Status
 
-Last updated: 2026-04-29 13:46:55 -04:00
+Last updated: 2026-04-29 13:52:03 -04:00
 
 ## Date And Time Syntax
 
@@ -32,9 +32,9 @@ Agent role: Codex - Operation Turtle Shell backend doctrine spine
 
 Started at: 2026-04-27 22:28:16 -04:00
 
-Last heartbeat: 2026-04-29 13:46:55 -04:00
+Last heartbeat: 2026-04-29 13:52:03 -04:00
 
-Ended at: 2026-04-29 13:46:55 -04:00
+Ended at: 2026-04-29 13:52:03 -04:00
 
 Expected next checkpoint: Fix Account Detail deployment projection so persisted subscribed Deployments appear there; then commit/push that separate slice.
 
@@ -54,11 +54,11 @@ briefing at start, heartbeat, and handoff.
 
 ## Current Phase
 
-Account Detail Risk Card backend route and bulk delete UX slice shipped; local backend/frontend restarted and verified live; release cleanup complete.
+Account Detail Risk Card backend route and bulk delete UX slice shipped; local backend/frontend restarted and verified live; final Strategy Controls cleanup verified.
 
 ## Current Task
 
-Operator-requested Account Detail Risk Card route gap and easier bulk deletion for Deployments/Watchlists completed; local dev servers refreshed; verification clean; all known dirty work committed and pushed to `origin/master`.
+Operator-requested worktree cleanup completed through final Strategy Controls cooldown/caps work; verification clean and ready for the final cleanup push to `origin/master`.
 
 ## Current Owner
 
@@ -72,6 +72,28 @@ Codex
 - Codex doctrine reviewer
 
 ## Latest Completed Action
+
+Final Strategy Controls cleanup:
+
+- Started at: 2026-04-29 13:49:00 -04:00
+- Completed verification at: 2026-04-29 13:51:29 -04:00
+- Files:
+  - `frontend/src/api/schemas/strategyComposer.test.ts`
+  - `frontend/src/components/strategy_builder/editor/coherenceValidator.ts`
+  - `frontend/src/components/strategy_builder/editor/coherenceValidator.test.ts`
+  - `frontend/src/components/strategy_builder/editor/sections/StrategyControlsSection.tsx`
+  - `frontend/src/components/strategy_builder/editor/sections/StrategyControlsSection.test.tsx`
+- Scope:
+  - Strategy Controls UI now exposes cooldown bars/minutes and max-trade caps as a first-class card.
+  - Strategy Controls schema tests cover the expanded controls payload and validation constraints.
+  - Coherence validator warns when cooldown bars are used on daily-or-coarser strategies.
+  - Controlled input test harness now mirrors the real editor update loop for numeric controls.
+- Verification:
+  - `npm.cmd run typecheck` in `frontend/` -> passed.
+  - `npx.cmd vitest run src/api/schemas/strategyComposer.test.ts src/components/strategy_builder/editor/sections/StrategyControlsSection.test.tsx src/components/strategy_builder/editor/coherenceValidator.test.ts src/routes/StrategyCompose.test.tsx` -> 4 files / 68 tests passed.
+  - `git diff --check` -> clean, CRLF warnings only.
+- Next action:
+  - Commit and push this final cleanup bundle, then verify the worktree is clean and tracking `origin/master`.
 
 Final dirty-file cleanup:
 

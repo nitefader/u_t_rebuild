@@ -28,17 +28,18 @@ import type { SectionSeverity } from "./SectionCard";
  *   - There is no `StrategyGovernor` concept. Use the canonical name
  *     `Strategy Controls`.
  *
- * Card layout (Slice G — split):
+ * Card layout:
  *   Card A — Timeframe & horizon
  *     name, trading_horizon, allowed_directions, timeframe,
  *     higher_timeframe_confirmation_required
  *   Card B — Session windows
  *     session_preference, earnings_news_blackout_enabled
+ *   Card C — Cooldowns & caps
+ *     cooldown_bars OR cooldown_minutes (mutually exclusive),
+ *     max_trades_per_session, max_trades_per_day
  *
- * Cards for Cooldowns & caps, PDT & gap risk, and Regime filter live on
- * the roadmap and are not scaffolded here — they wait on the frontend
- * Zod schema catching up to the backend (cooldowns/caps) and on
- * brand-new backend slices (PDT, gap, structured regime filter).
+ * Cards for PDT & gap risk and the structured Regime filter remain on
+ * the roadmap pending brand-new backend slices.
  */
 export interface StrategyControlsSectionProps {
   controls: StrategyControlsVersion | null;
@@ -204,6 +205,119 @@ export function StrategyControlsSection(props: StrategyControlsSectionProps): JS
           </label>
         </div>
       </SectionCard>
+
+      <SectionCard
+        id="section-strategy-controls-cooldowns"
+        number={11}
+        title="Strategy Controls — Cooldowns & caps"
+        severity={sectionSeverity}
+        subtitle="Throttle re-entries after a fill and cap how many trades this strategy can take per session or day."
+      >
+        <CooldownsAndCapsCard controls={controls} patch={patch} />
+      </SectionCard>
     </div>
+  );
+}
+
+interface CooldownsAndCapsCardProps {
+  controls: StrategyControlsVersion;
+  patch: (next: Partial<StrategyControlsVersion>) => void;
+}
+
+function CooldownsAndCapsCard({ controls, patch }: CooldownsAndCapsCardProps): JSX.Element {
+  const bothCooldownsSet =
+    controls.cooldown_bars != null && controls.cooldown_minutes != null;
+
+  return (
+    <div className="flex flex-col gap-3">
+      {bothCooldownsSet ? (
+        <Banner
+          severity="warning"
+          title="Pick one cooldown unit"
+          message="Set either cooldown bars or cooldown minutes — not both. The save will be rejected until one is cleared."
+        />
+      ) : null}
+      <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+        <NullableIntField
+          label="Cooldown — bars"
+          hint="Minimum bars to wait after a fill before this strategy may signal again."
+          min={0}
+          value={controls.cooldown_bars ?? null}
+          onChange={(next) => patch({ cooldown_bars: next })}
+          data-testid="controls-cooldown-bars"
+        />
+        <NullableIntField
+          label="Cooldown — minutes"
+          hint="Minimum wall-clock minutes to wait after a fill. Use this on daily+ timeframes where bars are coarse."
+          min={0}
+          value={controls.cooldown_minutes ?? null}
+          onChange={(next) => patch({ cooldown_minutes: next })}
+          data-testid="controls-cooldown-minutes"
+        />
+        <NullableIntField
+          label="Max trades per session"
+          hint="Hard cap on entries during a single session. Empty = no cap."
+          min={1}
+          value={controls.max_trades_per_session ?? null}
+          onChange={(next) => patch({ max_trades_per_session: next })}
+          data-testid="controls-max-per-session"
+        />
+        <NullableIntField
+          label="Max trades per day"
+          hint="Hard cap across all sessions in a calendar day. Empty = no cap."
+          min={1}
+          value={controls.max_trades_per_day ?? null}
+          onChange={(next) => patch({ max_trades_per_day: next })}
+          data-testid="controls-max-per-day"
+        />
+      </div>
+    </div>
+  );
+}
+
+interface NullableIntFieldProps {
+  label: string;
+  hint?: string;
+  min: number;
+  value: number | null;
+  onChange: (next: number | null) => void;
+  "data-testid"?: string;
+}
+
+function NullableIntField({
+  label,
+  hint,
+  min,
+  value,
+  onChange,
+  ...rest
+}: NullableIntFieldProps): JSX.Element {
+  const raw = value == null ? "" : String(value);
+  const invalid = value != null && (!Number.isInteger(value) || value < min);
+  return (
+    <TextField
+      label={label}
+      hint={hint}
+      type="number"
+      inputMode="numeric"
+      min={min}
+      step={1}
+      value={raw}
+      invalid={invalid}
+      onChange={(e) => {
+        const text = e.target.value.trim();
+        if (text === "") {
+          onChange(null);
+          return;
+        }
+        const parsed = Number.parseInt(text, 10);
+        if (Number.isNaN(parsed)) {
+          onChange(null);
+          return;
+        }
+        onChange(parsed);
+      }}
+      data-testid={rest["data-testid"]}
+    />
   );
 }

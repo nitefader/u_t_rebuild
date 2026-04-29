@@ -3,7 +3,7 @@
 Both agents read this file at the start of every turn. Default TTL is 30 minutes.
 See `COORDINATION/PROTOCOL.md` for full lock semantics.
 
-Last updated: 2026-04-29 13:00:42 -04:00
+Last updated: 2026-04-29 13:52:03 -04:00
 
 | Acquired                  | Expires                   | Agent  | Path or glob                                  | Intent                                              |
 | ------------------------- | ------------------------- | ------ | --------------------------------------------- | --------------------------------------------------- |
