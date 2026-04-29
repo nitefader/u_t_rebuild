@@ -32,7 +32,7 @@ export function HoldToArmConfirm({
   onConfirm,
   busy = false,
   tone = "danger",
-  notePlaceholder = "Optional audit note",
+  notePlaceholder = "Optional note",
   holdMs = 2000,
 }: HoldToArmConfirmProps): JSX.Element {
   const [notes, setNotes] = useState("");
