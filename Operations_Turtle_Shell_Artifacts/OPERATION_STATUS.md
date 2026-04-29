@@ -1,6 +1,6 @@
 # Operation Turtle Shell Status
 
-Last updated: 2026-04-29 06:28:40 -04:00
+Last updated: 2026-04-29 06:38:57 -04:00
 
 ## Date And Time Syntax
 
@@ -32,11 +32,11 @@ Agent role: Codex - Operation Turtle Shell backend doctrine spine
 
 Started at: 2026-04-27 22:28:16 -04:00
 
-Last heartbeat: 2026-04-29 06:28:40 -04:00
+Last heartbeat: 2026-04-29 06:38:57 -04:00
 
-Ended at: 2026-04-29 06:28:40 -04:00
+Ended at: 2026-04-29 06:38:57 -04:00
 
-Expected next checkpoint: Configure a GitHub remote and push local checkpoint commit `9e1d3d2`. `git remote -v` currently returns no remotes.
+Expected next checkpoint: Configure a GitHub remote and push local commits through `c3a83ce`. `git remote -v` currently returns no remotes.
 
 Operator urgency:
 
@@ -58,7 +58,7 @@ Local Git checkpoint created after Alpaca-first Screener/Watchlist persona journ
 
 ## Current Task
 
-Commit/push handoff: local checkpoint commit `9e1d3d2` created on `master`; GitHub push is blocked until a remote URL is configured.
+Commit/push handoff: local checkpoint commit `9e1d3d2` plus Chart Lab source commit `c3a83ce` created on `master`; GitHub push is blocked until a remote URL is configured.
 
 ## Current Owner
 
@@ -72,6 +72,24 @@ Codex
 - Alpaca Agent
 
 ## Latest Completed Action
+
+Chart Lab source checkpoint:
+
+- Started at: 2026-04-29 06:30:00 -04:00
+- Completed at: 2026-04-29 06:38:57 -04:00
+- Completed:
+  - Status audit found imported Chart Lab preview files still uncommitted after the large checkpoint.
+  - Committed `c3a83ce`: `Add strategy preview chart component`.
+  - Included `frontend/src/components/charts/StrategyPreviewChart.tsx`, `frontend/src/routes/ChartLab.tsx`, and `frontend/src/routes/ChartLab.test.tsx`.
+  - Kept visible Chart Lab preview source Alpaca-only; no Yahoo option is exposed.
+  - Fixed `lightweight-charts` RGB parsing by emitting comma-separated RGB strings.
+- Tests run:
+  - `npm.cmd run typecheck` in `frontend/` -> passed.
+  - `npx.cmd vitest run src/routes/ChartLab.test.tsx` in `frontend/` -> 7 passed.
+- Blockers:
+  - GitHub push blocked: `git remote -v` returns no configured remote.
+- Nanyel approval:
+  - Approved. Chart Lab remains research-only and cannot submit broker orders; Alpaca remains provider pack; no trading spine ownership changed.
 
 Local Git checkpoint:
 
