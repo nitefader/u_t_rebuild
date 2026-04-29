@@ -1,6 +1,6 @@
 # Operation Turtle Shell Status
 
-Last updated: 2026-04-29 14:14:35 -04:00
+Last updated: 2026-04-29 15:57:06 -04:00
 
 ## Date And Time Syntax
 
@@ -26,17 +26,17 @@ drawer). It does not add trading, broker submit, or a second runtime root.
 
 ## Executive Briefing
 
-Work session status: scanner_watchlist_best_practices_cleanup_complete
+Work session status: screener_template_drawer_cleanup_complete
 
 Agent role: Codex - Operation Turtle Shell backend doctrine spine
 
 Started at: 2026-04-27 22:28:16 -04:00
 
-Last heartbeat: 2026-04-29 14:14:35 -04:00
+Last heartbeat: 2026-04-29 15:57:06 -04:00
 
-Ended at: 2026-04-29 14:14:35 -04:00
+Ended at: 2026-04-29 15:57:06 -04:00
 
-Expected next checkpoint: Commit/push operator-approved scanner/watchlist cleanup if requested, while preserving unrelated dirty Strategy Controls files.
+Expected next checkpoint: Continue operator UI cleanup requests while preserving unrelated dirty Strategy Controls files.
 
 Operator urgency:
 
@@ -54,11 +54,11 @@ briefing at start, heartbeat, and handoff.
 
 ## Current Phase
 
-Scanner/watchlist online best-practices cleanup shipped locally and verified; coordination closeout in progress.
+Screener templates moved out of the inline Screeners page and into a browse drawer; verification green.
 
 ## Current Task
 
-Operator asked to work with `TradingFirmScannerExpert.agent.md`, go online for best practices, and clean up Scanner/Watchlist UX. Frontend readability patch and artifact are complete; verification is green.
+Operator clarified the Screeners page: templates should not be inline because they look like actual Screeners/Watchlists. They now live behind a `Browse templates` drawer.
 
 ## Current Owner
 
@@ -72,6 +72,25 @@ Codex
 - Codex doctrine reviewer
 
 ## Latest Completed Action
+
+Screener template drawer cleanup:
+
+- Started at: 2026-04-29 15:54:56 -04:00
+- Completed verification at: 2026-04-29 15:57:06 -04:00
+- Files:
+  - `frontend/src/routes/Screeners.tsx`
+  - `frontend/src/routes/Screeners.test.tsx`
+- Scope:
+  - Removed the inline Template Library card from the Screeners page.
+  - Added a header `Browse templates` action.
+  - Moved template browsing/search/use flow into a right-side drawer.
+  - Drawer copy states templates create Screeners and are not Watchlists or Deployment attachments.
+- Verification:
+  - `npm.cmd run typecheck` in `frontend/` -> passed.
+  - `npx.cmd vitest run src/routes/Screeners.test.tsx` -> 1 file / 6 tests passed.
+  - `git diff --check` -> clean, CRLF warnings only.
+- Doctrine:
+  - Frontend readability only. No backend, Strategy, Deployment, Watchlist persistence, SignalPlan, Account truth, or broker path changed.
 
 Scanner/Watchlist best-practices cleanup:
 

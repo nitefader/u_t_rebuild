@@ -62,6 +62,7 @@ export function Screeners(): JSX.Element {
 
   const [createOpen, setCreateOpen] = useState(false);
   const [aiOpen, setAiOpen] = useState(false);
+  const [templateOpen, setTemplateOpen] = useState(false);
   const [screenerQuery, setScreenerQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<"all" | Screener["status"]>("all");
   const [sortBy, setSortBy] = useState<"last_run" | "created" | "name">("last_run");
@@ -85,6 +86,14 @@ export function Screeners(): JSX.Element {
             <Button
               size="sm"
               variant="secondary"
+              leftIcon={<Library className="h-3.5 w-3.5" aria-hidden="true" />}
+              onClick={() => setTemplateOpen(true)}
+            >
+              Browse templates
+            </Button>
+            <Button
+              size="sm"
+              variant="secondary"
               leftIcon={<Bot className="h-3.5 w-3.5" aria-hidden="true" />}
               onClick={() => setAiOpen(true)}
             >
@@ -102,15 +111,12 @@ export function Screeners(): JSX.Element {
         }
       />
 
-      <div className="grid grid-cols-1 gap-3 xl:grid-cols-[1.25fr_1fr]">
-        <MarketListsPanel
-          marketLists={marketLists.data?.market_lists ?? []}
-          loading={marketLists.isLoading}
-          loadError={marketLists.isError ? errorText(marketLists.error) : null}
-          onRetry={() => marketLists.refetch()}
-        />
-        <TemplateLibrary templates={templates.data?.templates ?? []} loading={templates.isLoading} />
-      </div>
+      <MarketListsPanel
+        marketLists={marketLists.data?.market_lists ?? []}
+        loading={marketLists.isLoading}
+        loadError={marketLists.isError ? errorText(marketLists.error) : null}
+        onRetry={() => marketLists.refetch()}
+      />
 
       <Banner
         severity="info"
@@ -188,6 +194,12 @@ export function Screeners(): JSX.Element {
 
       <CreateScreenerDrawer open={createOpen} onOpenChange={setCreateOpen} />
       <AiComposerDrawer open={aiOpen} onOpenChange={setAiOpen} />
+      <TemplateLibraryDrawer
+        open={templateOpen}
+        onOpenChange={setTemplateOpen}
+        templates={templates.data?.templates ?? []}
+        loading={templates.isLoading}
+      />
     </div>
   );
 }
@@ -272,10 +284,14 @@ function MarketListsPanel({
   );
 }
 
-function TemplateLibrary({
+function TemplateLibraryDrawer({
+  open,
+  onOpenChange,
   templates,
   loading,
 }: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
   templates: ScreenerTemplate[];
   loading: boolean;
 }): JSX.Element {
@@ -304,17 +320,23 @@ function TemplateLibrary({
   });
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="flex items-center gap-2">
-          <Library className="h-4 w-4 text-accent" aria-hidden="true" />
-          Templates
-        </CardTitle>
-        <StatusBadge tone="neutral">{templates.length}</StatusBadge>
-      </CardHeader>
-      <CardBody className="space-y-2">
+    <Drawer open={open} onOpenChange={onOpenChange}>
+      <DrawerContent className="max-w-2xl">
+        <DrawerHeader>
+          <DrawerTitle>Screener templates</DrawerTitle>
+          <DrawerDescription>
+            Starter definitions for new Screeners. They are not Watchlists and do not attach to Deployments.
+          </DrawerDescription>
+        </DrawerHeader>
+        <DrawerBody className="space-y-2">
         {error ? <Banner severity="danger" title="Template create failed" message={error} /> : null}
         {loading ? <LoadingState title="Loading templates" /> : null}
+        <div className="flex items-center justify-between gap-3">
+          <div className="text-xs text-fg-muted">
+            Pick one only when you want a new Screener draft from a known pattern.
+          </div>
+          <StatusBadge tone="neutral">{templates.length}</StatusBadge>
+        </div>
         <TextField
           label="Search templates"
           value={query}
@@ -352,8 +374,14 @@ function TemplateLibrary({
             {showAll ? "Show fewer templates" : `Show all ${templates.length} templates`}
           </Button>
         ) : null}
-      </CardBody>
-    </Card>
+        </DrawerBody>
+        <DrawerFooter>
+          <Button size="sm" variant="ghost" onClick={() => onOpenChange(false)}>
+            Close
+          </Button>
+        </DrawerFooter>
+      </DrawerContent>
+    </Drawer>
   );
 }
 

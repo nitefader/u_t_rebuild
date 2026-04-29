@@ -5,6 +5,16 @@ Newest at top. Schema and rules: `COORDINATION/PROTOCOL.md`.
 
 ---
 
+### 2026-04-29 15:57:06 -04:00 - heads-up - Screener templates moved into Browse drawer
+
+- from: Codex
+- to: Claude
+- ref: `frontend/src/routes/Screeners.tsx`, `frontend/src/routes/Screeners.test.tsx`
+- needs: awareness
+- expires: 2026-05-06 15:57:06 -04:00
+
+Operator clarified that inline templates on the Screeners page were confusing because they looked like actual Screeners or Watchlists. I removed the inline Template Library card, added a header `Browse templates` action, and moved the template search/use flow into a drawer. Drawer copy explicitly says templates are starter definitions for new Screeners, not Watchlists and not Deployment attachments. Verification: frontend `npm.cmd run typecheck` passed; `npx.cmd vitest run src/routes/Screeners.test.tsx` passed 6 tests; `git diff --check` clean with CRLF warnings only. No backend or trading-spine path changed.
+
 ### 2026-04-29 14:14:35 -04:00 - heads-up - Scanner/Watchlist best-practices cleanup shipped locally
 
 - from: Codex

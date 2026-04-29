@@ -66,6 +66,51 @@ describe("<Screeners />", () => {
     expect(screen.getByText(/Alpaca provider timed out/i)).toBeInTheDocument();
   });
 
+  it("keeps Screener templates behind the browse drawer", async () => {
+    const user = userEvent.setup();
+    restore = installFetchMock([
+      { url: "/api/v1/system/status", body: STATUS_OK },
+      {
+        url: "/api/v1/screeners/templates",
+        body: {
+          templates: [
+            {
+              key: "momentum_breakout",
+              label: "Momentum Breakout",
+              category: "intraday",
+              description: "Relative volume and broker capability starter",
+              universe_source: { kind: "market_list", symbols: [], market_list_key: "day_gainers" },
+              expression: {
+                kind: "criterion",
+                criterion: {
+                  metric: "relative_volume",
+                  operator: "gte",
+                  value: 1.5,
+                  value_max: null,
+                  label: "Relative volume above 1.5x",
+                },
+              },
+              sort_metric: "relative_volume",
+              sort_descending: true,
+              timeframe: "1d",
+              tags: ["momentum", "alpaca"],
+            },
+          ],
+        },
+      },
+      { url: "/api/v1/market-lists", body: { market_lists: [] } },
+      { url: "/api/v1/screeners", body: { screeners: [] } },
+    ]);
+    mount();
+    expect(await screen.findByRole("button", { name: /Browse templates/i })).toBeInTheDocument();
+    expect(screen.queryByText("Momentum Breakout")).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /Browse templates/i }));
+    expect(await screen.findByRole("heading", { name: /Screener templates/i })).toBeInTheDocument();
+    expect(screen.getByText("Momentum Breakout")).toBeInTheDocument();
+    expect(screen.getByText(/They are not Watchlists/i)).toBeInTheDocument();
+  });
+
   it("lists screeners with their last-run badge and operator-readable name", async () => {
     restore = installFetchMock([
       { url: "/api/v1/system/status", body: STATUS_OK },
