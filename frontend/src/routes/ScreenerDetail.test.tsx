@@ -157,7 +157,12 @@ function commonRoutes() {
   return [
     {
       url: /\/api\/v1\/screeners\/11111111-1111-1111-1111-111111111111\/runs$/,
-      body: { runs: [runBody(RUN_NEW, "2026-04-28T13:05:00Z"), runBody(RUN_OLD, "2026-04-28T13:00:00Z", 1)] },
+      body: {
+        runs: [
+          runBody(RUN_NEW, "2026-04-28T13:05:00Z"),
+          runBody(RUN_OLD, "2026-04-28T13:00:00Z", 1),
+        ],
+      },
     },
     {
       url: /\/api\/v1\/screeners\/11111111-1111-1111-1111-111111111111$/,
@@ -167,13 +172,32 @@ function commonRoutes() {
       url: "/api/v1/screeners/fields",
       body: {
         fields: [
-          { key: "relative_volume", label: "Relative volume", value_type: "number", unit: "x", supported_operators: ["gte"] },
-          { key: "broker.fractionable", label: "Fractionable at Alpaca", value_type: "boolean", unit: null, supported_operators: ["eq"] },
-          { key: "broker.tradable", label: "Tradable at Alpaca", value_type: "boolean", unit: null, supported_operators: ["eq"] },
+          {
+            key: "relative_volume",
+            label: "Relative volume",
+            value_type: "number",
+            unit: "x",
+            supported_operators: ["gte"],
+          },
+          {
+            key: "broker.fractionable",
+            label: "Fractionable at Alpaca",
+            value_type: "boolean",
+            unit: null,
+            supported_operators: ["eq"],
+          },
+          {
+            key: "broker.tradable",
+            label: "Tradable at Alpaca",
+            value_type: "boolean",
+            unit: null,
+            supported_operators: ["eq"],
+          },
         ],
       },
     },
     { url: "/api/v1/watchlists", body: { watchlists: [] } },
+    { url: "/api/v1/discovery-schedules", body: { schedules: [] } },
     { url: "/api/v1/screeners/presets", body: { presets: [] } },
     { url: "/api/v1/market-lists", body: { market_lists: [] } },
     {
@@ -273,9 +297,9 @@ describe("<ScreenerDetail />", () => {
     await waitFor(() => {
       expect(screen.getByText(/Watchlist created/i)).toBeInTheDocument();
     });
-    const saveCall = vi.mocked(fetch).mock.calls.find(([url]) =>
-      String(url).includes("/save-as-watchlist"),
-    );
+    const saveCall = vi
+      .mocked(fetch)
+      .mock.calls.find(([url]) => String(url).includes("/save-as-watchlist"));
     expect(JSON.parse(String(saveCall?.[1]?.body))).toMatchObject({ kind: "dynamic" });
   });
 
@@ -285,18 +309,20 @@ describe("<ScreenerDetail />", () => {
     mount();
 
     await screen.findByText("Alpaca Fractionable Movers");
-    await user.click(screen.getByRole("button", { name: /Duplicate version/i }));
+    await user.click(screen.getByRole("button", { name: /Customize version/i }));
     await waitFor(() => {
       expect(screen.getByText(/Preserved boolean tree/i)).toBeInTheDocument();
       expect(screen.getByText("ALL")).toBeInTheDocument();
       expect(screen.getByText("ANY")).toBeInTheDocument();
     });
-    await user.click(screen.getByRole("button", { name: /Save duplicate version/i }));
+    await user.click(screen.getByRole("button", { name: /Save customized version/i }));
 
     await waitFor(() => {
-      const versionCall = vi.mocked(fetch).mock.calls.find(([url]) =>
-        String(url).endsWith(`/api/v1/screeners/${SCREENER_ID}/versions`),
-      );
+      const versionCall = vi
+        .mocked(fetch)
+        .mock.calls.find(([url]) =>
+          String(url).endsWith(`/api/v1/screeners/${SCREENER_ID}/versions`),
+        );
       expect(versionCall).toBeTruthy();
       const body = JSON.parse(String(versionCall?.[1]?.body));
       expect(body.expression?.kind).toBe("all");
@@ -311,7 +337,10 @@ describe("<ScreenerDetail />", () => {
 
     await screen.findByText("Alpaca Fractionable Movers");
     await user.click(screen.getByRole("button", { name: /^Delete$/i }));
-    await user.type(screen.getByLabelText(/Type "Alpaca Fractionable Movers"/i), "Alpaca Fractionable Movers");
+    await user.type(
+      screen.getByLabelText(/Type "Alpaca Fractionable Movers"/i),
+      "Alpaca Fractionable Movers",
+    );
     await user.type(screen.getByLabelText(/Reason/i), "cleanup unused draft");
     await user.click(screen.getByRole("button", { name: /Delete Screener/i }));
     await waitFor(() => {

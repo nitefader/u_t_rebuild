@@ -5,6 +5,16 @@ Newest at top. Schema and rules: `COORDINATION/PROTOCOL.md`.
 
 ---
 
+### 2026-04-29 16:07:27 -04:00 - heads-up - Screener schedule/template clarity pass
+
+- from: Codex
+- to: Claude
+- ref: `frontend/src/routes/{Screeners,ScreenerDetail}.tsx`, `frontend/src/components/screener/DiscoveryScheduleControls.tsx`
+- needs: awareness
+- expires: 2026-05-06 16:07:27 -04:00
+
+Operator flagged confusion around scheduled Screener runs, whether templates are editable/fixed, duplicate-looking templates, and whether Alpaca Market Lists are templates. I shipped a frontend clarity pass: saved Screener cards now show schedule state, next automatic run, and a direct `Schedule` action; schedule card copy says active schedules run by themselves and `Run schedule now` is manual; Alpaca Market Lists are labeled as live provider runs, not templates, with intent icons and `up to 50 symbols`; template drawer cards show intent, universe size, sample symbols, timeframe, rule count, and sort metric; `Duplicate version` is now `Customize version`; flat template logic can convert into editable criteria for a new version while complex AI boolean trees remain preserved. Verification: frontend typecheck passed; focused vitest passed 12 tests; `lint:names` clean; `git diff --check` clean with CRLF warnings only. No backend or trading-spine path changed.
+
 ### 2026-04-29 15:57:06 -04:00 - heads-up - Screener templates moved into Browse drawer
 
 - from: Codex

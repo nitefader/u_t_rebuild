@@ -141,7 +141,9 @@ export function ScreenerDetail(): JSX.Element {
   const previousRun = useMemo(() => {
     if (!activeRun) return null;
     const idx = runList.findIndex((r) => r.id === activeRun.id);
-    return idx >= 0 ? runList[idx + 1] ?? null : runList.find((r) => r.id !== activeRun.id) ?? null;
+    return idx >= 0
+      ? (runList[idx + 1] ?? null)
+      : (runList.find((r) => r.id !== activeRun.id) ?? null);
   }, [activeRun, runList]);
 
   const screener = detail.data?.screener;
@@ -165,8 +167,13 @@ export function ScreenerDetail(): JSX.Element {
                 Back
               </Button>
             </Link>
-            <Button size="sm" variant="secondary" onClick={() => setEditOpen(true)} disabled={!latestVersion}>
-              Duplicate version
+            <Button
+              size="sm"
+              variant="secondary"
+              onClick={() => setEditOpen(true)}
+              disabled={!latestVersion}
+            >
+              Customize version
             </Button>
             <Button
               size="sm"
@@ -200,7 +207,9 @@ export function ScreenerDetail(): JSX.Element {
           onRetry={() => detail.refetch()}
         />
       ) : null}
-      {actionError ? <Banner severity="danger" title="Action failed" message={actionError} /> : null}
+      {actionError ? (
+        <Banner severity="danger" title="Action failed" message={actionError} />
+      ) : null}
 
       {screener && latestVersion ? (
         <ScreenerOverview
@@ -243,7 +252,14 @@ export function ScreenerDetail(): JSX.Element {
               }
             />
           ) : (
-            <RunTabs runs={runList} activeRunId={activeRun?.id ?? null} onSelect={(id) => { setActiveRunId(id); setDiff(null); }} />
+            <RunTabs
+              runs={runList}
+              activeRunId={activeRun?.id ?? null}
+              onSelect={(id) => {
+                setActiveRunId(id);
+                setDiff(null);
+              }}
+            />
           )}
         </CardBody>
       </Card>
@@ -261,7 +277,9 @@ export function ScreenerDetail(): JSX.Element {
               </span>
               <StatusBadge tone="neutral">{runKindLabel(activeRun.run_kind)}</StatusBadge>
               {activeRun.cache_hit_rate !== null && activeRun.cache_hit_rate !== undefined ? (
-                <StatusBadge tone="info">cache {(activeRun.cache_hit_rate * 100).toFixed(0)}%</StatusBadge>
+                <StatusBadge tone="info">
+                  cache {(activeRun.cache_hit_rate * 100).toFixed(0)}%
+                </StatusBadge>
               ) : null}
               <Button
                 size="sm"
@@ -276,7 +294,10 @@ export function ScreenerDetail(): JSX.Element {
                 size="sm"
                 variant="secondary"
                 leftIcon={<GitCompare className="h-3.5 w-3.5" aria-hidden="true" />}
-                onClick={() => previousRun && diffMutation.mutate({ runId: activeRun.id, againstRunId: previousRun.id })}
+                onClick={() =>
+                  previousRun &&
+                  diffMutation.mutate({ runId: activeRun.id, againstRunId: previousRun.id })
+                }
                 loading={diffMutation.isPending}
                 disabled={!previousRun}
               >
@@ -308,8 +329,9 @@ export function ScreenerDetail(): JSX.Element {
           title={`Delete screener "${screener.name}"?`}
           message={
             <span>
-              Archive first when history matters. Delete is allowed only when the backend confirms no retained run
-              lineage depends on this Screener. Type <strong>{screener.name}</strong> to confirm.
+              Archive first when history matters. Delete is allowed only when the backend confirms
+              no retained run lineage depends on this Screener. Type{" "}
+              <strong>{screener.name}</strong> to confirm.
             </span>
           }
           expected={screener.name}
@@ -333,7 +355,9 @@ export function ScreenerDetail(): JSX.Element {
         />
       ) : null}
 
-      {activeRun ? <SaveAsWatchlistDrawer open={saveOpen} onOpenChange={setSaveOpen} run={activeRun} /> : null}
+      {activeRun ? (
+        <SaveAsWatchlistDrawer open={saveOpen} onOpenChange={setSaveOpen} run={activeRun} />
+      ) : null}
     </div>
   );
 }
@@ -355,7 +379,15 @@ function ScreenerOverview({
       <CardHeader>
         <CardTitle>Overview</CardTitle>
         <span className="flex flex-wrap items-center gap-2">
-          <StatusBadge tone={screener.status === "active" ? "ok" : screener.status === "archived" ? "muted" : "info"}>
+          <StatusBadge
+            tone={
+              screener.status === "active"
+                ? "ok"
+                : screener.status === "archived"
+                  ? "muted"
+                  : "info"
+            }
+          >
             {prettyKey(screener.status)}
           </StatusBadge>
           <StatusBadge tone="neutral">v{version.version}</StatusBadge>
@@ -418,7 +450,11 @@ function RunTabs({
           title={r.started_at}
         >
           <span className="font-medium">{relativeTime(r.started_at)}</span>
-          <StatusBadge tone={r.status === "completed" ? "ok" : r.status === "failed" ? "danger" : "neutral"} size="sm" className="ml-1">
+          <StatusBadge
+            tone={r.status === "completed" ? "ok" : r.status === "failed" ? "danger" : "neutral"}
+            size="sm"
+            className="ml-1"
+          >
             {prettyKey(r.status)}
           </StatusBadge>
           <span className="ml-1 text-fg-muted">
@@ -438,11 +474,15 @@ function RunEvidence({ run }: { run: ScreenerRun }): JSX.Element {
       <div>
         <div className="font-semibold uppercase tracking-wide text-fg-muted">Sources</div>
         <div className="mt-1 flex flex-wrap gap-1">
-          {run.sources_used.length ? run.sources_used.map((source) => (
-            <StatusBadge key={source} tone="info" size="sm">
-              {sourceLabelFromKey(source)}
-            </StatusBadge>
-          )) : <span className="text-fg-subtle">No source evidence recorded</span>}
+          {run.sources_used.length ? (
+            run.sources_used.map((source) => (
+              <StatusBadge key={source} tone="info" size="sm">
+                {sourceLabelFromKey(source)}
+              </StatusBadge>
+            ))
+          ) : (
+            <span className="text-fg-subtle">No source evidence recorded</span>
+          )}
         </div>
       </div>
       <div>
@@ -452,7 +492,8 @@ function RunEvidence({ run }: { run: ScreenerRun }): JSX.Element {
       <div>
         <div className="font-semibold uppercase tracking-wide text-fg-muted">Audit</div>
         <div className="mt-1 text-fg-muted">
-          {run.parent_run_id ? "Rerun lineage recorded" : "Initial run"} / {evidence || "provider evidence retained"}
+          {run.parent_run_id ? "Rerun lineage recorded" : "Initial run"} /{" "}
+          {evidence || "provider evidence retained"}
         </div>
       </div>
     </div>
@@ -487,7 +528,9 @@ function DiffBucket({
         </StatusBadge>
         <span className="font-medium">{label}</span>
       </div>
-      <div className="mt-1 truncate text-[11px] text-fg-muted">{symbols.slice(0, 8).join(", ") || "-"}</div>
+      <div className="mt-1 truncate text-[11px] text-fg-muted">
+        {symbols.slice(0, 8).join(", ") || "-"}
+      </div>
     </div>
   );
 }
@@ -511,11 +554,14 @@ function NewVersionDrawer({
     queryFn: () => ScreenerApi.fields(),
     staleTime: 5 * 60_000,
   });
-  const [criteria, setCriteria] = useState<ScreenerCriterion[]>(() => criteriaFromVersion(baseVersion));
+  const [criteria, setCriteria] = useState<ScreenerCriterion[]>(() =>
+    criteriaFromVersion(baseVersion),
+  );
   const [universe, setUniverse] = useState(baseVersion.universe_source);
   const [name, setName] = useState(baseVersion.name);
   const [error, setError] = useState<string | null>(null);
-  const expressionBacked = Boolean(baseVersion.expression);
+  const expressionLocked =
+    Boolean(baseVersion.expression) && !isFlatEditableExpression(baseVersion.expression);
 
   const create = useMutation({
     mutationFn: () =>
@@ -524,8 +570,8 @@ function NewVersionDrawer({
         description: baseVersion.description ?? null,
         tags: [...baseVersion.tags],
         universe_source: universe,
-        criteria: expressionBacked ? [...baseVersion.criteria] : criteria,
-        expression: expressionBacked ? baseVersion.expression : null,
+        criteria: expressionLocked ? [...baseVersion.criteria] : criteria,
+        expression: expressionLocked ? baseVersion.expression : null,
         timeframe: baseVersion.timeframe,
         source_preference: baseVersion.source_preference,
         sort_metric: baseVersion.sort_metric ?? null,
@@ -552,26 +598,45 @@ function NewVersionDrawer({
     <Drawer open={open} onOpenChange={onOpenChange}>
       <DrawerContent className="max-w-3xl">
         <DrawerHeader>
-            <DrawerTitle>Duplicate version: {screenerName}</DrawerTitle>
+          <DrawerTitle>Customize version: {screenerName}</DrawerTitle>
           <DrawerDescription>
-            Versions are immutable. Duplicates preserve the latest boolean tree and let you adjust readable metadata or universe source.
+            Existing versions stay immutable. This creates a new version you can run, schedule, and
+            save as a Watchlist later.
           </DrawerDescription>
         </DrawerHeader>
         <DrawerBody className="space-y-3">
-          {error ? <Banner severity="danger" title="Could not save version" message={error} /> : null}
+          {error ? (
+            <Banner severity="danger" title="Could not save version" message={error} />
+          ) : null}
           <TextField label="Version name" value={name} onChange={(e) => setName(e.target.value)} />
           <UniverseSourcePicker value={universe} onChange={setUniverse} />
-          {expressionBacked ? (
+          {expressionLocked ? (
             <div className="space-y-2">
               <Banner
                 severity="info"
                 title="Compiled logic preserved"
                 message="This version keeps the ALL/ANY/NOT tree intact. Use AI Composer or a template when you need to change grouped logic."
               />
-              <ExpressionPreview expression={baseVersion.expression} title="Preserved boolean tree" />
+              <ExpressionPreview
+                expression={baseVersion.expression}
+                title="Preserved boolean tree"
+              />
             </div>
           ) : (
-            <CriteriaEditor value={criteria} onChange={setCriteria} metrics={fields.data?.fields ?? []} />
+            <div className="space-y-2">
+              {baseVersion.expression ? (
+                <Banner
+                  severity="info"
+                  title="Template logic converted to editable rules"
+                  message="You can add, remove, or change the criteria here. Saving creates a new Screener version."
+                />
+              ) : null}
+              <CriteriaEditor
+                value={criteria}
+                onChange={setCriteria}
+                metrics={fields.data?.fields ?? []}
+              />
+            </div>
           )}
         </DrawerBody>
         <DrawerFooter>
@@ -585,7 +650,7 @@ function NewVersionDrawer({
             loading={create.isPending}
             onClick={() => create.mutate()}
           >
-            Save duplicate version
+            Save customized version
           </Button>
         </DrawerFooter>
       </DrawerContent>
@@ -637,7 +702,8 @@ function SaveAsWatchlistDrawer({
         <DrawerHeader>
           <DrawerTitle>Save matched symbols as Watchlist</DrawerTitle>
           <DrawerDescription>
-            Creates a new entry Watchlist. Static freezes symbols; dynamic refreshes from this Screener lineage.
+            Creates a new entry Watchlist. Static freezes symbols; dynamic refreshes from this
+            Screener lineage.
           </DrawerDescription>
         </DrawerHeader>
         <DrawerBody className="space-y-3">
@@ -649,7 +715,10 @@ function SaveAsWatchlistDrawer({
               message={
                 <span>
                   {run.matched_count} matched symbols saved.{" "}
-                  <button className="underline" onClick={() => navigate(`/watchlists?watchlist=${savedId}`)}>
+                  <button
+                    className="underline"
+                    onClick={() => navigate(`/watchlists?watchlist=${savedId}`)}
+                  >
                     Open created Watchlist
                   </button>
                 </span>
@@ -657,20 +726,28 @@ function SaveAsWatchlistDrawer({
             />
           ) : (
             <>
-              <TextField label="Watchlist name" value={name} onChange={(e) => setName(e.target.value)} />
+              <TextField
+                label="Watchlist name"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+              />
               <TextField
                 label="Description (optional)"
                 value={description}
                 onChange={(e) => setDescription(e.target.value)}
                 placeholder="From Screener run"
               />
-              <Select label="Watchlist kind" value={kind} onChange={(e) => setKind(e.target.value as SaveAsWatchlistRequest["kind"])}>
+              <Select
+                label="Watchlist kind"
+                value={kind}
+                onChange={(e) => setKind(e.target.value as SaveAsWatchlistRequest["kind"])}
+              >
                 <option value="static">Static entry list</option>
                 <option value="dynamic">Dynamic Screener refresh</option>
               </Select>
               <div className="rounded bg-bg-inset px-2 py-1 text-[11px] text-fg-muted">
-                {run.matched_count} matched symbols will be included. Dynamic refreshes rerun discovery; it does not
-                manage open Positions.
+                {run.matched_count} matched symbols will be included. Dynamic refreshes rerun
+                discovery; it does not manage open Positions.
               </div>
             </>
           )}
@@ -697,7 +774,8 @@ function SaveAsWatchlistDrawer({
 }
 
 function describeUniverse(source: ScreenerUniverseSource, watchlistName: string | null): string {
-  if (source.kind === "market_list") return `Alpaca Market List / ${prettyKey(source.market_list_key ?? "market_list")}`;
+  if (source.kind === "market_list")
+    return `Alpaca Market List / ${prettyKey(source.market_list_key ?? "market_list")}`;
   if (source.kind === "preset") return `Preset / ${prettyKey(source.preset ?? "preset")}`;
   if (source.kind === "watchlist") return `Watchlist / ${watchlistName ?? "loading"}`;
   return `Explicit / ${(source.symbols ?? []).length} symbols`;
@@ -737,10 +815,29 @@ function criteriaFromVersion(version: ScreenerVersion): ScreenerCriterion[] {
 }
 
 function criteriaFromExpression(expr: unknown): ScreenerCriterion[] {
-  const node = expr as { kind?: string; criterion?: ScreenerCriterion | null; children?: unknown[] } | null;
+  const node = expr as {
+    kind?: string;
+    criterion?: ScreenerCriterion | null;
+    children?: unknown[];
+  } | null;
   if (!node || typeof node !== "object") return [];
   if (node.kind === "criterion" && node.criterion) return [node.criterion];
   return (node.children ?? []).flatMap(criteriaFromExpression);
+}
+
+function isFlatEditableExpression(expr: unknown): boolean {
+  const node = expr as {
+    kind?: string;
+    criterion?: ScreenerCriterion | null;
+    children?: unknown[];
+  } | null;
+  if (!node || typeof node !== "object") return true;
+  if (node.kind === "criterion") return Boolean(node.criterion);
+  if (node.kind !== "all") return false;
+  return (node.children ?? []).every((child) => {
+    const childNode = child as { kind?: string; criterion?: ScreenerCriterion | null } | null;
+    return Boolean(childNode && childNode.kind === "criterion" && childNode.criterion);
+  });
 }
 
 function sourceRecordSummary(record: Record<string, unknown>): string {

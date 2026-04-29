@@ -15,6 +15,8 @@ const STATUS_OK = {
   operator_environment_source: "explicit",
   operator_environment_conflict: null,
 };
+const EMPTY_SCHEDULES = { schedules: [] };
+const EMPTY_PRESETS = { presets: [] };
 
 function mount(): void {
   const queryClient = new QueryClient({
@@ -43,14 +45,18 @@ describe("<Screeners />", () => {
     restore = installFetchMock([
       { url: "/api/v1/system/status", body: STATUS_OK },
       { url: "/api/v1/screeners/templates", body: { templates: [] } },
+      { url: "/api/v1/screeners/presets", body: EMPTY_PRESETS },
       { url: "/api/v1/market-lists", body: { market_lists: [] } },
+      { url: "/api/v1/discovery-schedules", body: EMPTY_SCHEDULES },
       { url: "/api/v1/screeners", body: { screeners: [] } },
     ]);
     mount();
     await waitFor(() => {
       expect(screen.getByText(/No saved screeners yet/i)).toBeInTheDocument();
     });
-    expect(screen.getAllByRole("button", { name: /New Screener/i }).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByRole("button", { name: /New Screener/i }).length).toBeGreaterThanOrEqual(
+      1,
+    );
     expect(screen.getByText(/Alpaca Market Lists/i)).toBeInTheDocument();
   });
 
@@ -58,7 +64,9 @@ describe("<Screeners />", () => {
     restore = installFetchMock([
       { url: "/api/v1/system/status", body: STATUS_OK },
       { url: "/api/v1/screeners/templates", body: { templates: [] } },
+      { url: "/api/v1/screeners/presets", body: EMPTY_PRESETS },
       { url: "/api/v1/market-lists", body: { detail: "Alpaca provider timed out" }, status: 503 },
+      { url: "/api/v1/discovery-schedules", body: EMPTY_SCHEDULES },
       { url: "/api/v1/screeners", body: { screeners: [] } },
     ]);
     mount();
@@ -79,7 +87,7 @@ describe("<Screeners />", () => {
               label: "Momentum Breakout",
               category: "intraday",
               description: "Relative volume and broker capability starter",
-              universe_source: { kind: "market_list", symbols: [], market_list_key: "day_gainers" },
+              universe_source: { kind: "preset", symbols: [], preset: "liquid_large_caps" },
               expression: {
                 kind: "criterion",
                 criterion: {
@@ -98,7 +106,21 @@ describe("<Screeners />", () => {
           ],
         },
       },
+      {
+        url: "/api/v1/screeners/presets",
+        body: {
+          presets: [
+            {
+              key: "liquid_large_caps",
+              label: "Liquid Large Caps",
+              symbol_count: 43,
+              sample_symbols: ["AAPL", "MSFT", "NVDA"],
+            },
+          ],
+        },
+      },
       { url: "/api/v1/market-lists", body: { market_lists: [] } },
+      { url: "/api/v1/discovery-schedules", body: EMPTY_SCHEDULES },
       { url: "/api/v1/screeners", body: { screeners: [] } },
     ]);
     mount();
@@ -109,13 +131,52 @@ describe("<Screeners />", () => {
     expect(await screen.findByRole("heading", { name: /Screener templates/i })).toBeInTheDocument();
     expect(screen.getByText("Momentum Breakout")).toBeInTheDocument();
     expect(screen.getByText(/They are not Watchlists/i)).toBeInTheDocument();
+    expect(screen.getByText(/43 symbols/i)).toBeInTheDocument();
+    expect(screen.getByText(/samples: AAPL, MSFT, NVDA/i)).toBeInTheDocument();
   });
 
   it("lists screeners with their last-run badge and operator-readable name", async () => {
     restore = installFetchMock([
       { url: "/api/v1/system/status", body: STATUS_OK },
       { url: "/api/v1/screeners/templates", body: { templates: [] } },
+      { url: "/api/v1/screeners/presets", body: EMPTY_PRESETS },
       { url: "/api/v1/market-lists", body: { market_lists: [] } },
+      {
+        url: "/api/v1/discovery-schedules",
+        body: {
+          schedules: [
+            {
+              schedule_id: "99999999-9999-9999-9999-999999999999",
+              name: "Volume Surge open",
+              target_kind: "screener_run",
+              screener_id: "11111111-1111-1111-1111-111111111111",
+              screener_version_id: "33333333-3333-3333-3333-333333333333",
+              watchlist_id: null,
+              cadence: "daily",
+              interval_minutes: null,
+              time_of_day: "09:15",
+              weekdays: [0, 1, 2, 3, 4],
+              timezone_name: "America/New_York",
+              session_start: null,
+              session_end: null,
+              approval_policy: "operator_review",
+              enabled: true,
+              status: "active",
+              created_at: "2026-04-28T01:00:00Z",
+              updated_at: "2026-04-28T01:00:00Z",
+              last_attempt_at: null,
+              last_success_at: null,
+              next_run_at: "2026-04-29T13:15:00Z",
+              last_status: null,
+              last_error: null,
+              last_screener_run_id: null,
+              last_watchlist_snapshot_id: null,
+              execution_count: 0,
+              audit_events: [],
+            },
+          ],
+        },
+      },
       {
         url: "/api/v1/screeners",
         body: {
@@ -143,6 +204,9 @@ describe("<Screeners />", () => {
     // Doctrine: operator-readable last-run timestamp, not the run UUID.
     expect(screen.getAllByText(/last run/i).length).toBeGreaterThanOrEqual(1);
     expect(screen.queryByText(/22222222/)).not.toBeInTheDocument();
+    expect(screen.getByText(/1 scheduled/i)).toBeInTheDocument();
+    expect(screen.getByText(/Next automatic run/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Schedule/i })).toBeInTheDocument();
   });
 
   it("opens the create drawer when the operator clicks New Screener", async () => {
@@ -153,6 +217,7 @@ describe("<Screeners />", () => {
         url: "/api/v1/screeners/templates",
         body: { templates: [] },
       },
+      { url: "/api/v1/discovery-schedules", body: EMPTY_SCHEDULES },
       {
         url: "/api/v1/market-lists",
         body: {
@@ -172,9 +237,27 @@ describe("<Screeners />", () => {
         url: "/api/v1/screeners/fields",
         body: {
           fields: [
-            { key: "price", label: "Last price", unit: "$", value_type: "number", supported_operators: ["gte", "lte"] },
-            { key: "relative_volume", label: "Relative volume", unit: "x", value_type: "number", supported_operators: ["gte"] },
-            { key: "broker.fractionable", label: "Fractionable", unit: null, value_type: "boolean", supported_operators: ["eq"] },
+            {
+              key: "price",
+              label: "Last price",
+              unit: "$",
+              value_type: "number",
+              supported_operators: ["gte", "lte"],
+            },
+            {
+              key: "relative_volume",
+              label: "Relative volume",
+              unit: "x",
+              value_type: "number",
+              supported_operators: ["gte"],
+            },
+            {
+              key: "broker.fractionable",
+              label: "Fractionable",
+              unit: null,
+              value_type: "boolean",
+              supported_operators: ["eq"],
+            },
           ],
         },
       },
@@ -182,7 +265,12 @@ describe("<Screeners />", () => {
         url: "/api/v1/screeners/presets",
         body: {
           presets: [
-            { key: "liquid_large_caps", label: "Liquid Large Caps", symbol_count: 42, sample_symbols: ["AAPL", "MSFT"] },
+            {
+              key: "liquid_large_caps",
+              label: "Liquid Large Caps",
+              symbol_count: 42,
+              sample_symbols: ["AAPL", "MSFT"],
+            },
           ],
         },
       },
@@ -228,6 +316,8 @@ describe("<Screeners />", () => {
       { url: "/api/v1/screeners", body: { screeners: [] } },
     ]);
     mount();
+    expect((await screen.findAllByText(/live Alpaca/i)).length).toBeGreaterThanOrEqual(1);
+    expect(await screen.findByText(/up to 50 symbols/i)).toBeInTheDocument();
     const buttons = await screen.findAllByRole("button", { name: /New Screener/i });
     await user.click(buttons[0]);
     await waitFor(() => {
@@ -253,9 +343,11 @@ describe("<Screeners />", () => {
     await user.type(screen.getByLabelText(/Tags/i), "intraday, alpaca");
     await user.click(screen.getByRole("button", { name: /^Create Screener$/i }));
     await waitFor(() => {
-      const createCall = vi.mocked(fetch).mock.calls.find(
-        ([url, init]) => String(url).endsWith("/api/v1/screeners") && init?.method === "POST",
-      );
+      const createCall = vi
+        .mocked(fetch)
+        .mock.calls.find(
+          ([url, init]) => String(url).endsWith("/api/v1/screeners") && init?.method === "POST",
+        );
       expect(createCall).toBeTruthy();
       expect(JSON.parse(String(createCall?.[1]?.body))).toMatchObject({
         name: "Alpaca Fractionable Movers",
@@ -274,7 +366,9 @@ describe("<Screeners />", () => {
     restore = installFetchMock([
       { url: "/api/v1/system/status", body: STATUS_OK },
       { url: "/api/v1/screeners/templates", body: { templates: [] } },
+      { url: "/api/v1/screeners/presets", body: EMPTY_PRESETS },
       { url: "/api/v1/market-lists", body: { market_lists: [] } },
+      { url: "/api/v1/discovery-schedules", body: EMPTY_SCHEDULES },
       {
         url: "/api/v1/screeners/ai/interpret",
         method: "POST",

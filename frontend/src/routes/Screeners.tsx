@@ -1,14 +1,31 @@
 import { useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Bot, Filter, Library, ListFilter, Play, Plus, Sparkles } from "lucide-react";
+import {
+  Activity,
+  BarChart3,
+  Bot,
+  CalendarClock,
+  Filter,
+  Library,
+  ListFilter,
+  Play,
+  Plus,
+  Settings2,
+  Sparkles,
+  TrendingDown,
+  TrendingUp,
+} from "lucide-react";
 import { ApiError } from "@/api/client";
+import { DiscoverySchedulesApi } from "@/api/discoverySchedules";
 import { ScreenerApi } from "@/api/screener";
+import type { DiscoverySchedule } from "@/api/schemas/discoverySchedules";
 import type {
   MarketListDefinition,
   Screener,
   ScreenerAIInterpretResponse,
   ScreenerCreateRequest,
+  ScreenerPreset,
   ScreenerTemplate,
 } from "@/api/schemas/screener";
 import { Banner } from "@/components/ui/Banner";
@@ -25,7 +42,7 @@ import {
   DrawerTitle,
 } from "@/components/ui/Drawer";
 import { TextField } from "@/components/ui/TextField";
-import { StatusBadge } from "@/components/badges/StatusBadge";
+import { StatusBadge, type StatusTone } from "@/components/badges/StatusBadge";
 import { LoadingState } from "@/components/empty/LoadingState";
 import { ErrorState } from "@/components/empty/ErrorState";
 import { EmptyState } from "@/components/empty/EmptyState";
@@ -33,7 +50,7 @@ import { CriteriaEditor } from "@/components/screener/CriteriaEditor";
 import { ExpressionPreview } from "@/components/screener/ExpressionPreview";
 import { UniverseSourcePicker } from "@/components/screener/UniverseSourcePicker";
 import { PageHeader } from "./PageHeader";
-import { relativeTime } from "@/lib/format";
+import { formatTimestamp, relativeTime } from "@/lib/format";
 
 /**
  * Screeners list + creation surface.
@@ -54,10 +71,21 @@ export function Screeners(): JSX.Element {
     queryFn: () => ScreenerApi.templates(),
     staleTime: 5 * 60_000,
   });
+  const presets = useQuery({
+    queryKey: ["screeners", "presets"],
+    queryFn: () => ScreenerApi.presets(),
+    staleTime: 5 * 60_000,
+  });
   const marketLists = useQuery({
     queryKey: ["screeners", "market-lists"],
     queryFn: () => ScreenerApi.marketLists(),
     staleTime: 5 * 60_000,
+  });
+  const schedules = useQuery({
+    queryKey: ["discovery-schedules", "list"],
+    queryFn: () => DiscoverySchedulesApi.list(),
+    staleTime: 30_000,
+    refetchInterval: 60_000,
   });
 
   const [createOpen, setCreateOpen] = useState(false);
@@ -79,7 +107,7 @@ export function Screeners(): JSX.Element {
     <div className="space-y-4">
       <PageHeader
         title="Screeners"
-        subtitle="Discovery surface. Run Alpaca-first lists, templates, or typed criteria; save entries as Watchlists only when the operator chooses."
+        subtitle="Discovery surface. Live Alpaca lists run now; templates are optional starters; saved Screeners can be scheduled and then saved as entry Watchlists."
         explainSlug="screeners"
         actions={
           <div className="flex flex-wrap items-center gap-2">
@@ -169,7 +197,7 @@ export function Screeners(): JSX.Element {
       ) : screeners.length === 0 ? (
         <EmptyState
           title="No saved screeners yet"
-          message="Run an Alpaca market list, start from a template, use AI Composer, or create typed criteria manually."
+          message="Run a live Alpaca market list, browse starter templates, use AI Composer, or create typed criteria manually."
           action={
             <Button
               size="sm"
@@ -188,7 +216,13 @@ export function Screeners(): JSX.Element {
         />
       ) : (
         <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
-          {filteredScreeners.map((s) => <ScreenerCard key={s.id} screener={s} />)}
+          {filteredScreeners.map((s) => (
+            <ScreenerCard
+              key={s.id}
+              screener={s}
+              schedules={schedulesForScreener(s, schedules.data?.schedules ?? [])}
+            />
+          ))}
         </div>
       )}
 
@@ -198,6 +232,7 @@ export function Screeners(): JSX.Element {
         open={templateOpen}
         onOpenChange={setTemplateOpen}
         templates={templates.data?.templates ?? []}
+        presets={presets.data?.presets ?? []}
         loading={templates.isLoading}
       />
     </div>
@@ -240,7 +275,8 @@ function MarketListsPanel({
       <CardBody className="space-y-2">
         {error ? <Banner severity="danger" title="Market list run failed" message={error} /> : null}
         <div className="text-xs text-fg-muted">
-          Premarket/open-hour movers and most-active lists resolve through Alpaca data and asset capability evidence.
+          These are live Alpaca provider lists, not templates. Running one creates a saved Screener
+          and an immediate run from current provider evidence.
         </div>
         {loading ? <LoadingState title="Loading market lists" /> : null}
         {loadError ? (
@@ -254,16 +290,30 @@ function MarketListsPanel({
           {marketLists.map((m) => (
             <div key={m.key} className="rounded border border-border bg-bg-inset/40 px-3 py-2">
               <div className="flex items-start justify-between gap-2">
-                <div className="min-w-0">
-                  <div className="font-medium">{m.label}</div>
-                  <div className="mt-0.5 text-[11px] text-fg-muted">{m.description}</div>
-                  <div className="mt-1 flex flex-wrap gap-1">
-                    <StatusBadge tone="neutral" size="sm">
-                      {m.category}
-                    </StatusBadge>
-                    <StatusBadge tone="info" size="sm">
-                      {m.provider}
-                    </StatusBadge>
+                <div className="flex min-w-0 gap-2">
+                  <div
+                    className={`mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded border ${marketListIconTone(m.key)}`}
+                  >
+                    {marketListIcon(m.key)}
+                  </div>
+                  <div className="min-w-0">
+                    <div className="font-medium">{m.label}</div>
+                    <div className="mt-0.5 text-[11px] text-fg-muted">{m.description}</div>
+                    <div className="mt-1 flex flex-wrap gap-1">
+                      <StatusBadge tone={marketListIntentTone(m.key)} size="sm">
+                        {marketListIntent(m.key)}
+                      </StatusBadge>
+                      <StatusBadge tone="info" size="sm">
+                        live Alpaca
+                      </StatusBadge>
+                      <StatusBadge tone="neutral" size="sm">
+                        up to 50 symbols
+                      </StatusBadge>
+                    </div>
+                    <div className="mt-1 text-[11px] text-fg-subtle">
+                      Creates a new Screener run; the symbols can change each time Alpaca ranks the
+                      list.
+                    </div>
                   </div>
                 </div>
                 <Button
@@ -288,11 +338,13 @@ function TemplateLibraryDrawer({
   open,
   onOpenChange,
   templates,
+  presets,
   loading,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   templates: ScreenerTemplate[];
+  presets: ScreenerPreset[];
   loading: boolean;
 }): JSX.Element {
   const navigate = useNavigate();
@@ -307,7 +359,8 @@ function TemplateLibraryDrawer({
       [t.label, t.description, t.category, ...t.tags].join(" ").toLowerCase().includes(text),
     );
   }, [query, templates]);
-  const visibleTemplates = showAll || query.trim() ? filteredTemplates : filteredTemplates.slice(0, 6);
+  const visibleTemplates =
+    showAll || query.trim() ? filteredTemplates : filteredTemplates.slice(0, 6);
   const create = useMutation({
     mutationFn: (templateKey: string) =>
       ScreenerApi.createFromTemplate({ template_key: templateKey, name: null, tags: [] }),
@@ -325,55 +378,86 @@ function TemplateLibraryDrawer({
         <DrawerHeader>
           <DrawerTitle>Screener templates</DrawerTitle>
           <DrawerDescription>
-            Starter definitions for new Screeners. They are not Watchlists and do not attach to Deployments.
+            Starter definitions for new Screeners. They are not Watchlists and do not attach to
+            Deployments.
           </DrawerDescription>
         </DrawerHeader>
         <DrawerBody className="space-y-2">
-        {error ? <Banner severity="danger" title="Template create failed" message={error} /> : null}
-        {loading ? <LoadingState title="Loading templates" /> : null}
-        <div className="flex items-center justify-between gap-3">
-          <div className="text-xs text-fg-muted">
-            Pick one only when you want a new Screener draft from a known pattern.
-          </div>
-          <StatusBadge tone="neutral">{templates.length}</StatusBadge>
-        </div>
-        <TextField
-          label="Search templates"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          placeholder="fractionable, momentum, gap"
-        />
-        {visibleTemplates.map((t) => (
-          <div key={t.key} className="flex items-start justify-between gap-2 rounded border border-border bg-bg-inset/40 px-3 py-2">
-            <div className="min-w-0">
-              <div className="font-medium">{t.label}</div>
-              <div className="mt-0.5 text-[11px] text-fg-muted">{t.description}</div>
-              <div className="mt-1 flex flex-wrap gap-1">
-                <StatusBadge tone="neutral" size="sm">
-                  {t.category}
-                </StatusBadge>
-                {t.tags.slice(0, 2).map((tag) => (
-                  <StatusBadge key={tag} tone="muted" size="sm">
-                    {tag}
-                  </StatusBadge>
-                ))}
-              </div>
+          {error ? (
+            <Banner severity="danger" title="Template create failed" message={error} />
+          ) : null}
+          {loading ? <LoadingState title="Loading templates" /> : null}
+          <div className="flex items-center justify-between gap-3">
+            <div className="text-xs text-fg-muted">
+              Pick one only when you want a new Screener draft from a known pattern.
             </div>
-            <Button
-              size="sm"
-              variant="secondary"
-              loading={create.isPending}
-              onClick={() => create.mutate(t.key)}
-            >
-              Use
-            </Button>
+            <StatusBadge tone="neutral">{templates.length}</StatusBadge>
           </div>
-        ))}
-        {!query.trim() && templates.length > 6 ? (
-          <Button size="sm" variant="ghost" onClick={() => setShowAll((current) => !current)}>
-            {showAll ? "Show fewer templates" : `Show all ${templates.length} templates`}
-          </Button>
-        ) : null}
+          <TextField
+            label="Search templates"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="fractionable, momentum, gap"
+          />
+          <div className="grid grid-cols-1 gap-2">
+            {visibleTemplates.map((t) => {
+              const universe = templateUniverseMeta(t, presets);
+              return (
+                <div key={t.key} className="rounded border border-border bg-bg-inset/40 px-3 py-2">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="flex min-w-0 gap-2">
+                      <div
+                        className={`mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded border ${templateIconTone(t)}`}
+                      >
+                        {templateIcon(t)}
+                      </div>
+                      <div className="min-w-0">
+                        <div className="font-medium">{t.label}</div>
+                        <div className="mt-0.5 text-[11px] text-fg-muted">{t.description}</div>
+                        <div className="mt-1 flex flex-wrap gap-1">
+                          <StatusBadge tone={templateIntentTone(t)} size="sm">
+                            {templateIntent(t)}
+                          </StatusBadge>
+                          <StatusBadge tone={universe.tone} size="sm">
+                            {universe.countLabel}
+                          </StatusBadge>
+                          <StatusBadge tone="neutral" size="sm">
+                            {templateRulesCount(t.expression)} rules
+                          </StatusBadge>
+                          <StatusBadge tone="muted" size="sm">
+                            {t.timeframe}
+                          </StatusBadge>
+                        </div>
+                        <div className="mt-1 text-[11px] text-fg-subtle">
+                          Universe: {universe.label}
+                          {universe.samples.length
+                            ? ` / samples: ${universe.samples.slice(0, 5).join(", ")}`
+                            : ""}
+                        </div>
+                        <div className="mt-1 text-[11px] text-fg-subtle">
+                          Sorts by {t.sort_metric ? prettyKey(t.sort_metric) : "matched first"}.
+                          Creates an editable Screener version.
+                        </div>
+                      </div>
+                    </div>
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      loading={create.isPending}
+                      onClick={() => create.mutate(t.key)}
+                    >
+                      Use
+                    </Button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+          {!query.trim() && templates.length > 6 ? (
+            <Button size="sm" variant="ghost" onClick={() => setShowAll((current) => !current)}>
+              {showAll ? "Show fewer templates" : `Show all ${templates.length} templates`}
+            </Button>
+          ) : null}
         </DrawerBody>
         <DrawerFooter>
           <Button size="sm" variant="ghost" onClick={() => onOpenChange(false)}>
@@ -385,7 +469,19 @@ function TemplateLibraryDrawer({
   );
 }
 
-function ScreenerCard({ screener }: { screener: Screener }): JSX.Element {
+function ScreenerCard({
+  screener,
+  schedules,
+}: {
+  screener: Screener;
+  schedules: DiscoverySchedule[];
+}): JSX.Element {
+  const activeSchedules = schedules.filter((schedule) => schedule.status === "active");
+  const nextRun =
+    activeSchedules
+      .map((schedule) => schedule.next_run_at)
+      .filter((value): value is string => Boolean(value))
+      .sort((a, b) => Date.parse(a) - Date.parse(b))[0] ?? null;
   return (
     <Card>
       <div className="flex items-start justify-between gap-3 px-4 pt-3">
@@ -397,8 +493,8 @@ function ScreenerCard({ screener }: { screener: Screener }): JSX.Element {
                 screener.status === "archived" || screener.status === "deprecated"
                   ? "muted"
                   : screener.status === "active"
-                  ? "ok"
-                  : "info"
+                    ? "ok"
+                    : "info"
               }
             >
               {prettyKey(screener.status)}
@@ -411,41 +507,186 @@ function ScreenerCard({ screener }: { screener: Screener }): JSX.Element {
             ) : (
               <StatusBadge tone="warn">never run</StatusBadge>
             )}
+            <StatusBadge tone={activeSchedules.length ? "ok" : "neutral"}>
+              {activeSchedules.length ? `${activeSchedules.length} scheduled` : "not scheduled"}
+            </StatusBadge>
           </div>
         </div>
       </div>
       {screener.description ? (
         <div className="px-4 py-2 text-xs text-fg-muted">{screener.description}</div>
       ) : null}
+      <div className="px-4 py-2 text-[11px] text-fg-muted">
+        {nextRun
+          ? `Next automatic run: ${formatTimestamp(nextRun)}`
+          : "No automatic run set. Open Schedule to make it run by itself."}
+      </div>
       {screener.tags.length ? (
         <div className="px-4 pb-2 text-[11px] text-fg-subtle">{screener.tags.join(" / ")}</div>
       ) : null}
       <div className="flex items-center justify-between border-t border-border/70 px-4 py-2 text-xs text-fg-muted">
         <span>{relativeTime(screener.created_at)}</span>
-        <Link to={`/screeners/${screener.id}`}>
-          <Button size="sm" variant="secondary">
-            Open
-          </Button>
-        </Link>
+        <span className="flex items-center gap-1">
+          <Link to={`/screeners/${screener.id}#schedules`}>
+            <Button
+              size="sm"
+              variant="ghost"
+              leftIcon={<CalendarClock className="h-3.5 w-3.5" aria-hidden="true" />}
+            >
+              Schedule
+            </Button>
+          </Link>
+          <Link to={`/screeners/${screener.id}`}>
+            <Button size="sm" variant="secondary">
+              Open
+            </Button>
+          </Link>
+        </span>
       </div>
     </Card>
   );
 }
 
 function screenerSearchText(screener: Screener): string {
-  return [
-    screener.name,
-    screener.description ?? "",
-    screener.status,
-    ...screener.tags,
-  ].join(" ").toLowerCase();
+  return [screener.name, screener.description ?? "", screener.status, ...screener.tags]
+    .join(" ")
+    .toLowerCase();
 }
 
-function compareScreeners(a: Screener, b: Screener, sortBy: "last_run" | "created" | "name"): number {
+function compareScreeners(
+  a: Screener,
+  b: Screener,
+  sortBy: "last_run" | "created" | "name",
+): number {
   if (sortBy === "name") return a.name.localeCompare(b.name);
-  const aTime = Date.parse(sortBy === "last_run" ? a.last_run_at ?? a.created_at : a.created_at);
-  const bTime = Date.parse(sortBy === "last_run" ? b.last_run_at ?? b.created_at : b.created_at);
+  const aTime = Date.parse(sortBy === "last_run" ? (a.last_run_at ?? a.created_at) : a.created_at);
+  const bTime = Date.parse(sortBy === "last_run" ? (b.last_run_at ?? b.created_at) : b.created_at);
   return bTime - aTime;
+}
+
+function schedulesForScreener(
+  screener: Screener,
+  schedules: DiscoverySchedule[],
+): DiscoverySchedule[] {
+  return schedules.filter(
+    (schedule) =>
+      schedule.target_kind === "screener_run" &&
+      schedule.screener_id === screener.id &&
+      (!screener.latest_version_id || schedule.screener_version_id === screener.latest_version_id),
+  );
+}
+
+function marketListIcon(key: string): JSX.Element {
+  if (key.includes("loser")) return <TrendingDown className="h-4 w-4" aria-hidden="true" />;
+  if (key.includes("active")) return <Activity className="h-4 w-4" aria-hidden="true" />;
+  return <TrendingUp className="h-4 w-4" aria-hidden="true" />;
+}
+
+function marketListIconTone(key: string): string {
+  if (key.includes("loser")) return "border-danger/30 bg-danger-subtle text-danger";
+  if (key.includes("active")) return "border-info/30 bg-info-subtle text-info";
+  return "border-ok/30 bg-ok-subtle text-ok";
+}
+
+function marketListIntent(key: string): string {
+  if (key.includes("loser")) return "falling movers";
+  if (key.includes("active")) return "volume leaders";
+  return "rising movers";
+}
+
+function marketListIntentTone(key: string): StatusTone {
+  if (key.includes("loser")) return "danger";
+  if (key.includes("active")) return "info";
+  return "ok";
+}
+
+function templateIcon(template: ScreenerTemplate): JSX.Element {
+  const text = [template.label, template.category, ...template.tags].join(" ").toLowerCase();
+  if (text.includes("loser") || text.includes("short"))
+    return <TrendingDown className="h-4 w-4" aria-hidden="true" />;
+  if (text.includes("volume") || text.includes("liquid"))
+    return <BarChart3 className="h-4 w-4" aria-hidden="true" />;
+  if (text.includes("broker") || text.includes("fractionable"))
+    return <Settings2 className="h-4 w-4" aria-hidden="true" />;
+  return <TrendingUp className="h-4 w-4" aria-hidden="true" />;
+}
+
+function templateIconTone(template: ScreenerTemplate): string {
+  const intent = templateIntent(template);
+  if (intent.includes("falling") || intent.includes("short"))
+    return "border-danger/30 bg-danger-subtle text-danger";
+  if (intent.includes("volume") || intent.includes("liquidity"))
+    return "border-info/30 bg-info-subtle text-info";
+  if (intent.includes("broker")) return "border-ai/30 bg-ai-subtle text-ai";
+  return "border-ok/30 bg-ok-subtle text-ok";
+}
+
+function templateIntent(template: ScreenerTemplate): string {
+  const text = [template.label, template.category, ...template.tags].join(" ").toLowerCase();
+  if (text.includes("loser")) return "falling movers";
+  if (text.includes("short")) return "short candidates";
+  if (text.includes("volume") || text.includes("liquid")) return "volume/liquidity";
+  if (text.includes("broker") || text.includes("fractionable")) return "broker capability";
+  if (text.includes("gainer") || text.includes("momentum")) return "rising movers";
+  return prettyKey(template.category);
+}
+
+function templateIntentTone(template: ScreenerTemplate): StatusTone {
+  const intent = templateIntent(template);
+  if (intent.includes("falling") || intent.includes("short")) return "danger";
+  if (intent.includes("volume") || intent.includes("liquidity")) return "info";
+  if (intent.includes("broker")) return "ai";
+  if (intent.includes("rising")) return "ok";
+  return "neutral";
+}
+
+function templateUniverseMeta(
+  template: ScreenerTemplate,
+  presets: ScreenerPreset[],
+): { label: string; countLabel: string; samples: string[]; tone: StatusTone } {
+  const source = template.universe_source;
+  if (source.kind === "market_list") {
+    return {
+      label: `Live Alpaca ${prettyKey(source.market_list_key ?? "market list")}`,
+      countLabel: "up to 50 live",
+      samples: [],
+      tone: "info",
+    };
+  }
+  if (source.kind === "preset") {
+    const preset = presets.find((item) => item.key === source.preset);
+    return {
+      label: preset ? preset.label : prettyKey(source.preset ?? "preset"),
+      countLabel: preset ? `${preset.symbol_count} symbols` : "preset universe",
+      samples: preset?.sample_symbols ?? [],
+      tone: "neutral",
+    };
+  }
+  if (source.kind === "explicit") {
+    const symbols = source.symbols ?? [];
+    return {
+      label: "Explicit symbol list",
+      countLabel: `${symbols.length} symbols`,
+      samples: symbols,
+      tone: symbols.length ? "neutral" : "warn",
+    };
+  }
+  return {
+    label: "Saved Watchlist universe",
+    countLabel: "watchlist",
+    samples: [],
+    tone: "neutral",
+  };
+}
+
+function templateRulesCount(expression: unknown): number {
+  const node = expression as { kind?: string; children?: unknown[]; criterion?: unknown } | null;
+  if (!node || typeof node !== "object") return 0;
+  if (node.kind === "criterion" && node.criterion) return 1;
+  return (node.children ?? []).reduce<number>(
+    (total, child) => total + templateRulesCount(child),
+    0,
+  );
 }
 
 function CreateScreenerDrawer({
@@ -500,7 +741,9 @@ function CreateScreenerDrawer({
           </DrawerDescription>
         </DrawerHeader>
         <DrawerBody className="space-y-3">
-          {error ? <Banner severity="danger" title="Could not create screener" message={error} /> : null}
+          {error ? (
+            <Banner severity="danger" title="Could not create screener" message={error} />
+          ) : null}
           <TextField
             label="Display name"
             value={form.name}
@@ -627,7 +870,9 @@ function AiComposerDrawer({
 }): JSX.Element {
   const qc = useQueryClient();
   const navigate = useNavigate();
-  const [prompt, setPrompt] = useState("Alpaca day gainers that are tradable and fractionable with relative volume above 1.5");
+  const [prompt, setPrompt] = useState(
+    "Alpaca day gainers that are tradable and fractionable with relative volume above 1.5",
+  );
   const [name, setName] = useState("AI composed Alpaca movers");
   const [draft, setDraft] = useState<ScreenerAIInterpretResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -681,7 +926,8 @@ function AiComposerDrawer({
         <DrawerHeader>
           <DrawerTitle>AI Composer</DrawerTitle>
           <DrawerDescription>
-            AI is advisory only. It compiles the prompt into visible typed rules before anything is saved.
+            AI is advisory only. It compiles the prompt into visible typed rules before anything is
+            saved.
           </DrawerDescription>
         </DrawerHeader>
         <DrawerBody className="space-y-3">
@@ -710,13 +956,13 @@ function AiComposerDrawer({
             <div className="space-y-2 rounded border border-border bg-bg-inset/40 p-3">
               <div className="flex flex-wrap gap-1">
                 <StatusBadge tone="ai">advisory</StatusBadge>
-                <StatusBadge tone="neutral">{describeUniverseFromSource(draft.universe_source)}</StatusBadge>
+                <StatusBadge tone="neutral">
+                  {describeUniverseFromSource(draft.universe_source)}
+                </StatusBadge>
               </div>
               <ExpressionPreview expression={draft.expression} title="Compiled boolean tree" />
               {labels.length ? (
-                <div className="text-[11px] text-fg-muted">
-                  Rule leaves: {labels.join(" / ")}
-                </div>
+                <div className="text-[11px] text-fg-muted">Rule leaves: {labels.join(" / ")}</div>
               ) : null}
               {draft.assumptions.length ? (
                 <div className="text-[11px] text-fg-muted">
@@ -775,20 +1021,33 @@ function emptyCreateForm(): ScreenerCreateRequest {
 function expressionLabels(expr: unknown): string[] {
   const node = expr as {
     kind?: string;
-    criterion?: { metric?: string; operator?: string; value?: unknown; value_max?: unknown; label?: string | null };
+    criterion?: {
+      metric?: string;
+      operator?: string;
+      value?: unknown;
+      value_max?: unknown;
+      label?: string | null;
+    };
     children?: unknown[];
   };
   if (!node || typeof node !== "object") return [];
   if (node.kind === "criterion" && node.criterion) {
     const c = node.criterion;
-    const value = c.operator === "between" ? `${String(c.value)} to ${String(c.value_max)}` : String(c.value);
+    const value =
+      c.operator === "between" ? `${String(c.value)} to ${String(c.value_max)}` : String(c.value);
     return [c.label || `${c.metric ?? "field"} ${c.operator ?? "="} ${value}`];
   }
   return (node.children ?? []).flatMap(expressionLabels);
 }
 
-function describeUniverseFromSource(source: { kind: string; preset?: string | null; market_list_key?: string | null; symbols?: string[] }): string {
-  if (source.kind === "market_list") return `Alpaca list: ${prettyKey(source.market_list_key ?? "market_list")}`;
+function describeUniverseFromSource(source: {
+  kind: string;
+  preset?: string | null;
+  market_list_key?: string | null;
+  symbols?: string[];
+}): string {
+  if (source.kind === "market_list")
+    return `Alpaca list: ${prettyKey(source.market_list_key ?? "market_list")}`;
   if (source.kind === "preset") return `Preset: ${prettyKey(source.preset ?? "preset")}`;
   if (source.kind === "explicit") return `${source.symbols?.length ?? 0} explicit symbols`;
   return "Watchlist source";

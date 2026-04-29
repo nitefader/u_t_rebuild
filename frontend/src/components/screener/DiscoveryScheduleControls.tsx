@@ -63,7 +63,9 @@ export function DiscoveryScheduleControls(props: Target): JSX.Element {
           schedule.screener_version_id === props.screenerVersionId
         );
       }
-      return schedule.target_kind === "watchlist_refresh" && schedule.watchlist_id === props.watchlistId;
+      return (
+        schedule.target_kind === "watchlist_refresh" && schedule.watchlist_id === props.watchlistId
+      );
     });
   }, [
     props.targetKind,
@@ -114,140 +116,184 @@ export function DiscoveryScheduleControls(props: Target): JSX.Element {
     onError: (e) => setActionError(errorText(e)),
   });
 
+  const scheduleTitle =
+    props.targetKind === "screener_run"
+      ? "Scheduled Screener runs"
+      : "Scheduled Watchlist refreshes";
+  const scheduleAction = props.targetKind === "screener_run" ? "Schedule run" : "Schedule refresh";
+
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="flex items-center gap-2">
-          <CalendarClock className="h-4 w-4 text-accent" aria-hidden="true" />
-          Schedules
-        </CardTitle>
-        <Button
-          size="sm"
-          variant="secondary"
-          leftIcon={<Plus className="h-3.5 w-3.5" aria-hidden="true" />}
-          onClick={() => {
-            setEditing(null);
-            setDrawerOpen(true);
-          }}
-        >
-          New schedule
-        </Button>
-      </CardHeader>
-      <CardBody className="space-y-2">
-        {actionError ? <Banner severity="danger" title="Schedule action failed" message={actionError} /> : null}
-        {schedules.length === 0 ? (
-          <div className="rounded border border-dashed border-border px-3 py-2 text-[11px] text-fg-muted">
-            No schedules for {props.targetName}.
+    <div id="schedules">
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <CalendarClock className="h-4 w-4 text-accent" aria-hidden="true" />
+            {scheduleTitle}
+          </CardTitle>
+          <Button
+            size="sm"
+            variant="secondary"
+            leftIcon={<Plus className="h-3.5 w-3.5" aria-hidden="true" />}
+            onClick={() => {
+              setEditing(null);
+              setDrawerOpen(true);
+            }}
+          >
+            {scheduleAction}
+          </Button>
+        </CardHeader>
+        <CardBody className="space-y-2">
+          {actionError ? (
+            <Banner severity="danger" title="Schedule action failed" message={actionError} />
+          ) : null}
+          <div className="rounded border border-border bg-bg-inset/40 px-3 py-2 text-[11px] text-fg-muted">
+            {props.targetKind === "screener_run"
+              ? "Active schedules run this exact Screener version by themselves. Run schedule now creates one manual execution."
+              : "Active schedules refresh this Watchlist by themselves and record entry-universe evidence."}
           </div>
-        ) : (
-          schedules.map((schedule) => (
-            <div key={schedule.schedule_id} className="rounded border border-border bg-bg-inset/40 px-3 py-2">
-              <div className="flex flex-wrap items-start justify-between gap-2">
-                <div className="min-w-0">
-                  <div className="font-medium">{schedule.name}</div>
-                  <div className="mt-1 flex flex-wrap gap-1">
-                    <StatusBadge tone={schedule.status === "active" ? "ok" : schedule.status === "paused" ? "warn" : "muted"} size="sm">
-                      {schedule.status}
-                    </StatusBadge>
-                    <StatusBadge tone="neutral" size="sm">
-                      {cadenceText(schedule)}
-                    </StatusBadge>
-                    <StatusBadge tone={schedule.approval_policy === "auto_snapshot" ? "warn" : "info"} size="sm">
-                      {schedule.approval_policy === "auto_snapshot" ? "auto snapshot" : "operator review"}
-                    </StatusBadge>
+          {schedules.length === 0 ? (
+            <div className="rounded border border-dashed border-border px-3 py-2 text-[11px] text-fg-muted">
+              {props.targetKind === "screener_run"
+                ? `No automated runs yet for ${props.targetName}.`
+                : `No automated refreshes yet for ${props.targetName}.`}
+            </div>
+          ) : (
+            schedules.map((schedule) => (
+              <div
+                key={schedule.schedule_id}
+                className="rounded border border-border bg-bg-inset/40 px-3 py-2"
+              >
+                <div className="flex flex-wrap items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <div className="font-medium">{schedule.name}</div>
+                    <div className="mt-1 flex flex-wrap gap-1">
+                      <StatusBadge
+                        tone={
+                          schedule.status === "active"
+                            ? "ok"
+                            : schedule.status === "paused"
+                              ? "warn"
+                              : "muted"
+                        }
+                        size="sm"
+                      >
+                        {schedule.status === "active"
+                          ? "Active"
+                          : schedule.status === "paused"
+                            ? "Paused"
+                            : "Archived"}
+                      </StatusBadge>
+                      <StatusBadge tone="neutral" size="sm">
+                        {cadenceText(schedule)}
+                      </StatusBadge>
+                      <StatusBadge
+                        tone={schedule.approval_policy === "auto_snapshot" ? "warn" : "info"}
+                        size="sm"
+                      >
+                        {schedule.approval_policy === "auto_snapshot"
+                          ? "auto snapshot"
+                          : "operator review"}
+                      </StatusBadge>
+                    </div>
+                    <div className="mt-1 text-[11px] text-fg-muted">
+                      Last automatic run:{" "}
+                      {schedule.last_attempt_at ? relativeTime(schedule.last_attempt_at) : "never"}{" "}
+                      / Next: {schedule.next_run_at ? formatTimestamp(schedule.next_run_at) : "-"}
+                    </div>
+                    <div className="mt-1 text-[11px] text-fg-muted">
+                      Timezone: {readableTimezone(schedule.timezone_name)}
+                    </div>
+                    <div className="mt-1 text-[11px] text-fg-muted">
+                      Days: {weekdaysText(schedule.weekdays)}
+                    </div>
+                    {schedule.last_error ? (
+                      <div className="mt-1 text-[11px] text-danger">{schedule.last_error}</div>
+                    ) : null}
                   </div>
-                  <div className="mt-1 text-[11px] text-fg-muted">
-                    Last: {schedule.last_attempt_at ? relativeTime(schedule.last_attempt_at) : "never"} / Next:{" "}
-                    {schedule.next_run_at ? formatTimestamp(schedule.next_run_at) : "-"}
-                  </div>
-                  <div className="mt-1 text-[11px] text-fg-muted">
-                    Timezone: {readableTimezone(schedule.timezone_name)}
-                  </div>
-                  <div className="mt-1 text-[11px] text-fg-muted">
-                    Days: {weekdaysText(schedule.weekdays)}
-                  </div>
-                  {schedule.last_error ? (
-                    <div className="mt-1 text-[11px] text-danger">{schedule.last_error}</div>
-                  ) : null}
-                </div>
-                <div className="flex flex-wrap justify-end gap-1">
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    leftIcon={<Play className="h-3.5 w-3.5" aria-hidden="true" />}
-                    loading={runNow.isPending}
-                    onClick={() => runNow.mutate(schedule.schedule_id)}
-                    disabled={schedule.status === "archived"}
-                  >
-                    Run schedule now
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    leftIcon={<Pencil className="h-3.5 w-3.5" aria-hidden="true" />}
-                    onClick={() => {
-                      setEditing(schedule);
-                      setDrawerOpen(true);
-                    }}
-                    disabled={schedule.status === "archived"}
-                  >
-                    Edit
-                  </Button>
-                  {schedule.status === "active" ? (
+                  <div className="flex flex-wrap justify-end gap-1">
                     <Button
                       size="sm"
                       variant="ghost"
-                      leftIcon={<Pause className="h-3.5 w-3.5" aria-hidden="true" />}
-                      loading={pause.isPending}
-                      onClick={() => pause.mutate(schedule.schedule_id)}
-                    >
-                      Pause
-                    </Button>
-                  ) : schedule.status === "paused" ? (
-                    <Button size="sm" variant="ghost" loading={resume.isPending} onClick={() => resume.mutate(schedule.schedule_id)}>
-                      Resume
-                    </Button>
-                  ) : null}
-                  {schedule.execution_count === 0 ? (
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      leftIcon={<Trash2 className="h-3.5 w-3.5" aria-hidden="true" />}
-                      loading={remove.isPending}
-                      onClick={() => remove.mutate(schedule.schedule_id)}
-                    >
-                      Delete
-                    </Button>
-                  ) : (
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      leftIcon={<Archive className="h-3.5 w-3.5" aria-hidden="true" />}
-                      loading={archive.isPending}
-                      onClick={() => archive.mutate(schedule.schedule_id)}
+                      leftIcon={<Play className="h-3.5 w-3.5" aria-hidden="true" />}
+                      loading={runNow.isPending}
+                      onClick={() => runNow.mutate(schedule.schedule_id)}
                       disabled={schedule.status === "archived"}
                     >
-                      Archive
+                      Run schedule now
                     </Button>
-                  )}
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      leftIcon={<Pencil className="h-3.5 w-3.5" aria-hidden="true" />}
+                      onClick={() => {
+                        setEditing(schedule);
+                        setDrawerOpen(true);
+                      }}
+                      disabled={schedule.status === "archived"}
+                    >
+                      Edit
+                    </Button>
+                    {schedule.status === "active" ? (
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        leftIcon={<Pause className="h-3.5 w-3.5" aria-hidden="true" />}
+                        loading={pause.isPending}
+                        onClick={() => pause.mutate(schedule.schedule_id)}
+                      >
+                        Pause
+                      </Button>
+                    ) : schedule.status === "paused" ? (
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        loading={resume.isPending}
+                        onClick={() => resume.mutate(schedule.schedule_id)}
+                      >
+                        Resume
+                      </Button>
+                    ) : null}
+                    {schedule.execution_count === 0 ? (
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        leftIcon={<Trash2 className="h-3.5 w-3.5" aria-hidden="true" />}
+                        loading={remove.isPending}
+                        onClick={() => remove.mutate(schedule.schedule_id)}
+                      >
+                        Delete
+                      </Button>
+                    ) : (
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        leftIcon={<Archive className="h-3.5 w-3.5" aria-hidden="true" />}
+                        loading={archive.isPending}
+                        onClick={() => archive.mutate(schedule.schedule_id)}
+                        disabled={schedule.status === "archived"}
+                      >
+                        Archive
+                      </Button>
+                    )}
+                  </div>
                 </div>
+                <ScheduleExecutionHistory schedule={schedule} />
               </div>
-              <ScheduleExecutionHistory schedule={schedule} />
-            </div>
-          ))
-        )}
-      </CardBody>
-      <ScheduleDrawer
-        open={drawerOpen}
-        onOpenChange={setDrawerOpen}
-        target={props}
-        editing={editing}
-        onSaved={() => {
-          setEditing(null);
-          invalidate(qc);
-        }}
-      />
-    </Card>
+            ))
+          )}
+        </CardBody>
+        <ScheduleDrawer
+          open={drawerOpen}
+          onOpenChange={setDrawerOpen}
+          target={props}
+          editing={editing}
+          onSaved={() => {
+            setEditing(null);
+            invalidate(qc);
+          }}
+        />
+      </Card>
+    </div>
   );
 }
 
@@ -310,16 +356,30 @@ function ScheduleDrawer({
     <Drawer open={open} onOpenChange={onOpenChange}>
       <DrawerContent className="max-w-xl">
         <DrawerHeader>
-          <DrawerTitle>{editing ? "Edit schedule" : "New schedule"}</DrawerTitle>
+          <DrawerTitle>
+            {editing
+              ? target.targetKind === "screener_run"
+                ? "Edit scheduled run"
+                : "Edit scheduled refresh"
+              : target.targetKind === "screener_run"
+                ? "Schedule Screener run"
+                : "Schedule Watchlist refresh"}
+          </DrawerTitle>
           <DrawerDescription>
             {target.targetKind === "screener_run"
-              ? "Runs this exact Screener version and stores immutable discovery evidence."
+              ? "Runs this exact Screener version automatically and stores immutable discovery evidence."
               : "Refreshes this Watchlist as entry-universe evidence only."}
           </DrawerDescription>
         </DrawerHeader>
         <DrawerBody className="space-y-3">
-          {error ? <Banner severity="danger" title="Could not save schedule" message={error} /> : null}
-          <TextField label="Schedule name" value={form.name} onChange={(e) => setForm((prev) => ({ ...prev, name: e.target.value }))} />
+          {error ? (
+            <Banner severity="danger" title="Could not save schedule" message={error} />
+          ) : null}
+          <TextField
+            label="Schedule name"
+            value={form.name}
+            onChange={(e) => setForm((prev) => ({ ...prev, name: e.target.value }))}
+          />
           <Select
             label="Cadence"
             value={form.cadence}
@@ -328,7 +388,10 @@ function ScheduleDrawer({
               setForm((prev) => ({
                 ...prev,
                 cadence,
-                interval_minutes: cadence === "every_n_minutes" ? prev.interval_minutes ?? 15 : prev.interval_minutes,
+                interval_minutes:
+                  cadence === "every_n_minutes"
+                    ? (prev.interval_minutes ?? 15)
+                    : prev.interval_minutes,
               }));
             }}
           >
@@ -341,7 +404,9 @@ function ScheduleDrawer({
               label="Interval minutes"
               type="number"
               value={String(form.interval_minutes ?? 15)}
-              onChange={(e) => setForm((prev) => ({ ...prev, interval_minutes: Number(e.target.value || 15) }))}
+              onChange={(e) =>
+                setForm((prev) => ({ ...prev, interval_minutes: Number(e.target.value || 15) }))
+              }
             />
           ) : (
             <TextField
@@ -355,20 +420,26 @@ function ScheduleDrawer({
             <TextField
               label="Session start"
               value={form.session_start ?? ""}
-              onChange={(e) => setForm((prev) => ({ ...prev, session_start: e.target.value || null }))}
+              onChange={(e) =>
+                setForm((prev) => ({ ...prev, session_start: e.target.value || null }))
+              }
               placeholder="04:00"
             />
             <TextField
               label="Session end"
               value={form.session_end ?? ""}
-              onChange={(e) => setForm((prev) => ({ ...prev, session_end: e.target.value || null }))}
+              onChange={(e) =>
+                setForm((prev) => ({ ...prev, session_end: e.target.value || null }))
+              }
               placeholder="10:30"
             />
           </div>
           <TextField
             label="Timezone"
             value={form.timezone_name}
-            onChange={(e) => setForm((prev) => ({ ...prev, timezone_name: e.target.value || "America/New_York" }))}
+            onChange={(e) =>
+              setForm((prev) => ({ ...prev, timezone_name: e.target.value || "America/New_York" }))
+            }
             placeholder="America/New_York"
           />
           <WeekdayPicker
@@ -382,11 +453,14 @@ function ScheduleDrawer({
               onChange={(e) =>
                 setForm((prev) => ({
                   ...prev,
-                  approval_policy: e.target.value as DiscoveryScheduleWriteRequest["approval_policy"],
+                  approval_policy: e.target
+                    .value as DiscoveryScheduleWriteRequest["approval_policy"],
                 }))
               }
             >
-              <option value="operator_review">Operator review when active deployments reference it</option>
+              <option value="operator_review">
+                Operator review when active deployments reference it
+              </option>
               <option value="auto_snapshot">Auto snapshot, auditable</option>
             </Select>
           ) : null}
@@ -395,7 +469,13 @@ function ScheduleDrawer({
           <Button variant="ghost" size="sm" onClick={() => onOpenChange(false)}>
             Cancel
           </Button>
-          <Button variant="primary" size="sm" loading={save.isPending} disabled={!form.name.trim()} onClick={() => save.mutate()}>
+          <Button
+            variant="primary"
+            size="sm"
+            loading={save.isPending}
+            disabled={!form.name.trim()}
+            onClick={() => save.mutate()}
+          >
             Save schedule
           </Button>
         </DrawerFooter>
@@ -449,7 +529,8 @@ function ExecutionRow({ execution }: { execution: DiscoveryScheduleExecution }):
             {execution.status}
           </StatusBadge>
           <span className="text-fg-muted">
-            {execution.trigger === "run_now" ? "Run now" : "Scheduled"} at {formatTimestamp(execution.started_at)}
+            {execution.trigger === "run_now" ? "Run now" : "Scheduled"} at{" "}
+            {formatTimestamp(execution.started_at)}
           </span>
         </div>
         <span className="text-fg-subtle" title={executionDebugId(execution)}>
@@ -584,7 +665,9 @@ function weekdaysText(value: number[]): string {
     .join(", ");
 }
 
-function executionTone(status: DiscoveryScheduleExecution["status"]): "ok" | "warn" | "danger" | "info" | "muted" {
+function executionTone(
+  status: DiscoveryScheduleExecution["status"],
+): "ok" | "warn" | "danger" | "info" | "muted" {
   if (status === "completed") return "ok";
   if (status === "blocked") return "warn";
   if (status === "failed") return "danger";
@@ -594,12 +677,15 @@ function executionTone(status: DiscoveryScheduleExecution["status"]): "ok" | "wa
 function executionTargetLabel(execution: DiscoveryScheduleExecution): string {
   if (execution.screener_run_id) return "Screener run evidence recorded";
   if (execution.watchlist_snapshot_id) return "Watchlist snapshot recorded";
-  return execution.target_kind === "screener_run" ? "Screener run evidence pending" : "Watchlist snapshot pending";
+  return execution.target_kind === "screener_run"
+    ? "Screener run evidence pending"
+    : "Watchlist snapshot pending";
 }
 
 function executionDebugId(execution: DiscoveryScheduleExecution): string | undefined {
   if (execution.screener_run_id) return `Screener run id: ${execution.screener_run_id}`;
-  if (execution.watchlist_snapshot_id) return `Watchlist snapshot id: ${execution.watchlist_snapshot_id}`;
+  if (execution.watchlist_snapshot_id)
+    return `Watchlist snapshot id: ${execution.watchlist_snapshot_id}`;
   return undefined;
 }
 

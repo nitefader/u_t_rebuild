@@ -90,7 +90,9 @@ describe("<DiscoveryScheduleControls />", () => {
       {
         url: "/api/v1/discovery-schedules",
         method: "GET",
-        body: { schedules: [schedule({ target_kind: "watchlist_refresh", watchlist_id: WATCHLIST_ID })] },
+        body: {
+          schedules: [schedule({ target_kind: "watchlist_refresh", watchlist_id: WATCHLIST_ID })],
+        },
       },
     ]);
 
@@ -142,7 +144,7 @@ describe("<DiscoveryScheduleControls />", () => {
       />,
     );
 
-    await user.click(await screen.findByRole("button", { name: /New schedule/i }));
+    await user.click(await screen.findByRole("button", { name: /Schedule refresh/i }));
     await user.clear(screen.getByLabelText(/Schedule name/i));
     await user.type(screen.getByLabelText(/Schedule name/i), "Open-hour refresh");
     await user.selectOptions(screen.getByLabelText(/Cadence/i), "every_n_minutes");
@@ -154,9 +156,12 @@ describe("<DiscoveryScheduleControls />", () => {
     await user.click(screen.getByRole("button", { name: /Save schedule/i }));
 
     await waitFor(() => {
-      const createCall = vi.mocked(fetch).mock.calls.find(
-        ([url, init]) => String(url).includes("/api/v1/discovery-schedules") && init?.method === "POST",
-      );
+      const createCall = vi
+        .mocked(fetch)
+        .mock.calls.find(
+          ([url, init]) =>
+            String(url).includes("/api/v1/discovery-schedules") && init?.method === "POST",
+        );
       expect(createCall).toBeTruthy();
       expect(JSON.parse(String(createCall?.[1]?.body))).toMatchObject({
         name: "Open-hour refresh",
@@ -229,9 +234,18 @@ describe("<DiscoveryScheduleControls />", () => {
     await user.click(screen.getByRole("button", { name: /Archive/i }));
 
     await waitFor(() => {
-      expect(fetch).toHaveBeenCalledWith(expect.stringContaining("/run-now"), expect.objectContaining({ method: "POST" }));
-      expect(fetch).toHaveBeenCalledWith(expect.stringContaining("/pause"), expect.objectContaining({ method: "POST" }));
-      expect(fetch).toHaveBeenCalledWith(expect.stringContaining("/archive"), expect.objectContaining({ method: "POST" }));
+      expect(fetch).toHaveBeenCalledWith(
+        expect.stringContaining("/run-now"),
+        expect.objectContaining({ method: "POST" }),
+      );
+      expect(fetch).toHaveBeenCalledWith(
+        expect.stringContaining("/pause"),
+        expect.objectContaining({ method: "POST" }),
+      );
+      expect(fetch).toHaveBeenCalledWith(
+        expect.stringContaining("/archive"),
+        expect.objectContaining({ method: "POST" }),
+      );
     });
   });
 });

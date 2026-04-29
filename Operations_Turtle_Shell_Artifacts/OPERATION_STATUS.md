@@ -1,6 +1,6 @@
 # Operation Turtle Shell Status
 
-Last updated: 2026-04-29 15:57:06 -04:00
+Last updated: 2026-04-29 16:07:27 -04:00
 
 ## Date And Time Syntax
 
@@ -26,15 +26,15 @@ drawer). It does not add trading, broker submit, or a second runtime root.
 
 ## Executive Briefing
 
-Work session status: screener_template_drawer_cleanup_complete
+Work session status: screener_schedule_template_clarity_complete
 
 Agent role: Codex - Operation Turtle Shell backend doctrine spine
 
 Started at: 2026-04-27 22:28:16 -04:00
 
-Last heartbeat: 2026-04-29 15:57:06 -04:00
+Last heartbeat: 2026-04-29 16:07:27 -04:00
 
-Ended at: 2026-04-29 15:57:06 -04:00
+Ended at: 2026-04-29 16:07:27 -04:00
 
 Expected next checkpoint: Continue operator UI cleanup requests while preserving unrelated dirty Strategy Controls files.
 
@@ -54,11 +54,11 @@ briefing at start, heartbeat, and handoff.
 
 ## Current Phase
 
-Screener templates moved out of the inline Screeners page and into a browse drawer; verification green.
+Screener schedule/template/Alpaca-list clarity pass complete and verified.
 
 ## Current Task
 
-Operator clarified the Screeners page: templates should not be inline because they look like actual Screeners/Watchlists. They now live behind a `Browse templates` drawer.
+Operator flagged confusion around scheduled Screener runs, template editability, repetitive templates, and whether Alpaca Market Lists are templates. UI now states the object model directly and exposes schedule/template metadata earlier.
 
 ## Current Owner
 
@@ -72,6 +72,30 @@ Codex
 - Codex doctrine reviewer
 
 ## Latest Completed Action
+
+Screener schedule/template clarity pass:
+
+- Started at: 2026-04-29 15:59:11 -04:00
+- Completed verification at: 2026-04-29 16:07:27 -04:00
+- Files:
+  - `frontend/src/routes/Screeners.tsx`
+  - `frontend/src/routes/ScreenerDetail.tsx`
+  - `frontend/src/components/screener/DiscoveryScheduleControls.tsx`
+  - focused tests for those files
+- Scope:
+  - Saved Screener cards now show schedule state, next automatic run, and a direct `Schedule` action.
+  - Schedule card title/copy now says active schedules run by themselves and `Run schedule now` is manual.
+  - Alpaca Market Lists are explicitly labeled as live provider runs, not templates; cards show intent icons and `up to 50 symbols`.
+  - Template drawer cards now show intent, universe size, sample symbols, timeframe, rule count, and sort metric.
+  - `Duplicate version` was renamed to `Customize version`.
+  - Flat template logic can now convert into editable criteria when creating a new Screener version; complex AI boolean trees remain preserved.
+- Verification:
+  - `npm.cmd run typecheck` in `frontend/` -> passed.
+  - `npx.cmd vitest run src/routes/Screeners.test.tsx src/routes/ScreenerDetail.test.tsx src/components/screener/DiscoveryScheduleControls.test.tsx` -> 3 files / 12 tests passed.
+  - `npm.cmd run lint:names` in `frontend/` -> clean.
+  - `git diff --check` -> clean, CRLF warnings only.
+- Doctrine:
+  - Frontend/operator-readability only. No backend, Strategy, Deployment runtime, SignalPlan, Account truth, or broker path changed.
 
 Screener template drawer cleanup:
 
