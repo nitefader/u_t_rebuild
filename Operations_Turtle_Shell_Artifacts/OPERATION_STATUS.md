@@ -1,6 +1,6 @@
 # Operation Turtle Shell Status
 
-Last updated: 2026-04-29 13:46:15 -04:00
+Last updated: 2026-04-29 13:46:55 -04:00
 
 ## Date And Time Syntax
 
@@ -26,17 +26,17 @@ drawer). It does not add trading, broker submit, or a second runtime root.
 
 ## Executive Briefing
 
-Work session status: final_schema_dirty_file_commit_in_progress
+Work session status: release_cleanup_complete
 
 Agent role: Codex - Operation Turtle Shell backend doctrine spine
 
 Started at: 2026-04-27 22:28:16 -04:00
 
-Last heartbeat: 2026-04-29 13:46:15 -04:00
+Last heartbeat: 2026-04-29 13:46:55 -04:00
 
-Ended at: 2026-04-29 13:44:32 -04:00
+Ended at: 2026-04-29 13:46:55 -04:00
 
-Expected next checkpoint: Commit/push final Strategy Composer schema dirty file, then confirm the working tree is clean.
+Expected next checkpoint: Fix Account Detail deployment projection so persisted subscribed Deployments appear there; then commit/push that separate slice.
 
 Operator urgency:
 
@@ -54,11 +54,11 @@ briefing at start, heartbeat, and handoff.
 
 ## Current Phase
 
-Account Detail Risk Card backend route and bulk delete UX slice shipped; local backend/frontend restarted and verified live; release cleanup pushed.
+Account Detail Risk Card backend route and bulk delete UX slice shipped; local backend/frontend restarted and verified live; release cleanup complete.
 
 ## Current Task
 
-Operator-requested Account Detail Risk Card route gap and easier bulk deletion for Deployments/Watchlists completed; local dev servers refreshed; verification clean; release commit pushed to `origin/master`.
+Operator-requested Account Detail Risk Card route gap and easier bulk deletion for Deployments/Watchlists completed; local dev servers refreshed; verification clean; all known dirty work committed and pushed to `origin/master`.
 
 ## Current Owner
 
@@ -86,7 +86,7 @@ Final dirty-file cleanup:
   - `npm.cmd run typecheck` in `frontend/` -> passed.
   - `npx.cmd vitest run src/routes/StrategyCompose.test.tsx src/components/strategy_builder/editor/sections/StrategyControlsSection.test.tsx src/components/strategy_builder/editor/coherenceValidator.test.ts` -> 54 passed.
 - Next action:
-  - Commit and push this final dirty file.
+  - Completed. Final dirty file was committed and pushed.
 
 Release push complete:
 
