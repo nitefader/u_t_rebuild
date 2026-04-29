@@ -254,7 +254,7 @@ describe("<StrategyCompose /> — wizard + editor flow", () => {
     expect(body).not.toHaveProperty("notes");
   });
 
-  it("after Generate succeeds, advances to Page 2 prefilled editor with all 14 sections", async () => {
+  it("after Generate succeeds, advances to Page 2 prefilled editor with the 4-tab shell", async () => {
     const user = userEvent.setup();
     mount();
 
@@ -267,21 +267,33 @@ describe("<StrategyCompose /> — wizard + editor flow", () => {
     await waitFor(() => {
       expect(screen.getByTestId("editor-page")).toBeInTheDocument();
     });
+    // 4-tab shell parents the section components; sections still mount under tabs.
+    expect(screen.getByTestId("page2-tab-shell")).toBeInTheDocument();
+    expect(screen.getByTestId("page2-tab-trigger-core")).toBeInTheDocument();
+    expect(screen.getByTestId("page2-tab-trigger-signals")).toBeInTheDocument();
+    expect(screen.getByTestId("page2-tab-trigger-stop-target-exec")).toBeInTheDocument();
+    expect(screen.getByTestId("page2-tab-trigger-controls")).toBeInTheDocument();
     expect(screen.getByTestId("section-summary")).toBeInTheDocument();
     expect(screen.getByTestId("section-required-features")).toBeInTheDocument();
     expect(screen.getByTestId("section-entry-long")).toBeInTheDocument();
     expect(screen.getByTestId("section-entry-plan")).toBeInTheDocument();
-    expect(screen.getByTestId("section-stop-plan")).toBeInTheDocument();
-    expect(screen.getByTestId("section-target-plan")).toBeInTheDocument();
-    expect(screen.getByTestId("section-runner-plan")).toBeInTheDocument();
+    // Slice D: Stop / Target / Runner cards are gated on the active preset.
+    // The seeded AI draft uses market_entry_market_exit which has none of those legs.
+    expect(screen.queryByTestId("section-stop-plan")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("section-target-plan")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("section-runner-plan")).not.toBeInTheDocument();
     expect(screen.getByTestId("section-logical-exit")).toBeInTheDocument();
     expect(screen.getByTestId("section-time-based-exit")).toBeInTheDocument();
     expect(screen.getByTestId("section-strategy-controls")).toBeInTheDocument();
     expect(screen.getByTestId("section-execution-preset")).toBeInTheDocument();
-    expect(screen.getByTestId("section-coherence")).toBeInTheDocument();
-    expect(screen.getByTestId("section-research-actions")).toBeInTheDocument();
-    expect(screen.getByTestId("editor-toc")).toBeInTheDocument();
+    // Right-rail TOC + inline coherence/research-action sections are gone — they live
+    // in the save bar (validation popover) and below it (action buttons).
+    expect(screen.queryByTestId("editor-toc")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("section-coherence")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("section-research-actions")).not.toBeInTheDocument();
+    expect(screen.getByTestId("editor-validation-trigger")).toBeInTheDocument();
     expect(screen.getByTestId("editor-save-bar")).toBeInTheDocument();
+    expect(screen.getByTestId("page2-blueprint-chips")).toBeInTheDocument();
 
     // Summary section is prefilled from the AI draft.
     const nameInput = screen.getByTestId("summary-name") as HTMLInputElement;

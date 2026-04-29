@@ -19,10 +19,17 @@ export interface CoherenceWarningsPanelProps {
   draft: StrategyDraft;
   warnings: CoherenceWarning[];
   onDismiss: (id: string) => void;
+  /**
+   * When provided, the warning row body becomes a button that calls
+   * this handler with the offending warning's sectionId. The host
+   * (EditorPage) uses it to switch tabs, scroll the section into
+   * view, and close the validation popover.
+   */
+  onJumpToSection?: (sectionId: CoherenceWarning["sectionId"]) => void;
 }
 
 export function CoherenceWarningsPanel(props: CoherenceWarningsPanelProps): JSX.Element {
-  const { draft, warnings, onDismiss } = props;
+  const { draft, warnings, onDismiss, onJumpToSection } = props;
   const v = draft.validation;
   const backendErrors = v.errors ?? [];
   const backendWarnings = v.warnings ?? [];
@@ -94,7 +101,12 @@ export function CoherenceWarningsPanel(props: CoherenceWarningsPanelProps): JSX.
               {clientErrors.length} coherence error{clientErrors.length === 1 ? "" : "s"} — blocks save
             </p>
             {clientErrors.map((w) => (
-              <WarningRow key={w.id} warning={w} onDismiss={onDismiss} />
+              <WarningRow
+                key={w.id}
+                warning={w}
+                onDismiss={onDismiss}
+                onJumpToSection={onJumpToSection}
+              />
             ))}
           </div>
         ) : null}
@@ -106,7 +118,12 @@ export function CoherenceWarningsPanel(props: CoherenceWarningsPanelProps): JSX.
               {clientWarns.length} warning{clientWarns.length === 1 ? "" : "s"}
             </p>
             {clientWarns.map((w) => (
-              <WarningRow key={w.id} warning={w} onDismiss={onDismiss} />
+              <WarningRow
+                key={w.id}
+                warning={w}
+                onDismiss={onDismiss}
+                onJumpToSection={onJumpToSection}
+              />
             ))}
           </div>
         ) : null}
@@ -118,7 +135,12 @@ export function CoherenceWarningsPanel(props: CoherenceWarningsPanelProps): JSX.
               {clientInfos.length} advisory note{clientInfos.length === 1 ? "" : "s"}
             </p>
             {clientInfos.map((w) => (
-              <WarningRow key={w.id} warning={w} onDismiss={onDismiss} />
+              <WarningRow
+                key={w.id}
+                warning={w}
+                onDismiss={onDismiss}
+                onJumpToSection={onJumpToSection}
+              />
             ))}
           </div>
         ) : null}
@@ -138,10 +160,12 @@ export function CoherenceWarningsPanel(props: CoherenceWarningsPanelProps): JSX.
 interface WarningRowProps {
   warning: CoherenceWarning;
   onDismiss: (id: string) => void;
+  onJumpToSection?: (sectionId: CoherenceWarning["sectionId"]) => void;
 }
 
-function WarningRow({ warning, onDismiss }: WarningRowProps): JSX.Element {
+function WarningRow({ warning, onDismiss, onJumpToSection }: WarningRowProps): JSX.Element {
   const canDismiss = warning.severity !== "error";
+  const jumpable = Boolean(onJumpToSection);
 
   return (
     <div
@@ -156,7 +180,19 @@ function WarningRow({ warning, onDismiss }: WarningRowProps): JSX.Element {
       )}
       data-testid={`coherence-warning-${warning.id}`}
     >
-      <span className="flex-1">{warning.message}</span>
+      {jumpable ? (
+        <button
+          type="button"
+          onClick={() => onJumpToSection?.(warning.sectionId)}
+          className="flex-1 cursor-pointer rounded px-0.5 py-0.5 text-left underline-offset-2 hover:underline focus:outline-none focus:ring-1 focus:ring-fg-muted"
+          data-testid={`coherence-warning-jump-${warning.id}`}
+          aria-label={`Jump to ${warning.sectionId}`}
+        >
+          {warning.message}
+        </button>
+      ) : (
+        <span className="flex-1">{warning.message}</span>
+      )}
       {canDismiss ? (
         <button
           type="button"
