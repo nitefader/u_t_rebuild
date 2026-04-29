@@ -1,6 +1,6 @@
 # Operation Turtle Shell Status
 
-Last updated: 2026-04-29 16:07:27 -04:00
+Last updated: 2026-04-29 16:34:21 -04:00
 
 ## Date And Time Syntax
 
@@ -26,15 +26,15 @@ drawer). It does not add trading, broker submit, or a second runtime root.
 
 ## Executive Briefing
 
-Work session status: screener_schedule_template_clarity_complete
+Work session status: hold_to_arm_delete_complete
 
 Agent role: Codex - Operation Turtle Shell backend doctrine spine
 
 Started at: 2026-04-27 22:28:16 -04:00
 
-Last heartbeat: 2026-04-29 16:07:27 -04:00
+Last heartbeat: 2026-04-29 16:34:21 -04:00
 
-Ended at: 2026-04-29 16:07:27 -04:00
+Ended at: 2026-04-29 16:34:21 -04:00
 
 Expected next checkpoint: Continue operator UI cleanup requests while preserving unrelated dirty Strategy Controls files.
 
@@ -54,11 +54,11 @@ briefing at start, heartbeat, and handoff.
 
 ## Current Phase
 
-Screener schedule/template/Alpaca-list clarity pass complete and verified.
+Hold-to-arm delete confirmation complete and verified.
 
 ## Current Task
 
-Operator flagged confusion around scheduled Screener runs, template editability, repetitive templates, and whether Alpaca Market Lists are templates. UI now states the object model directly and exposes schedule/template metadata earlier.
+Operator rejected typed bulk-delete confirmation. Deployment and Watchlist destructive list actions now use a two-second press-and-hold verifier with optional notes.
 
 ## Current Owner
 
@@ -72,6 +72,32 @@ Codex
 - Codex doctrine reviewer
 
 ## Latest Completed Action
+
+Hold-to-arm delete confirmation:
+
+- Started at: 2026-04-29 16:26:33 -04:00
+- Completed verification at: 2026-04-29 16:34:21 -04:00
+- Files:
+  - `frontend/src/components/ui/HoldToArmConfirm.tsx`
+  - `frontend/src/components/ui/HoldToArmConfirm.test.tsx`
+  - `frontend/src/routes/Deployments.tsx`
+  - `frontend/src/routes/Deployments.test.tsx`
+  - `frontend/src/routes/Watchlists.tsx`
+  - `frontend/src/routes/Watchlists.test.tsx`
+- Scope:
+  - Added a reusable hold-to-arm destructive confirmation dialog.
+  - Holding the verifier for two seconds pulses/fills the control, then turns it green and enables the final action.
+  - Notes are optional.
+  - Deployment bulk delete and single delete now use hold-to-arm instead of typed confirmation.
+  - Watchlist bulk archive, bulk delete, and detail delete now use hold-to-arm instead of typed confirmation.
+  - Existing `DangerConfirm` remains unchanged for operational flows that still require typed confirmation and audit reasons.
+- Verification:
+  - `npm.cmd run typecheck` in `frontend/` -> passed.
+  - `npx.cmd vitest run src/components/ui/HoldToArmConfirm.test.tsx src/routes/Deployments.test.tsx src/routes/Watchlists.test.tsx` -> 3 files / 13 tests passed.
+  - `npm.cmd run lint:names` in `frontend/` -> clean.
+  - `git diff --check` -> clean, CRLF warnings only.
+- Doctrine:
+  - Frontend/operator-readability only. Existing backend delete/archive guards remain the source of truth. No backend, Strategy, Deployment runtime, SignalPlan, Account truth, BrokerSync, Governor, order, or Position truth path changed.
 
 Screener schedule/template clarity pass:
 

@@ -8,7 +8,7 @@ import type { Watchlist, WatchlistKind, WatchlistSnapshot } from "@/api/schemas/
 import { Banner } from "@/components/ui/Banner";
 import { Button } from "@/components/ui/Button";
 import { Card, CardBody, CardHeader, CardTitle } from "@/components/ui/Card";
-import { DangerConfirm } from "@/components/ui/DangerConfirm";
+import { HoldToArmConfirm } from "@/components/ui/HoldToArmConfirm";
 import {
   Drawer,
   DrawerBody,
@@ -228,17 +228,16 @@ export function Watchlists(): JSX.Element {
           }
         }}
       />
-      <DangerConfirm
+      <HoldToArmConfirm
         open={bulkArchiveOpen}
         onOpenChange={setBulkArchiveOpen}
         title={`Archive ${selectedWatchlists.length} selected Watchlist${selectedWatchlists.length === 1 ? "" : "s"}?`}
         message={
           <span>
             Archive preserves Watchlist and snapshot history. Active Deployment references remain protected.
-            Type <strong>ARCHIVE {selectedWatchlists.length}</strong> to confirm.
+            Hold the verifier for two seconds to unlock archive.
           </span>
         }
-        expected={`ARCHIVE ${selectedWatchlists.length}`}
         actionLabel="Archive Selected"
         tone="danger"
         busy={bulkArchive.isPending}
@@ -247,17 +246,16 @@ export function Watchlists(): JSX.Element {
           setBulkArchiveOpen(false);
         }}
       />
-      <DangerConfirm
+      <HoldToArmConfirm
         open={bulkDeleteOpen}
         onOpenChange={setBulkDeleteOpen}
         title={`Delete ${selectedWatchlists.length} selected Watchlist${selectedWatchlists.length === 1 ? "" : "s"}?`}
         message={
           <span>
             Delete is allowed only when the backend confirms no active Deployment reference and no snapshot audit history.
-            Type <strong>DELETE {selectedWatchlists.length}</strong> to confirm.
+            Hold the verifier for two seconds to unlock delete.
           </span>
         }
-        expected={`DELETE ${selectedWatchlists.length}`}
         actionLabel="Delete Selected"
         tone="danger"
         busy={bulkDelete.isPending}
@@ -794,17 +792,16 @@ function WatchlistDetailDrawer({
           )}
         </DrawerFooter>
       </DrawerContent>
-      <DangerConfirm
+      <HoldToArmConfirm
         open={deleteOpen}
         onOpenChange={setDeleteOpen}
         title={`Delete watchlist "${w?.name ?? ""}"?`}
         message={
           <span>
             Archive preserves run and snapshot history. Delete is allowed only when the backend confirms no active
-            reference depends on this Watchlist. Type <strong>{w?.name}</strong> to confirm.
+            reference depends on this Watchlist. Hold the verifier for two seconds to unlock delete.
           </span>
         }
-        expected={w?.name ?? ""}
         actionLabel="Delete Watchlist"
         tone="danger"
         busy={remove.isPending}

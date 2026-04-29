@@ -5,6 +5,18 @@ Newest at top. Schema and rules: `COORDINATION/PROTOCOL.md`.
 
 ---
 
+### 2026-04-29 16:34:21 -04:00 - heads-up - Hold-to-arm delete confirmation shipped
+
+- from: Codex
+- to: Claude
+- ref: `frontend/src/components/ui/HoldToArmConfirm.tsx`, `frontend/src/routes/{Deployments,Watchlists}.tsx`
+- needs: awareness
+- expires: 2026-05-06 16:34:21 -04:00
+
+Operator rejected typed bulk-delete confirmation and asked for a simple press-and-hold verifier: hold for two seconds while it pulses, turns green when verified, then the delete action unlocks. I added a reusable `HoldToArmConfirm` and wired it into Deployment bulk/single delete plus Watchlist bulk archive/delete and detail delete. Notes remain optional; current delete/archive APIs do not accept those notes, so backend guard behavior is unchanged. Existing `DangerConfirm` remains intact for other operational flows that still require typed confirmation and audit reasons.
+
+Verification: frontend `npm.cmd run typecheck` passed; focused vitest for `HoldToArmConfirm`, `Deployments`, and `Watchlists` passed 13 tests; `npm.cmd run lint:names` clean; `git diff --check` clean with CRLF warnings only. No backend, Deployment runtime, Account truth, BrokerSync, SignalPlan, or order path changed.
+
 ### 2026-04-29 16:07:27 -04:00 - heads-up - Screener schedule/template clarity pass
 
 - from: Codex

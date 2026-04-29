@@ -1,5 +1,5 @@
-import { afterEach, describe, expect, it } from "vitest";
-import { fireEvent, screen, waitFor } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { act, fireEvent, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Deployments } from "./Deployments";
 import { installFetchMock, renderRoute } from "@/test/renderRoute";
@@ -14,9 +14,20 @@ const STATUS_OK = {
   operator_environment_conflict: null,
 };
 
+async function holdDeleteVerifier(): Promise<void> {
+  vi.useFakeTimers();
+  const verifier = screen.getByRole("button", { name: /Hold 2 seconds to verify/i });
+  fireEvent.pointerDown(verifier);
+  await act(async () => {
+    vi.advanceTimersByTime(2000);
+  });
+  vi.useRealTimers();
+}
+
 describe("<Deployments />", () => {
   let restore: (() => void) | null = null;
   afterEach(() => {
+    vi.useRealTimers();
     restore?.();
     restore = null;
   });
@@ -322,8 +333,7 @@ describe("<Deployments />", () => {
     await user.click(screen.getByLabelText(/Select deployment Draft Deployment/i));
     await user.click(screen.getByLabelText(/Select deployment Active Deployment/i));
     await user.click(screen.getByRole("button", { name: /Bulk delete/i }));
-    await user.type(screen.getByLabelText(/Type "DELETE 2" to confirm/i), "DELETE 2");
-    await user.type(screen.getByLabelText(/Reason/i), "bulk cleanup");
+    await holdDeleteVerifier();
     await user.click(screen.getByRole("button", { name: /Delete Selected/i }));
 
     expect(await screen.findByText(/Deleted 1; 1 blocked/i)).toBeInTheDocument();

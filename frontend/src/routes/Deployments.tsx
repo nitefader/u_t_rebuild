@@ -13,6 +13,7 @@ import { Banner } from "@/components/ui/Banner";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { DangerConfirm } from "@/components/ui/DangerConfirm";
+import { HoldToArmConfirm } from "@/components/ui/HoldToArmConfirm";
 import {
   Drawer,
   DrawerBody,
@@ -169,17 +170,16 @@ export function Deployments(): JSX.Element {
       )}
 
       <CreateDeploymentDrawer open={createOpen} onOpenChange={setCreateOpen} />
-      <DangerConfirm
+      <HoldToArmConfirm
         open={bulkDeleteOpen}
         onOpenChange={setBulkDeleteOpen}
         title={`Delete ${selectedDeployments.length} selected deployment${selectedDeployments.length === 1 ? "" : "s"}?`}
         message={
           <span>
             Bulk delete uses the same guard as single delete. Only draft or stopped Deployments can be deleted;
-            active or paused rows are reported as blocked. Type <strong>DELETE {selectedDeployments.length}</strong> to confirm.
+            active or paused rows are reported as blocked. Hold the verifier for two seconds to unlock delete.
           </span>
         }
-        expected={`DELETE ${selectedDeployments.length}`}
         actionLabel="Delete Selected"
         tone="danger"
         busy={bulkDelete.isPending}
@@ -416,12 +416,11 @@ function DeploymentCard({
 
       <EditDeploymentDrawer open={editOpen} onOpenChange={setEditOpen} deployment={d} />
 
-      <DangerConfirm
+      <HoldToArmConfirm
         open={deleteOpen}
         onOpenChange={setDeleteOpen}
         title={`Delete deployment "${d.name}"?`}
-        message={<span>Type <strong>{d.name}</strong> to confirm. Only DRAFT or STOPPED deployments can be deleted.</span>}
-        expected={d.name}
+        message={<span>Only DRAFT or STOPPED Deployments can be deleted. Hold the verifier for two seconds to unlock delete.</span>}
         actionLabel="Delete Deployment"
         tone="danger"
         busy={remove.isPending}

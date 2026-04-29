@@ -1,5 +1,5 @@
-import { afterEach, describe, expect, it } from "vitest";
-import { screen, waitFor } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { act, fireEvent, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Watchlists } from "./Watchlists";
 import { installFetchMock, renderRoute } from "@/test/renderRoute";
@@ -14,9 +14,20 @@ const STATUS_OK = {
   operator_environment_conflict: null,
 };
 
+async function holdActionVerifier(): Promise<void> {
+  vi.useFakeTimers();
+  const verifier = screen.getByRole("button", { name: /Hold 2 seconds to verify/i });
+  fireEvent.pointerDown(verifier);
+  await act(async () => {
+    vi.advanceTimersByTime(2000);
+  });
+  vi.useRealTimers();
+}
+
 describe("<Watchlists />", () => {
   let restore: (() => void) | null = null;
   afterEach(() => {
+    vi.useRealTimers();
     restore?.();
     restore = null;
   });
@@ -269,8 +280,7 @@ describe("<Watchlists />", () => {
     await user.click(screen.getByLabelText(/Select watchlist Disposable List/i));
     await user.click(screen.getByLabelText(/Select watchlist Audited Dynamic List/i));
     await user.click(screen.getByRole("button", { name: /Bulk delete/i }));
-    await user.type(screen.getByLabelText(/Type "DELETE 2" to confirm/i), "DELETE 2");
-    await user.type(screen.getByLabelText(/Reason/i), "bulk cleanup");
+    await holdActionVerifier();
     await user.click(screen.getByRole("button", { name: /Delete Selected/i }));
 
     expect(await screen.findByText(/Deleted 1; 1 blocked/i)).toBeInTheDocument();
@@ -331,8 +341,7 @@ describe("<Watchlists />", () => {
 
     await user.click(screen.getByLabelText(/Select watchlist Archive Me/i));
     await user.click(screen.getByRole("button", { name: /Archive selected/i }));
-    await user.type(screen.getByLabelText(/Type "ARCHIVE 1" to confirm/i), "ARCHIVE 1");
-    await user.type(screen.getByLabelText(/Reason/i), "bulk archive");
+    await holdActionVerifier();
     await user.click(screen.getByRole("button", { name: /Archive Selected/i }));
 
     expect(await screen.findByText(/Archived 1 Watchlist/i)).toBeInTheDocument();
