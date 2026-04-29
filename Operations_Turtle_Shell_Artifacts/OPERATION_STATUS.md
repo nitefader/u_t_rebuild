@@ -1,6 +1,6 @@
 # Operation Turtle Shell Status
 
-Last updated: 2026-04-29 06:38:57 -04:00
+Last updated: 2026-04-29 07:28:47 -04:00
 
 ## Date And Time Syntax
 
@@ -32,11 +32,11 @@ Agent role: Codex - Operation Turtle Shell backend doctrine spine
 
 Started at: 2026-04-27 22:28:16 -04:00
 
-Last heartbeat: 2026-04-29 06:38:57 -04:00
+Last heartbeat: 2026-04-29 07:28:47 -04:00
 
-Ended at: 2026-04-29 06:38:57 -04:00
+Ended at: 2026-04-29 07:28:47 -04:00
 
-Expected next checkpoint: Configure a GitHub remote and push local commits through `c3a83ce`. `git remote -v` currently returns no remotes.
+Expected next checkpoint: Local and GitHub `master` should stay clean except ignored local-only files.
 
 Operator urgency:
 
@@ -58,7 +58,7 @@ Local Git checkpoint created after Alpaca-first Screener/Watchlist persona journ
 
 ## Current Task
 
-Commit/push handoff: local checkpoint commit `9e1d3d2` plus Chart Lab source commit `c3a83ce` created on `master`; GitHub push is blocked until a remote URL is configured.
+Commit/push handoff: local and GitHub `master` pushed through `0b738a8`; generated/secret artifacts are ignored.
 
 ## Current Owner
 
@@ -72,6 +72,22 @@ Codex
 - Alpaca Agent
 
 ## Latest Completed Action
+
+Local Git hygiene cleanup:
+
+- Started at: 2026-04-29 07:25:00 -04:00
+- Completed at: 2026-04-29 07:28:47 -04:00
+- Completed:
+  - Stopped tracking local `.env`.
+  - Stopped tracking Python bytecode caches under `__pycache__` and `*.pyc`.
+  - Added `.claude/` to `.gitignore`.
+  - Left local files on disk but ignored by Git.
+- Tests run:
+  - Not rerun; Git index hygiene only.
+- Blockers:
+  - None.
+- Nanyel approval:
+  - Approved. No runtime source behavior or trading doctrine path changed.
 
 Chart Lab source checkpoint:
 
