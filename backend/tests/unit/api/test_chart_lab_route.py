@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from backend.app.api.routes import chart_lab
+from backend.app.api.routes import chart_lab as chart_lab_routes
 from backend.app.api.routes.chart_lab import (
     ChartLabConfig,
     ChartLabHealthResponse,
@@ -33,6 +33,7 @@ def _bar(**overrides) -> NormalizedBar:
 
 
 def test_health_with_no_creds_reports_streaming_disabled(monkeypatch) -> None:
+    monkeypatch.setattr(chart_lab_routes, "_alpaca_service_for_purpose", lambda _purpose: None)
     monkeypatch.delenv("ALPACA_API_KEY", raising=False)
     monkeypatch.delenv("ALPACA_SECRET_KEY", raising=False)
     monkeypatch.delenv("ALPACA_USE_TEST_STREAM", raising=False)
@@ -43,9 +44,12 @@ def test_health_with_no_creds_reports_streaming_disabled(monkeypatch) -> None:
     assert response.test_stream is False
     assert response.data_feed == "iex"
     assert response.websocket_path == "/api/v1/chart-lab/stream"
+    assert isinstance(response.routing_note, str)
+    assert len(response.routing_note) > 10
 
 
 def test_health_with_creds_reports_streaming_enabled(monkeypatch) -> None:
+    monkeypatch.setattr(chart_lab_routes, "_alpaca_service_for_purpose", lambda _purpose: None)
     monkeypatch.setenv("ALPACA_API_KEY", "K")
     monkeypatch.setenv("ALPACA_SECRET_KEY", "S")
     monkeypatch.delenv("ALPACA_USE_TEST_STREAM", raising=False)
@@ -54,7 +58,28 @@ def test_health_with_creds_reports_streaming_enabled(monkeypatch) -> None:
     assert response.test_stream is False
 
 
+def test_health_with_frontend_configured_provider_credentials_reports_enabled(monkeypatch) -> None:
+    class _ConfiguredService:
+        has_api_key = True
+        has_api_secret = True
+
+    monkeypatch.setattr(
+        chart_lab_routes,
+        "_alpaca_service_for_purpose",
+        lambda purpose: _ConfiguredService() if str(purpose) == "live_streaming" else None,
+    )
+    monkeypatch.delenv("ALPACA_API_KEY", raising=False)
+    monkeypatch.delenv("ALPACA_SECRET_KEY", raising=False)
+    monkeypatch.delenv("ALPACA_USE_TEST_STREAM", raising=False)
+
+    response = chart_lab_health()
+
+    assert response.streaming_enabled is True
+    assert response.test_stream is False
+
+
 def test_health_with_test_stream_uses_fakepaca_default_symbol(monkeypatch) -> None:
+    monkeypatch.setattr(chart_lab_routes, "_alpaca_service_for_purpose", lambda _purpose: None)
     monkeypatch.setenv("ALPACA_API_KEY", "K")
     monkeypatch.setenv("ALPACA_SECRET_KEY", "S")
     monkeypatch.setenv("ALPACA_USE_TEST_STREAM", "1")
@@ -64,7 +89,37 @@ def test_health_with_test_stream_uses_fakepaca_default_symbol(monkeypatch) -> No
     assert response.data_feed == "test"
 
 
+def test_health_chart_lab_override_live_beats_catalog_tags(monkeypatch, tmp_path) -> None:
+    import backend.app.api.system_settings_store as ss
+
+    store = ss.SystemSettingsStore(tmp_path / "settings.json")
+    monkeypatch.setattr(ss, "_default_store", store)
+    store.update(chart_lab_one_symbol_fakepaca=False)
+    monkeypatch.setattr(chart_lab_routes, "_alpaca_service_for_purpose", lambda _purpose: object())
+    monkeypatch.setenv("ALPACA_API_KEY", "K")
+    monkeypatch.setenv("ALPACA_SECRET_KEY", "S")
+    monkeypatch.setenv("ALPACA_USE_TEST_STREAM", "1")
+    response = chart_lab_health()
+    assert response.test_stream is False
+    assert "Market Data toggle" in response.routing_note
+
+
+def test_health_chart_lab_override_test_forces_fakepaca(monkeypatch, tmp_path) -> None:
+    import backend.app.api.system_settings_store as ss
+
+    store = ss.SystemSettingsStore(tmp_path / "settings.json")
+    monkeypatch.setattr(ss, "_default_store", store)
+    store.update(chart_lab_one_symbol_fakepaca=True)
+    monkeypatch.setattr(chart_lab_routes, "_alpaca_service_for_purpose", lambda _purpose: None)
+    monkeypatch.setenv("ALPACA_API_KEY", "K")
+    monkeypatch.setenv("ALPACA_SECRET_KEY", "S")
+    response = chart_lab_health()
+    assert response.test_stream is True
+    assert response.default_symbol == AlpacaMarketDataAdapter.TEST_SYMBOL
+
+
 def test_health_reports_configured_data_feed(monkeypatch) -> None:
+    monkeypatch.setattr(chart_lab_routes, "_alpaca_service_for_purpose", lambda _purpose: None)
     monkeypatch.setenv("ALPACA_API_KEY", "K")
     monkeypatch.setenv("ALPACA_SECRET_KEY", "S")
     monkeypatch.delenv("ALPACA_USE_TEST_STREAM", raising=False)
@@ -140,8 +195,8 @@ def test_serialize_bar_emits_iso_timestamp_and_numeric_fields() -> None:
 def test_router_registers_health_endpoint() -> None:
     """Health endpoint is registered on the FastAPI router."""
     paths_and_methods = []
-    if hasattr(chart_lab.router, "routes"):
-        for route in chart_lab.router.routes:
+    if hasattr(chart_lab_routes.router, "routes"):
+        for route in chart_lab_routes.router.routes:
             path = getattr(route, "path", None) or getattr(route, "path_format", None)
             method = getattr(route, "method", None) or next(iter(getattr(route, "methods", []) or []), None)
             if path is not None:

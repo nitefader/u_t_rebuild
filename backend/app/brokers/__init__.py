@@ -5,8 +5,28 @@ No real broker implementation lives here yet.
 
 from .adapter import BrokerAdapter
 from .alpaca import AlpacaBrokerAdapter, AlpacaBrokerCapabilities, AlpacaBrokerError, AlpacaBrokerErrorDetails
+from .capabilities import (
+    BrokerAssetClass,
+    BrokerCapabilityMatrix,
+    BrokerCapabilityViolation,
+    BrokerErrorFamily,
+    BrokerErrorSeverity,
+    BrokerOperation,
+    BrokerOperatorAdvisory,
+    BrokerOrderClass,
+    BrokerOrderPreflightRequest,
+    BrokerOrderPreflightResult,
+    BrokerViolationCode,
+    MarketRulePreflightRequest,
+    MarketRulePreflightResult,
+    MarketRuleViolation,
+    MarketRuleViolationCode,
+    MarketSessionState,
+)
 from .fake import FakeBrokerAdapter
 from .models import (
+    AccountTradeSyncState,
+    AccountTradeSyncStatus,
     BrokerAccountSnapshot,
     BrokerAdapterError,
     BrokerFillUpdateEvent,
@@ -23,21 +43,40 @@ from .models import (
     BrokerReconciliationReport,
     BrokerSyncState,
 )
+from .preflight import (
+    AlpacaBrokerPreflightService,
+    MarketRulePreflightService,
+    build_broker_order_preflight_request,
+    build_market_rule_preflight_request,
+)
 from .stream import AlpacaAccountStreamAdapter, BrokerStreamEvent, BrokerStreamRouter, BrokerStreamRunner
 from .sync import BrokerSync, BrokerSyncService
 
 __all__ = [
+    "AlpacaBrokerPreflightService",
     "AlpacaBrokerAdapter",
     "AlpacaBrokerCapabilities",
     "AlpacaBrokerError",
     "AlpacaBrokerErrorDetails",
+    "AccountTradeSyncState",
+    "AccountTradeSyncStatus",
     "BrokerAccountSnapshot",
     "BrokerAdapter",
     "BrokerAdapterError",
+    "BrokerAssetClass",
+    "BrokerCapabilityMatrix",
+    "BrokerCapabilityViolation",
+    "BrokerErrorFamily",
+    "BrokerErrorSeverity",
     "AlpacaAccountStreamAdapter",
     "BrokerFillUpdateEvent",
     "BrokerOpenOrderSnapshot",
     "BrokerOrderMapping",
+    "BrokerOperation",
+    "BrokerOperatorAdvisory",
+    "BrokerOrderClass",
+    "BrokerOrderPreflightRequest",
+    "BrokerOrderPreflightResult",
     "BrokerOrderResult",
     "BrokerOrderStatus",
     "BrokerOrderUpdateEvent",
@@ -53,5 +92,14 @@ __all__ = [
     "BrokerStreamEvent",
     "BrokerStreamRouter",
     "BrokerStreamRunner",
+    "BrokerViolationCode",
     "FakeBrokerAdapter",
+    "MarketRulePreflightRequest",
+    "MarketRulePreflightResult",
+    "MarketRuleViolation",
+    "MarketRuleViolationCode",
+    "MarketRulePreflightService",
+    "MarketSessionState",
+    "build_broker_order_preflight_request",
+    "build_market_rule_preflight_request",
 ]

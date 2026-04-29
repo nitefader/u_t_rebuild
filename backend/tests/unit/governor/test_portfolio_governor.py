@@ -16,7 +16,8 @@ from backend.app.governor import (
     PositionSummary,
 )
 from backend.app.orders import InternalOrderIntent, OrderManager, OrderManagerError
-from backend.app.runtime import ExecutionIntent, RuntimeState
+from backend.app.runtime import RuntimeState
+from backend.tests.fixtures.legacy_intent import LegacyExecutionIntent as ExecutionIntent
 
 
 ACCOUNT_ID = UUID("11111111-2222-3333-4444-555555555555")
@@ -82,6 +83,27 @@ def test_approved_normal_open() -> None:
     assert decision.projected_state["projected_open_positions"] == 1
 
 
+def test_governor_accepts_canonical_request_without_execution_intent() -> None:
+    decision = PortfolioGovernor().evaluate(
+        GovernorRequest(
+            account_id=ACCOUNT_ID,
+            deployment_id=DEPLOYMENT_ID,
+            program_id=PROGRAM_ID,
+            symbol="spy",
+            runtime_state=RuntimeState(deployment_id=DEPLOYMENT_ID),
+            broker_sync=BrokerSyncFreshness(),
+            portfolio=PortfolioSnapshot(),
+            order_intent=InternalOrderIntent.OPEN,
+        )
+    )
+
+    assert decision.approved is True
+    assert decision.projected_state is not None
+    assert decision.projected_state["deployment_id"] == str(DEPLOYMENT_ID)
+    assert decision.projected_state["program_id"] == str(PROGRAM_ID)
+    assert decision.projected_state["symbol"] == "SPY"
+
+
 def test_global_kill_rejects_open() -> None:
     governor = PortfolioGovernor(GovernorPolicy(global_kill_active=True))
 
@@ -140,6 +162,39 @@ def test_protective_close_tp_sl_allowed_during_pause() -> None:
     assert tp_decision.approved is True
     assert sl_decision.approved is True
     assert close_decision.reason == "protective_exit_allowed"
+
+
+@pytest.mark.parametrize(
+    "order_intent",
+    [
+        InternalOrderIntent.CLOSE,
+        InternalOrderIntent.REDUCE,
+        InternalOrderIntent.TARGET,
+        InternalOrderIntent.STOP,
+        InternalOrderIntent.TRAIL,
+        InternalOrderIntent.BREAKEVEN,
+        InternalOrderIntent.RUNNER,
+        InternalOrderIntent.LOGICAL_EXIT,
+        InternalOrderIntent.TAKE_PROFIT,
+        InternalOrderIntent.STOP_LOSS,
+        InternalOrderIntent.SCALE,
+    ],
+)
+def test_all_position_management_intents_allowed_during_pause(order_intent: InternalOrderIntent) -> None:
+    governor = PortfolioGovernor(
+        GovernorPolicy(
+            global_kill_active=True,
+            paused_account_ids=frozenset({ACCOUNT_ID}),
+            paused_deployment_ids=frozenset({DEPLOYMENT_ID}),
+        )
+    )
+
+    decision = governor.evaluate(_request(intent=_intent(intent_type=IntentType.EXIT), order_intent=order_intent))
+
+    assert decision.approved is True
+    assert decision.reason == "protective_exit_allowed"
+    assert decision.projected_state is not None
+    assert decision.projected_state["order_intent"] == order_intent.value
 
 
 def test_max_positions_rejects() -> None:

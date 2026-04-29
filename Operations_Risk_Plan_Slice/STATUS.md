@@ -1,0 +1,36 @@
+# Risk Plan Slice - Shared Status Board
+
+Both agents read + update this file every turn. The loop terminates when
+every checkbox is `[x]` AND `python -m pytest backend/tests/unit` +
+frontend `npm run typecheck` + `npm test` are green.
+
+Doctrine: full contract `RISK_PLAN_SIGNALPLAN_BACKTEST_BACKEND_CONTRACT.md`
+§4 + §5 + §6 + §7 + §8 + §9 + §10 + §11 + §13. **No MVP.**
+
+## Codex (backend)
+- [x] B1 - RiskPlan + RiskPlanVersion + RiskPlanConfig domain (§4) - `backend/app/domain/risk_plan.py` + exports + `backend/tests/unit/domain/test_risk_plan_domain.py`; `python -m pytest backend/tests/unit -q` -> 1227 passed.
+- [x] B2 - SQLite persistence + indexes + Account default mapping (§4.5) - `risk_plans` + `risk_plan_versions` SQLite tables/indexes, `BrokerAccount.default_risk_plan_id/default_risk_plan_version_id`, migration tests; `python -m pytest backend/tests/unit -q` -> 1230 passed.
+- [x] B3 - Routes (§8.1 + §8.2): list/create/get/patch/versions/activate/archive + account default GET/PUT - `backend/app/api/routes/risk_plans.py` registered in server; `backend/tests/unit/api/test_risk_plan_routes.py`; `python -m pytest backend/tests/unit -q` -> 1234 passed.
+- [x] B4 - AI-draft route `POST /api/v1/risk-plans/ai-draft` (§10) - AI catalog boundary consulted, draft-only response, no persistence/activation/account assignment; `python -m pytest backend/tests/unit -q` -> 1236 passed.
+- [x] B5 - RiskResolver loads real RiskPlanVersion; fabrication paths in BacktestExecutionService / WalkForwardExecutionService / OptimizationExecutionService deleted - `backend/app/research/risk_plan_lookup.py` + Backtest/WF/Optimization services load saved RiskPlanVersion rows and adapt to legacy RiskProfileVersion; tests create real plans; `python -m pytest backend/tests/unit -q` -> 1237 passed.
+- [x] B6 - Backtest / WF / Opt services persist evidence with real risk_plan_version_id; existing fixture/migration cleanup - Backtest/WF/Optimization evidence includes real risk_plan ids; persisted RiskDecisionCards verified against real plan rows; `python -m pytest backend/tests/unit -q` -> 1237 passed.
+- [x] B7 - WF + Optimization expose "save as draft RiskPlan" with `source=walk_forward_recommended | optimization_generated` - `POST /api/v1/walk-forward/runs/{run_id}/save-risk-plan` + `POST /api/v1/optimization/runs/{run_id}/save-risk-plan`; draft-only, operator-save explicit; `python -m pytest backend/tests/unit -q` -> 1239 passed.
+- [x] B8 - Backend acceptance tests per §11.1 + guardrails per §11.3 all passing - focused acceptance/guardrail suite 44 passed; `python -m pytest backend/tests/unit -q` -> 1239 passed; frontend `npm.cmd run typecheck` clean; frontend `npm.cmd test` -> 71 passed + banned-name lint clean.
+
+## Claude (frontend)
+- [x] F1 - Risk Plans list page with filters + row actions (§9.2) - `frontend/src/routes/RiskPlans.tsx` with status/tier/source/score/search filters + per-row View/Edit/Duplicate/Archive/Assign/Use-in-Backtest/Compare actions; SideNav entry under Author. Plus `/risk-plans` + `/risk-plans/:id` routes. `frontend/src/routes/RiskPlans.test.tsx` 4 tests.
+- [x] F2 - Risk Plan detail page, all 10 tabs (§9.3) - `frontend/src/routes/RiskPlanDetail.tsx`: Overview / Sizing / Exposure Limits / Loss Limits / Position Rules / Account Assignments / Backtest Usage / Decision Cards / Versions / AI Notes. Includes activate-version / archive / duplicate / edit-draft / compare actions.
+- [x] F3 - Create / Edit drawer with full RiskPlanConfig form + validation (§9.4) - `frontend/src/components/risk_plans/RiskPlanDrawer.tsx` + `RiskPlanFormFields.tsx` + `riskPlanForm.ts` (form-state + validation). All ~30 §4.3 fields. Validation per §9.4 (missing-stop with risk_percent, fractional+rounding conflict, aggressive-warning). `RiskPlanDrawer.test.tsx` 2 tests.
+- [x] F4 - RiskPlanPicker component (used by every research drawer) - `frontend/src/components/risk_plans/RiskPlanPicker.tsx`: dropdown grouped by status, inline `RiskPlanInlineCard` showing score / tier / sizing / risk-per-trade / max-position / daily-loss / max-DD + "View Risk Plan" deep-link. `RiskPlanPicker.test.tsx` 2 tests.
+- [x] F5 - Replace UUID-paste fields in Backtest / WF / Optimization drawers; selector required (§9.5) - Backtest drawer's free-text `risk_plan_version_id` field replaced with `<RiskPlanPicker required>`; canSubmit gates on selection. WF + Optimization drawers gain a "Base Risk Plan" picker on the sweep grid.
+- [x] F6 - "Save as Risk Plan" on WF RecommendedRiskPlanCard + Optimization winner card - `frontend/src/components/risk_plans/SaveAsRiskPlanButton.tsx` + `recommendationPrefill.ts`. WF button passes source=walk_forward_recommended; Optimization button passes source=optimization_generated with "hypothesis only — Walk-Forward validation required" AI note. Operator must review and save explicitly per non-negotiable §13.
+- [x] F7 - Compare two Risk Plans (§9.2 actions) - `frontend/src/components/risk_plans/CompareRiskPlansDialog.tsx`: side-by-side field diff with highlighting + signed `(±N)` numeric deltas across all 7 field groups (Identity / Sizing / Exposure / Loss / Quantity / Position / Restrictions). Wired to RiskPlans list "Compare" header button + per-row Compare + detail-page Compare action.
+- [x] F8 - AI-draft section in Create drawer + AI Notes tab in detail (§10) - Create drawer carries an AI prompt input + Generate-draft button hitting `POST /api/v1/risk-plans/ai-draft`; loaded draft fills the form, AI summary + warnings render inline, but **operator must click Save explicitly** (covered by `RiskPlanDrawer.test.tsx` doctrine assertion). Detail page AI Notes tab shows summary / risk-score reasoning / raw prompt / warnings / suggestions / generated-at.
+- [x] F9 - Account default Risk Plan picker on Accounts page - `frontend/src/components/risk_plans/AccountRiskPlanCard.tsx` mounted in `AccountDetailDrawer` (per memory: credentials/settings inline on Account cards). GET /api/v1/accounts/{id}/risk-plan → PUT on save; dirty-state tracked, banner explains awaiting-backend until Codex registers the route.
+- [x] F10 - Roadmap entries flipped to shipped (researchRoadmap.ts) - "Risk Plan picker + product-facing Risk Plan model" → shipped on Backtests roadmap; "Save recommended Risk Plan as a real RiskPlanVersion" → shipped on WF roadmap; "Save winner as a draft Risk Plan version" → shipped on Optimization roadmap.
+- [x] F11 - Frontend acceptance tests per §11.2 - `RiskPlans.test.tsx` (4) + `RiskPlanDrawer.test.tsx` (2) + `RiskPlanPicker.test.tsx` (2). All §11.2 cases covered: list renders / Create drawer validates / picker emits version id / picker shows inline metadata / AI draft loads but requires explicit Save. Frontend total: 63 → 71 (+8 new). `npm run typecheck` + `npm test` + banned-name lint all green.
+
+## Cross-cutting
+- [x] Contract test in `backend/tests/unit/api/test_frontend_api_contract.py` includes every new `/api/v1/risk-plans/...` + `/api/v1/accounts/{id}/risk-plan` route - All 11 routes registered in expected set; focused acceptance run includes this test and passes.
+- [x] Operator-visible roadmap on every research page reflects shipped Risk Plan picker - see F10.
+- [x] LEDGER carries closing entry "Risk Plan slice complete - full contract shipped, no MVP"

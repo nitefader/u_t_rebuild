@@ -9,7 +9,6 @@ from backend.app.domain import (
     ConditionGroup,
     ConditionNode,
     ExecutionStyleVersion,
-    ProgramVersion,
     RiskProfileVersion,
     StrategyControlsVersion,
     StrategyVersion,
@@ -67,7 +66,7 @@ class FeaturePlan(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     id: UUID = Field(default_factory=uuid4)
-    program_version_id: UUID
+    strategy_version_id: UUID
     consumer: str
     symbols: tuple[str, ...]
     timeframes: tuple[str, ...]
@@ -76,38 +75,70 @@ class FeaturePlan(BaseModel):
     warmup_by_timeframe: dict[str, int]
     data_requirements: tuple[FeatureDataRequirement, ...] = ()
 
+    @model_validator(mode="before")
+    @classmethod
+    def migrate_legacy_program_version_id(cls, data: object) -> object:
+        if isinstance(data, dict):
+            migrated = dict(data)
+            if "program_version_id" in migrated and "strategy_version_id" not in migrated:
+                migrated["strategy_version_id"] = migrated.pop("program_version_id")
+            return migrated
+        return data
 
-class ResolvedProgramComponents(BaseModel):
-    """Resolved component set for a reference-only ProgramVersion."""
+
+class ResolvedDeploymentComponents(BaseModel):
+    """Resolved reusable components selected by a Deployment."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    program: ProgramVersion
     strategy: StrategyVersion
     strategy_controls: StrategyControlsVersion
     risk_profile: RiskProfileVersion
     execution_style: ExecutionStyleVersion
     universe: UniverseSnapshot
 
+    @model_validator(mode="before")
+    @classmethod
+    def migrate_legacy_program_component(cls, data: object) -> object:
+        if isinstance(data, dict):
+            migrated = dict(data)
+            legacy_program = migrated.pop("program", None)
+            if legacy_program is not None:
+                mismatches: list[str] = []
+                if getattr(legacy_program, "strategy_version_id", None) != getattr(migrated.get("strategy"), "id", None):
+                    mismatches.append("strategy_version_id")
+                if getattr(legacy_program, "strategy_controls_version_id", None) != getattr(
+                    migrated.get("strategy_controls"), "id", None
+                ):
+                    mismatches.append("strategy_controls_version_id")
+                if getattr(legacy_program, "risk_profile_version_id", None) != getattr(migrated.get("risk_profile"), "id", None):
+                    mismatches.append("risk_profile_version_id")
+                if getattr(legacy_program, "execution_style_version_id", None) != getattr(
+                    migrated.get("execution_style"), "id", None
+                ):
+                    mismatches.append("execution_style_version_id")
+                if getattr(legacy_program, "universe_snapshot_id", None) != getattr(migrated.get("universe"), "id", None):
+                    mismatches.append("universe_snapshot_id")
+                if mismatches:
+                    raise ValueError(f"resolved components do not match legacy program references: {mismatches}")
+            return migrated
+        return data
+
     @model_validator(mode="after")
-    def validate_references_match_program(self) -> "ResolvedProgramComponents":
+    def validate_reusable_component_boundaries(self) -> "ResolvedDeploymentComponents":
         mismatches: list[str] = []
-        if self.program.strategy_version_id != self.strategy.id:
-            mismatches.append("strategy_version_id")
-        if self.program.strategy_controls_version_id != self.strategy_controls.id:
-            mismatches.append("strategy_controls_version_id")
-        if self.program.risk_profile_version_id != self.risk_profile.id:
-            mismatches.append("risk_profile_version_id")
-        if self.program.execution_style_version_id != self.execution_style.id:
-            mismatches.append("execution_style_version_id")
-        if self.program.universe_snapshot_id != self.universe.id:
-            mismatches.append("universe_snapshot_id")
+        if hasattr(self.strategy, "risk_profile_version_id"):
+            mismatches.append("strategy_version_risk_profile_version_id")
+        if hasattr(self.universe, "risk_profile_version_id"):
+            mismatches.append("universe_risk_profile_version_id")
         if mismatches:
-            raise ValueError(f"resolved components do not match program references: {mismatches}")
+            raise ValueError(f"reusable component boundary violation: {mismatches}")
         return self
 
 
-def _condition_feature_refs(condition: ConditionNode | ConditionGroup) -> Iterable[str]:
+def _condition_feature_refs(condition: ConditionNode | ConditionGroup | None) -> Iterable[str]:
+    if condition is None:
+        return
     if isinstance(condition, ConditionNode):
         yield condition.left_feature
         if condition.right_feature is not None:
@@ -117,17 +148,36 @@ def _condition_feature_refs(condition: ConditionNode | ConditionGroup) -> Iterab
         yield from _condition_feature_refs(child)
 
 
+def _logical_exit_feature_refs(rule: object) -> Iterable[str]:
+    """Recursively pull feature refs out of a LogicalExitRule tree.
+
+    Time / bar / session / clock kinds carry no feature refs. FEATURE_CONDITION
+    and HYBRID kinds may. Doctrine: ``logical_exit`` is the only exit intent;
+    feature lookups embedded inside it must still join the FeaturePlan so the
+    spine has the values at evaluation time.
+    """
+    if rule is None:
+        return
+    feature_condition = getattr(rule, "feature_condition", None)
+    if feature_condition is not None:
+        yield from _condition_feature_refs(feature_condition)
+    children = getattr(rule, "children", ())
+    for child in children:
+        yield from _logical_exit_feature_refs(child)
+
+
 def _strategy_feature_refs(strategy: StrategyVersion) -> Iterable[str]:
     yield from strategy.feature_refs
     for rule in [*strategy.entry_rules, *strategy.exit_rules]:
         yield from _condition_feature_refs(rule.condition)
+        yield from _logical_exit_feature_refs(rule.logical_exit_rule)
         if rule.stop_candidate_feature is not None:
             yield rule.stop_candidate_feature
         if rule.target_candidate_feature is not None:
             yield rule.target_candidate_feature
 
 
-def collect_feature_refs(components: ResolvedProgramComponents) -> list[str]:
+def collect_feature_refs(components: ResolvedDeploymentComponents) -> list[str]:
     refs: list[str] = []
     refs.extend(_strategy_feature_refs(components.strategy))
     refs.extend(components.strategy_controls.feature_refs)
@@ -138,17 +188,66 @@ def collect_feature_refs(components: ResolvedProgramComponents) -> list[str]:
 
 
 def build_feature_plan(
-    components: ResolvedProgramComponents,
+    components: ResolvedDeploymentComponents,
     *,
     consumer: str,
     feature_registry: FeatureRegistry = registry,
 ) -> FeaturePlan:
+    return _build_plan(
+        strategy_version_id=components.strategy.id,
+        feature_refs=collect_feature_refs(components),
+        symbols=tuple(sorted({item.symbol.upper() for item in components.universe.symbols})),
+        default_timeframe=components.strategy_controls.timeframe,
+        consumer=consumer,
+        feature_registry=feature_registry,
+    )
+
+
+def build_strategy_only_feature_plan(
+    strategy: StrategyVersion,
+    *,
+    default_timeframe: str,
+    consumer: str = "chart_lab",
+    feature_registry: FeatureRegistry = registry,
+) -> FeaturePlan:
+    """Build a FeaturePlan from a StrategyVersion alone — no Deployment needed.
+
+    Used by Chart Lab strategy-preview: the operator picks any saved Strategy
+    (any version, including drafts) and we derive its features without binding
+    a Watchlist / RiskProfile / ExecutionStyle. Symbol is supplied at preview
+    time, not by a UniverseSnapshot, so ``symbols`` on the returned plan is
+    intentionally empty — the caller passes the chosen symbol into the
+    feature engine separately.
+    """
+    return _build_plan(
+        strategy_version_id=strategy.id,
+        feature_refs=list(_strategy_feature_refs(strategy)),
+        symbols=(),
+        default_timeframe=default_timeframe,
+        consumer=consumer,
+        feature_registry=feature_registry,
+    )
+
+
+def _build_plan(
+    *,
+    strategy_version_id: UUID,
+    feature_refs: Iterable[str],
+    symbols: tuple[str, ...],
+    default_timeframe: str,
+    consumer: str,
+    feature_registry: FeatureRegistry,
+) -> FeaturePlan:
     specs_by_key: dict[str, FeatureSpec] = {}
     errors: list[str] = []
 
-    for feature_ref in collect_feature_refs(components):
+    for feature_ref in feature_refs:
         try:
-            spec = parse_feature_expression(feature_ref, feature_registry)
+            spec = parse_feature_expression(
+                feature_ref,
+                feature_registry,
+                default_timeframe=default_timeframe,
+            )
             feature_registry.require_consumer_support(spec.kind, consumer)
             specs_by_key.setdefault(make_feature_key(spec), spec)
         except (FeatureValidationError, ValueError) as exc:
@@ -160,7 +259,6 @@ def build_feature_plan(
     feature_keys = tuple(sorted(specs_by_key))
     feature_specs = tuple(specs_by_key[key] for key in feature_keys)
     timeframes = tuple(sorted({spec.timeframe for spec in feature_specs}))
-    symbols = tuple(sorted({item.symbol.upper() for item in components.universe.symbols}))
     warmup_by_timeframe: dict[str, int] = {}
     for spec in feature_specs:
         warmup_by_timeframe[spec.timeframe] = max(
@@ -180,7 +278,7 @@ def build_feature_plan(
     )
 
     return FeaturePlan(
-        program_version_id=components.program.id,
+        strategy_version_id=strategy_version_id,
         consumer=consumer,
         symbols=symbols,
         timeframes=timeframes,

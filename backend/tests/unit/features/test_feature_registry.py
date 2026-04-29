@@ -50,7 +50,7 @@ def test_registry_accepts_only_approved_initial_features(kind: str) -> None:
 
 def test_registry_rejects_unsupported_feature() -> None:
     with pytest.raises(FeatureValidationError):
-        registry.get("supertrend")
+        registry.get("bollinger_bands")
 
 
 def test_registry_rejects_invalid_param_name() -> None:

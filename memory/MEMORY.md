@@ -1,3 +1,6 @@
-- [Authority docs (read order)](authority_docs.md) — final_roadmap doc is authority alongside plan_review.md and overrides plan_review §G phase ordering when they conflict
-- [Per-task validation and logging discipline](validation_discipline.md) — §13 commands + §14 IMPLEMENTATION_LOG entry + §15 git contract are binding after every coding slice
-- [Default architectural choices when unsure](decision_defaults.md) — §16 tiebreakers (shared pipeline, fail-closed, enum-not-text, completed bars, account-isolated risk, etc.); apply without asking
+- [Authority docs (read order)](authority_docs.md) - active authority starts at docs/README.md and docs/ULTIMATE_TRADER_MANDATE.md
+- Ultimate Trader doctrine: one platform, one Account concept, Market Data Providers bucket, AI Providers bucket, one Live Stock Market Data Stream, one Account Trade Sync per Account, no silent failures
+- Account that accepts an opening SignalPlan must keep processing related close/reduce/scale-out/stop/target/logical-exit SignalPlans from that Deployment for the resulting position
+- Account-owned positions must be explainable; AI explanation is advisory only
+- Sim Lab streaming view must be chart-first, not table-first: use bars/candles with signal/fill markers and equity overlay so the operator can visually inspect what happened without filling the screen with session rows or raw event tables.
+- Archived markdown under docs/archive_knowledge_do_not_open_sustaining/2026-04-26 is historical only

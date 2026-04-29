@@ -20,7 +20,7 @@ from backend.app.brokers import (
 )
 from backend.app.domain import CandidateSide, IntentType, OrderType, TimeInForce, TradingMode
 from backend.app.orders import InternalOrderStatus, OrderManager
-from backend.app.runtime import ExecutionIntent
+from backend.tests.fixtures.legacy_intent import LegacyExecutionIntent as ExecutionIntent
 import backend.app.brokers.adapter as adapter_module
 import backend.app.brokers.fake as fake_module
 

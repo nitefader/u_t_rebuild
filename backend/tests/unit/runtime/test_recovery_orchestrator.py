@@ -19,7 +19,8 @@ from backend.app.domain import CandidateSide, IntentType, OrderType, TimeInForce
 from backend.app.governor import GovernorPolicy, PortfolioGovernor
 from backend.app.orders import InternalOrder, InternalOrderStatus, OrderManager, OrderManagerError
 from backend.app.persistence import SQLiteOrderLedger, SQLiteRuntimeStore
-from backend.app.runtime import ExecutionIntent, RuntimeRecoveryOrchestrator, RuntimeState, RuntimeStatus
+from backend.app.runtime import RuntimeRecoveryOrchestrator, RuntimeState, RuntimeStatus
+from backend.tests.fixtures.legacy_intent import LegacyExecutionIntent as ExecutionIntent
 import backend.app.runtime.recovery_orchestrator as recovery_module
 
 

@@ -10,7 +10,7 @@ class DataConsumer(StrEnum):
     CHART_LAB = "chart_lab"
     SIM_LAB = "sim_lab"
     BACKTEST = "backtest"
-    BROKER_RUNTIME = "broker_runtime"
+    ACCOUNT_TRADING = "account_trading"
     OPERATIONS_PREVIEW = "operations_preview"
 
 
@@ -18,7 +18,7 @@ class DataIntentMode(StrEnum):
     BATCH = "batch"
     REPLAY = "replay"
     LIVE_PREVIEW = "live_preview"
-    LIVE_RUNTIME = "live_runtime"
+    LIVE_TRADING = "live_trading"
 
 
 class Timeframe(StrEnum):
@@ -94,7 +94,7 @@ class DataIntent(BaseModel):
         purpose = _enum_value(DataPurpose, values.get("purpose"))
 
         is_intraday = timeframe in {item.value for item in INTRADAY_TIMEFRAMES}
-        is_live = mode in {DataIntentMode.LIVE_PREVIEW.value, DataIntentMode.LIVE_RUNTIME.value}
+        is_live = mode in {DataIntentMode.LIVE_PREVIEW.value, DataIntentMode.LIVE_TRADING.value}
         is_historical = bool(values.get("start_at") or values.get("end_at")) or mode == DataIntentMode.REPLAY.value
         is_historical = is_historical or purpose in {
             DataPurpose.WARMUP.value,
@@ -112,7 +112,7 @@ class DataIntent(BaseModel):
         if "requires_streaming" not in values:
             values["requires_streaming"] = is_live
 
-        if consumer == DataConsumer.BROKER_RUNTIME.value:
+        if consumer == DataConsumer.ACCOUNT_TRADING.value:
             values["requires_streaming"] = True
             values["requires_realtime"] = True
             values["requires_intraday"] = bool(values.get("requires_intraday") or is_intraday)

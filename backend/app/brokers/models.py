@@ -40,6 +40,43 @@ class BrokerReconciliationIssueType(StrEnum):
     STALE_SYNC = "stale_sync"
 
 
+class AccountTradeSyncState(StrEnum):
+    OPEN = "open"
+    CONNECTED = "connected"
+    RECONNECTING = "reconnecting"
+    DEGRADED = "degraded"
+    DOWN = "down"
+    OPERATOR_PAUSED = "operator_paused"
+    CREDENTIALS_INVALID = "credentials_invalid"
+
+
+class AccountTradeSyncStatus(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    account_id: UUID
+    provider: str
+    broker_mode: TradingMode
+    enabled: bool
+    open: bool
+    connected: bool
+    authenticated: bool
+    status: AccountTradeSyncState
+    last_event_at: datetime | None = None
+    last_sync_write_at: datetime | None = None
+    reconnect_count: int = Field(default=0, ge=0)
+    last_error: str | None = None
+    started_at: datetime | None = None
+    operator_paused_at: datetime | None = None
+
+    @model_validator(mode="after")
+    def pause_state_is_explicit(self) -> "AccountTradeSyncStatus":
+        if self.status == AccountTradeSyncState.OPERATOR_PAUSED and self.operator_paused_at is None:
+            raise ValueError("operator-paused Account Trade Sync requires operator_paused_at")
+        if self.status == AccountTradeSyncState.CREDENTIALS_INVALID and self.authenticated:
+            raise ValueError("credentials-invalid Account Trade Sync cannot be authenticated")
+        return self
+
+
 class BrokerOrderResult(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -80,6 +117,25 @@ class BrokerAccountSnapshot(BaseModel):
     cash: float
     buying_power: float = Field(ge=0)
     daytrading_buying_power: float = Field(default=0, ge=0)
+    regt_buying_power: float | None = Field(default=None, ge=0)
+    non_marginable_buying_power: float | None = Field(default=None, ge=0)
+    multiplier: float | None = Field(default=None, ge=0)
+    portfolio_value: float | None = Field(default=None, ge=0)
+    long_market_value: float | None = None
+    short_market_value: float | None = None
+    initial_margin: float | None = Field(default=None, ge=0)
+    maintenance_margin: float | None = Field(default=None, ge=0)
+    last_maintenance_margin: float | None = Field(default=None, ge=0)
+    last_equity: float | None = Field(default=None, ge=0)
+    sma: float | None = None
+    daytrade_count: int | None = Field(default=None, ge=0)
+    trade_suspended_by_user: bool = False
+    transfers_blocked: bool = False
+    crypto_status: str | None = None
+    currency: str | None = None
+    accrued_fees: float | None = None
+    pending_transfer_in: float | None = None
+    pending_transfer_out: float | None = None
     is_pattern_day_trader: bool = Field(
         default=False,
         validation_alias=AliasChoices("is_pattern_day_trader", "pattern_day_trader"),
@@ -118,6 +174,11 @@ class BrokerPositionSnapshot(BaseModel):
     avg_entry_price: float = Field(ge=0)
     market_value: float
     unrealized_pl: float = 0
+    deployment_id: UUID | None = None
+    strategy_id: UUID | None = None
+    opening_signal_plan_id: UUID | None = None
+    position_lineage_id: UUID | None = None
+    status: str | None = None
     timestamp: datetime = Field(default_factory=utc_now, validation_alias=AliasChoices("timestamp", "last_synced_at"))
 
     @property
@@ -161,7 +222,13 @@ class BrokerOrderUpdateEvent(BaseModel):
     client_order_id: str
     status: BrokerOrderStatus
     broker_order_id: str | None = None
+    symbol: str | None = None
+    side: str | None = None
+    qty: float | None = Field(default=None, gt=0)
     broker_status: str | None = None
+    order_type: str | None = None
+    limit_price: float | None = Field(default=None, gt=0)
+    stop_price: float | None = Field(default=None, gt=0)
     filled_quantity: float = Field(default=0, ge=0)
     filled_avg_price: float | None = Field(default=None, ge=0)
     remaining_quantity: float | None = Field(default=None, ge=0)

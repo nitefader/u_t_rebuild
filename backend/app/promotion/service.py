@@ -71,7 +71,7 @@ class PromotionGateService:
         if self._has_unresolved_reconciliation_mismatch(context):
             reasons.append("unresolved_broker_reconciliation_mismatch")
         if any(run.runtime_errors for run in self._scoped_paper_runs(context)):
-            reasons.append("paper_runtime_errors_present")
+            reasons.append("paper_account_run_errors_present")
         if not self._has_required_simulation_evidence(context):
             reasons.append("missing_required_simulation_evidence")
         if any(evidence.rejected_trades_due_to_system_issue_count > 0 for evidence in context.simulation_evidence):
@@ -95,7 +95,7 @@ class PromotionGateService:
         if total_trade_count < self._limited_trade_count_threshold:
             warnings.append("limited_paper_trade_count")
         if total_duration < self._short_runtime_threshold:
-            warnings.append("short_paper_runtime_duration")
+            warnings.append("short_paper_account_run_duration")
         if submitted > 0 and (rejected / submitted) > self._high_rejection_rate_threshold:
             warnings.append("high_paper_rejection_rate")
         if max_drawdown > self._high_drawdown_pct_threshold:

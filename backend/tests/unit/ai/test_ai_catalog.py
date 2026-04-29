@@ -40,6 +40,16 @@ def test_ai_crud_validation_default_and_disable(tmp_path) -> None:
         catalog.set_default(groq.id)
 
 
+def test_delete_ai_provider_removes_record(tmp_path) -> None:
+    catalog = AIProviderCatalog(store_path=tmp_path / "del_ai.json", validator=FakeAIValidator())
+    groq = catalog.create_service(
+        AIServiceWrite(name="RemoveMe", provider=AIProvider.GROQ, api_key="gsk_rm", capability_label=AICapabilityLabel.FAST)
+    )
+    catalog.delete_service(groq.id)
+    with pytest.raises(AIProviderCatalogError):
+        catalog.get_service(groq.id)
+
+
 def test_ai_missing_key_and_invalid_default(tmp_path) -> None:
     catalog = AIProviderCatalog(store_path=tmp_path / "ai_catalog.json", validator=FakeAIValidator())
     groq = catalog.create_service(AIServiceWrite(name="Groq", provider=AIProvider.GROQ))

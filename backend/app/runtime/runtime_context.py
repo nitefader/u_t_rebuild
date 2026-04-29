@@ -9,10 +9,8 @@ one place that owns those singletons.
 Two surfaces:
 
 - ``hub_registry()`` returns a ``HubRegistry`` keyed by
-  ``(provider, trading_mode, data_feed)``. Today only one entry exists
-  (Alpaca / paper / current data_feed), but the registry shape lines up
-  with the future Pipeline-FK refactor where ``pipeline_key`` becomes
-  ``pipeline.id``.
+  ``(provider, data_feed)``. Paper/live is Account metadata, not a
+  market-data stream identity.
 - ``trade_event_dispatcher()`` returns a ``TradeEventDispatcher`` —
   one ``TradingStream`` connection, many subscribers. The Operations
   Center trade-stream WebSocket adds a callback per browser tab; the
@@ -30,17 +28,21 @@ import logging
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, NamedTuple
 from uuid import UUID, uuid4
 
 logger = logging.getLogger(__name__)
 
 from backend.app.brokers import (
+    AccountTradeSyncState,
+    AccountTradeSyncStatus,
     AlpacaAccountStreamAdapter,
     AlpacaBrokerAdapter,
+    BrokerStreamRouter,
     BrokerStreamRunner,
 )
+from backend.app.domain import TradingMode
 from backend.app.market_data import AlpacaMarketDataAdapter, MarketDataStreamHub
 
 
@@ -48,8 +50,8 @@ class HubKey(NamedTuple):
     """Subscription identity. Two consumers with the same HubKey share one stream."""
 
     provider: str
-    trading_mode: str
     data_feed: str
+    asset_class: str = "stock"
 
 
 class HubRegistry:
@@ -85,22 +87,54 @@ class HubRegistry:
 def _default_hub_factory(key: HubKey) -> MarketDataStreamHub:
     if key.provider != "alpaca":
         raise ValueError(f"unsupported provider: {key.provider}")
+    if key.asset_class != "stock":
+        raise ValueError(f"unsupported market data asset_class for Alpaca stream hub: {key.asset_class}")
+    api_key: str | None = None
+    secret_key: str | None = None
+    try:
+        from backend.app.market_data import Provider, ServicePurpose
+        from backend.app.market_data.runtime import create_market_data_catalog_from_environment
+
+        purpose = ServicePurpose.TEST_STREAMING if key.data_feed == "test" else ServicePurpose.LIVE_STREAMING
+        catalog = create_market_data_catalog_from_environment()
+        service = catalog.find_default_for(purpose, provider=Provider.ALPACA)
+        if service is not None:
+            api_key, secret_key = catalog.get_credentials(service.id)
+    except Exception as exc:  # noqa: BLE001 - env fallback remains available
+        logger.warning("market data hub credentials unavailable from configured provider: %s", exc)
     if key.data_feed == "test":
-        adapter = AlpacaMarketDataAdapter(url_override=AlpacaMarketDataAdapter.TEST_STREAM_URL)
+        adapter = AlpacaMarketDataAdapter(
+            url_override=AlpacaMarketDataAdapter.TEST_STREAM_URL,
+            api_key=api_key,
+            secret_key=secret_key,
+        )
     else:
         try:  # pragma: no cover - alpaca-py optional
             from alpaca.data.enums import DataFeed
             feed = getattr(DataFeed, key.data_feed.upper(), None)
         except ImportError:  # pragma: no cover
             feed = None
-        adapter = AlpacaMarketDataAdapter(feed=feed) if feed is not None else AlpacaMarketDataAdapter()
+        if feed is not None:
+            adapter = AlpacaMarketDataAdapter(feed=feed, api_key=api_key, secret_key=secret_key)
+        else:
+            adapter = AlpacaMarketDataAdapter(api_key=api_key, secret_key=secret_key)
     return MarketDataStreamHub(market_data_adapter=adapter)
+
+
+def _trade_subscriber_display_name(client_surface: str | None) -> str:
+    """Human label for system/streams UI (not a security boundary)."""
+    if client_surface == "operations":
+        return "Operations Center · live trade feed"
+    if client_surface == "brokers":
+        return "Broker Accounts · live trade feed"
+    return "Live trade feed (unspecified page)"
 
 
 @dataclass
 class _TradeSubscriber:
     callback: Callable[[Any], None]
     subscriber_id: str
+    display_name: str
 
 
 class TradeEventDispatcher:
@@ -123,6 +157,9 @@ class TradeEventDispatcher:
         account_id: UUID,
         broker_adapter: AlpacaBrokerAdapter | None = None,
         adapter_resolver: Callable[[UUID], AlpacaBrokerAdapter] | None = None,
+        broker_sync_service: Any | None = None,
+        broker_sync_service_resolver: Callable[[UUID], Any] | None = None,
+        sync_poll_interval_seconds: float = 20.0,
     ) -> None:
         self._account_id = account_id
         self._broker_adapter = broker_adapter
@@ -131,12 +168,22 @@ class TradeEventDispatcher:
         # time. The resolver is wired by the composition root and pulls
         # credentials from the encrypted ``BrokerCredentialStore``.
         self._adapter_resolver = adapter_resolver
+        self._broker_sync_service = broker_sync_service
+        self._broker_sync_service_resolver = broker_sync_service_resolver
+        self._broker_stream_router: BrokerStreamRouter | None = (
+            BrokerStreamRouter(broker_sync_service) if broker_sync_service is not None else None
+        )
         self._subscribers: dict[str, _TradeSubscriber] = {}
         self._stream_client: Any | None = None
         self._stream_adapter: AlpacaAccountStreamAdapter | None = None
         self._runner: BrokerStreamRunner | None = None
         self._last_event_at: datetime | None = None
         self._last_error: str | None = None
+        self._started_at: datetime | None = None
+        self._operator_paused_at: datetime | None = None
+        self._sync_poll_interval_seconds = sync_poll_interval_seconds
+        self._broker_sync_poll_stop: threading.Event | None = None
+        self._broker_sync_poll_thread: threading.Thread | None = None
         self._lock = threading.Lock()
 
     @property
@@ -146,6 +193,23 @@ class TradeEventDispatcher:
     @property
     def subscriber_ids(self) -> tuple[str, ...]:
         return tuple(self._subscribers)
+
+    def subscriber_summary_lines(self) -> tuple[str, ...]:
+        """One line per distinct UI surface, with counts when multiple tabs share it."""
+        from collections import Counter
+
+        with self._lock:
+            labels = [sub.display_name for sub in self._subscribers.values()]
+        if not labels:
+            return ()
+        counts = Counter(labels)
+        lines: list[str] = []
+        for name, n in sorted(counts.items(), key=lambda item: (-item[1], item[0])):
+            if n == 1:
+                lines.append(f"{name} — 1 browser tab")
+            else:
+                lines.append(f"{name} — {n} browser tabs")
+        return tuple(lines)
 
     @property
     def is_running(self) -> bool:
@@ -159,18 +223,41 @@ class TradeEventDispatcher:
     def last_error(self) -> str | None:
         return self._last_error
 
+    def status(self) -> AccountTradeSyncStatus:
+        with self._lock:
+            running = self.is_running
+            paused = self._operator_paused_at is not None
+            state = self._status_state(running=running, paused=paused, last_error=self._last_error)
+            return AccountTradeSyncStatus(
+                account_id=self._account_id,
+                provider="alpaca",
+                broker_mode=getattr(self._broker_adapter, "mode", None) or TradingMode.BROKER_PAPER,
+                enabled=not paused,
+                open=running,
+                connected=running,
+                authenticated=running and state != AccountTradeSyncState.CREDENTIALS_INVALID,
+                status=state,
+                last_event_at=self._last_event_at,
+                last_error=self._last_error,
+                started_at=self._started_at,
+                operator_paused_at=self._operator_paused_at,
+            )
+
     def start(self) -> None:
         """Eagerly start the underlying TradingStream — boot-time entrypoint."""
         with self._lock:
+            if self._operator_paused_at is not None:
+                return
             if self._runner is None:
                 self._start_locked()
 
-    def subscribe(self, callback: Callable[[Any], None]) -> str:
+    def subscribe(self, callback: Callable[[Any], None], *, client_surface: str | None = None) -> str:
         subscriber_id = f"trade-sub:{uuid4().hex[:8]}"
+        display_name = _trade_subscriber_display_name(client_surface)
         with self._lock:
-            self._subscribers[subscriber_id] = _TradeSubscriber(callback=callback, subscriber_id=subscriber_id)
-            if self._runner is None:
-                self._start_locked()
+            self._subscribers[subscriber_id] = _TradeSubscriber(
+                callback=callback, subscriber_id=subscriber_id, display_name=display_name
+            )
         return subscriber_id
 
     def unsubscribe(self, subscriber_id: str) -> None:
@@ -184,6 +271,17 @@ class TradeEventDispatcher:
             self._subscribers.clear()
             self._stop_locked()
 
+    def pause_for_operator(self) -> None:
+        with self._lock:
+            self._operator_paused_at = datetime.now(timezone.utc)
+            self._stop_locked()
+
+    def resume_from_operator_pause(self) -> None:
+        with self._lock:
+            self._operator_paused_at = None
+            if self._runner is None:
+                self._start_locked()
+
     def _start_locked(self) -> None:
         try:
             if self._broker_adapter is None:
@@ -192,6 +290,8 @@ class TradeEventDispatcher:
                         f"no broker adapter or resolver configured for account {self._account_id}"
                     )
                 self._broker_adapter = self._adapter_resolver(self._account_id)
+            self._ensure_broker_router_locked()
+            self._start_broker_sync_poll_locked()
             self._stream_client = self._broker_adapter.build_trading_stream()
             self._stream_adapter = AlpacaAccountStreamAdapter(
                 account_id=self._account_id,
@@ -202,6 +302,7 @@ class TradeEventDispatcher:
             self._runner = BrokerStreamRunner(self._stream_client)
             self._runner.start()
             self._last_error = None
+            self._started_at = datetime.now(timezone.utc)
         except Exception as exc:  # noqa: BLE001 - boot must not crash; surface via status
             self._last_error = str(exc)
             self._stream_client = None
@@ -213,6 +314,12 @@ class TradeEventDispatcher:
         self._runner = None
         self._stream_client = None
         self._stream_adapter = None
+        poll_stop = self._broker_sync_poll_stop
+        poll_thread = self._broker_sync_poll_thread
+        self._broker_sync_poll_stop = None
+        self._broker_sync_poll_thread = None
+        if poll_stop is not None:
+            poll_stop.set()
         if runner is not None:
             try:
                 runner.stop(timeout=2.0)
@@ -224,6 +331,79 @@ class TradeEventDispatcher:
                     exc,
                     exc_info=True,
                 )
+        if poll_thread is not None:
+            poll_thread.join(timeout=2.0)
+
+    @staticmethod
+    def _status_state(*, running: bool, paused: bool, last_error: str | None) -> AccountTradeSyncState:
+        if paused:
+            return AccountTradeSyncState.OPERATOR_PAUSED
+        if running:
+            return AccountTradeSyncState.CONNECTED
+        if last_error:
+            lowered = last_error.lower()
+            if "credential" in lowered or "auth" in lowered or "unauthorized" in lowered:
+                return AccountTradeSyncState.CREDENTIALS_INVALID
+            return AccountTradeSyncState.DOWN
+        return AccountTradeSyncState.DOWN
+
+    def _ensure_broker_router_locked(self) -> None:
+        if self._broker_stream_router is not None:
+            return
+        if self._broker_sync_service is None and self._broker_sync_service_resolver is not None:
+            self._broker_sync_service = self._broker_sync_service_resolver(self._account_id)
+        if self._broker_sync_service is not None:
+            self._broker_stream_router = BrokerStreamRouter(self._broker_sync_service)
+
+    def _start_broker_sync_poll_locked(self) -> None:
+        """Keep BrokerSync fresh for quiet accounts with no trade events.
+
+        The trade-update stream is still the live event source, but Alpaca does
+        not emit anything when nothing changes. A connected, quiet Account must
+        not turn stale purely because no fills or order updates occurred.
+        """
+        self._ensure_broker_router_locked()
+        if self._broker_sync_service is None:
+            return
+        if self._broker_sync_poll_thread is not None and self._broker_sync_poll_thread.is_alive():
+            return
+        stop_event = threading.Event()
+        self._broker_sync_poll_stop = stop_event
+        thread = threading.Thread(
+            target=self._broker_sync_poll_loop,
+            args=(stop_event,),
+            daemon=True,
+            name=f"broker-sync-poll-{self._account_id}",
+        )
+        self._broker_sync_poll_thread = thread
+        thread.start()
+
+    def _broker_sync_poll_loop(self, stop_event: threading.Event) -> None:
+        while not stop_event.is_set():
+            self._run_broker_sync_poll_once()
+            stop_event.wait(self._sync_poll_interval_seconds)
+
+    def _run_broker_sync_poll_once(self) -> None:
+        with self._lock:
+            self._ensure_broker_router_locked()
+            service = self._broker_sync_service
+        if service is None or not hasattr(service, "reconcile"):
+            return
+        try:
+            service.reconcile(self._account_id)
+        except Exception as exc:  # noqa: BLE001 - surface but keep stream alive
+            with self._lock:
+                self._last_error = f"broker_sync_poll_failed:{exc}"
+            logger.warning(
+                "broker sync poll failed for account %s: %s",
+                self._account_id,
+                exc,
+                exc_info=True,
+            )
+            return
+        with self._lock:
+            if self._last_error and self._last_error.startswith("broker_sync_poll_failed:"):
+                self._last_error = None
 
     def _fan_out(self, event: Any) -> None:
         self.deliver(event)
@@ -239,10 +419,23 @@ class TradeEventDispatcher:
         """
         from datetime import datetime as _dt, timezone as _tz
 
-        # Snapshot under lock so a concurrent unsubscribe doesn't tear iteration.
         with self._lock:
             self._last_event_at = _dt.now(_tz.utc)
+            self._ensure_broker_router_locked()
+            router = self._broker_stream_router
             subscribers = list(self._subscribers.values())
+        if router is not None:
+            try:
+                router.route(event)
+            except Exception as exc:  # noqa: BLE001
+                self._last_error = f"broker_sync_route_failed:{exc}"
+                logger.warning(
+                    "trade stream BrokerSync route failed for account %s: %s",
+                    self._account_id,
+                    exc,
+                    exc_info=True,
+                )
+                return
         for subscriber in subscribers:
             try:
                 subscriber.callback(event)
@@ -268,9 +461,11 @@ class TradeEventDispatcherRegistry:
         self,
         *,
         adapter_resolver: Callable[[UUID], AlpacaBrokerAdapter] | None = None,
+        broker_sync_service_resolver: Callable[[UUID], Any] | None = None,
     ) -> None:
         self._dispatchers: dict[UUID, TradeEventDispatcher] = {}
         self._adapter_resolver = adapter_resolver
+        self._broker_sync_service_resolver = broker_sync_service_resolver
         self._lock = threading.Lock()
 
     def set_adapter_resolver(self, resolver: Callable[[UUID], AlpacaBrokerAdapter]) -> None:
@@ -283,6 +478,10 @@ class TradeEventDispatcherRegistry:
         with self._lock:
             self._adapter_resolver = resolver
 
+    def set_broker_sync_service_resolver(self, resolver: Callable[[UUID], Any]) -> None:
+        with self._lock:
+            self._broker_sync_service_resolver = resolver
+
     def get(self, account_id: UUID) -> TradeEventDispatcher | None:
         with self._lock:
             return self._dispatchers.get(account_id)
@@ -294,8 +493,42 @@ class TradeEventDispatcherRegistry:
                 dispatcher = TradeEventDispatcher(
                     account_id=account_id,
                     adapter_resolver=self._adapter_resolver,
+                    broker_sync_service_resolver=self._broker_sync_service_resolver,
                 )
                 self._dispatchers[account_id] = dispatcher
+            return dispatcher
+
+    def bind_account(
+        self,
+        account_id: UUID,
+        *,
+        broker_adapter: AlpacaBrokerAdapter | None = None,
+        broker_sync_service: Any | None = None,
+    ) -> TradeEventDispatcher:
+        """Create or refresh one Account Trade Sync with concrete boundaries.
+
+        Account create/credential-replace routes can run before or after the
+        boot-time resolver wiring. Binding concrete objects here guarantees the
+        per-Account trade stream has the same BrokerAdapter and BrokerSync
+        stack the manual/order paths use.
+        """
+        with self._lock:
+            dispatcher = self._dispatchers.get(account_id)
+            if dispatcher is None:
+                dispatcher = TradeEventDispatcher(
+                    account_id=account_id,
+                    broker_adapter=broker_adapter,
+                    adapter_resolver=self._adapter_resolver,
+                    broker_sync_service=broker_sync_service,
+                    broker_sync_service_resolver=self._broker_sync_service_resolver,
+                )
+                self._dispatchers[account_id] = dispatcher
+                return dispatcher
+            if broker_adapter is not None:
+                dispatcher._broker_adapter = broker_adapter
+            if broker_sync_service is not None:
+                dispatcher._broker_sync_service = broker_sync_service
+                dispatcher._broker_stream_router = BrokerStreamRouter(broker_sync_service)
             return dispatcher
 
     def all(self) -> tuple[TradeEventDispatcher, ...]:
@@ -309,6 +542,9 @@ class TradeEventDispatcherRegistry:
     def start_all(self) -> None:
         for dispatcher in self.all():
             dispatcher.start()
+
+    def statuses(self) -> tuple[AccountTradeSyncStatus, ...]:
+        return tuple(dispatcher.status() for dispatcher in self.all())
 
     def shutdown(self) -> None:
         with self._lock:
@@ -418,14 +654,41 @@ def manual_trade_registry() -> ManualTradeRegistry:
         return _manual_trade_registry
 
 
+_PLATFORM_LIVE_STOCK_DATA_FEEDS = {"iex", "sip", "delayed_sip", "boats", "overnight", "otc"}
+
+
+def _platform_live_stock_data_feed() -> str:
+    """Resolve the platform live stock pipeline feed, not Chart Lab mode.
+
+    Chart Lab has a one-symbol FAKEPACA/test override for operator chart
+    viewing. That override must never become the platform live stock hub
+    identity. The platform hub reads the operator's real Alpaca data feed
+    setting and defaults to IEX if the setting is invalid.
+    """
+    try:
+        from backend.app.api.system_settings_store import setting
+
+        feed = str(setting("alpaca_data_feed", fallback_env="ALPACA_DATA_FEED", default="iex")).lower()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("stream bootstrap: platform data-feed setting unavailable: %s", exc)
+        return "iex"
+    if feed in _PLATFORM_LIVE_STOCK_DATA_FEEDS:
+        return feed
+    logger.warning(
+        "stream bootstrap: unsupported platform live stock data feed %r; using 'iex'",
+        feed,
+    )
+    return "iex"
+
+
 def bootstrap_streams(broker_account_service: Any | None = None) -> dict[str, Any]:
     """Boot-time start: enumerate ``BrokerAccount``s, start one trade-stream per account.
 
     Per the runtime architecture spec: every configured Account's
     Broker Trade Update Stream starts at boot, regardless of whether
-    any Deployments have subscribed. The Market Data Pipeline (hub) is
-    constructed but lazy-starts on first consumer — that is its
-    "ready" state.
+    any Deployments have subscribed. The Market Data Pipeline opens at
+    backend startup from the operator-configured Alpaca data provider and
+    stays open until shutdown.
 
     Each per-account ``TradeEventDispatcher`` builds its underlying
     ``AlpacaBrokerAdapter`` from the encrypted ``BrokerCredentialStore``
@@ -433,7 +696,15 @@ def bootstrap_streams(broker_account_service: Any | None = None) -> dict[str, An
     are skipped with ``needs_credentials``; the dispatcher exposes the
     error via ``last_error`` for the system-streams panel.
     """
-    hub_registry()  # construct the hub registry envelope
+    hubs = hub_registry()
+    market_data_feed = _platform_live_stock_data_feed()
+
+    try:
+        live_stock_hub = hubs.get_or_create(HubKey(provider="alpaca", asset_class="stock", data_feed=market_data_feed))
+        if not live_stock_hub.is_running:
+            live_stock_hub.start()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("stream bootstrap: live stock market-data stream unavailable: %s", exc)
 
     if broker_account_service is None:
         try:
@@ -463,6 +734,7 @@ def bootstrap_streams(broker_account_service: Any | None = None) -> dict[str, An
 
     registry = trade_dispatcher_registry()
     registry.set_adapter_resolver(adapter_resolver)
+    registry.set_broker_sync_service_resolver(manual_trade_registry().broker_sync_service)
     started: list[UUID] = []
     skipped: list[tuple[UUID, str]] = []
     for account in accounts:
@@ -544,7 +816,15 @@ def register_account_in_manual_trade_registry(broker_account_service: Any, accou
         runtime_store=runtime_store,
     )
     order_manager.attach_broker_sync_service(sync_service)
-    sync_service.record_successful_poll(account.id)
+    try:
+        sync_service.reconcile(account.id)
+    except Exception as exc:  # noqa: BLE001 - register the Account but keep sync visibly stale
+        logger.warning(
+            "manual-trade bootstrap: initial broker reconcile failed for account %s: %s",
+            account.id,
+            exc,
+        )
+        sync_service.current_sync_state(account.id)
     manual_trade_registry().register(
         account.id,
         order_manager=order_manager,
@@ -552,6 +832,49 @@ def register_account_in_manual_trade_registry(broker_account_service: Any, accou
         broker_adapter=broker_adapter,
         runtime_store=runtime_store,
     )
+
+
+def ensure_account_trade_sync_started(
+    broker_account_service: Any,
+    account: Any,
+    *,
+    restart: bool = False,
+) -> bool:
+    """Start or refresh one Account Trade Sync from configured Account truth."""
+    if getattr(account, "is_archived", False):
+        return False
+    if getattr(account, "provider", None) != "alpaca":
+        return False
+    if bool(getattr(account, "needs_credentials", False)):
+        return False
+
+    entry = manual_trade_registry().get(account.id)
+    broker_adapter = None if entry is None else entry.get("broker_adapter")
+    broker_sync_service = None if entry is None else entry.get("broker_sync_service")
+    registry = trade_dispatcher_registry()
+
+    if broker_adapter is None:
+        def adapter_resolver(account_id: UUID) -> AlpacaBrokerAdapter:
+            api_key, api_secret = broker_account_service.get_credentials(account_id)
+            target = next((a for a in broker_account_service.list_broker_accounts() if a.id == account_id), None)
+            if target is None:
+                raise RuntimeError(f"unknown account {account_id}")
+            return AlpacaBrokerAdapter(mode=target.mode, api_key=api_key, secret_key=api_secret)
+
+        registry.set_adapter_resolver(adapter_resolver)
+
+    if broker_sync_service is None:
+        registry.set_broker_sync_service_resolver(manual_trade_registry().broker_sync_service)
+
+    dispatcher = registry.bind_account(
+        account.id,
+        broker_adapter=broker_adapter,
+        broker_sync_service=broker_sync_service,
+    )
+    if restart and dispatcher.is_running:
+        dispatcher.shutdown()
+    dispatcher.start()
+    return True
 
 
 def bootstrap_manual_trade_composition(broker_account_service: Any | None = None) -> dict[str, Any]:

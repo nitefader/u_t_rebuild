@@ -74,6 +74,21 @@ class AIServiceRecord(BaseModel):
     disabled_at: datetime | None = None
 
 
+class DeleteAIServiceRequest(BaseModel):
+    """Hard-delete guard — operator must type the current provider display name."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    confirm_service_name: str = Field(min_length=1)
+
+
+class AIServiceDeletionResponse(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    service_id: UUID
+    message: str
+
+
 class AIServiceWrite(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 

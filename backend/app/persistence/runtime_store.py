@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from pathlib import Path
-from typing import TypeVar
+from typing import Any, TypeVar
 from uuid import UUID, uuid4
 
 from pydantic import BaseModel
@@ -18,6 +18,18 @@ from backend.app.brokers import (
 )
 from backend.app.broker_accounts.models import BrokerAccount
 from backend.app.control_plane.service import ControlPlaneState
+from backend.app.domain import (
+    BacktestRun,
+    ChartLabPreviewEvidence,
+    OptimizationRun,
+    PromotionEvidenceBundle,
+    ResearchJob,
+    RiskDecisionCard,
+    RiskPlan,
+    RiskPlanVersion,
+    SimulationRunEvidence,
+    WalkForwardRun,
+)
 from backend.app.domain._base import utc_now
 from backend.app.governor import GovernorPolicy
 from backend.app.orders import InternalOrder, InternalOrderStatus, OrderLedger, OrderManagerError
@@ -28,6 +40,28 @@ from .models import RUNTIME_SCHEMA
 from .session import SQLiteSessionFactory
 
 ModelT = TypeVar("ModelT", bound=BaseModel)
+
+ResearchEvidence = (
+    ChartLabPreviewEvidence
+    | BacktestRun
+    | SimulationRunEvidence
+    | OptimizationRun
+    | WalkForwardRun
+    | PromotionEvidenceBundle
+)
+
+_RESEARCH_EVIDENCE_TYPES: dict[str, type[BaseModel]] = {
+    "chart_lab_preview": ChartLabPreviewEvidence,
+    "backtest_run": BacktestRun,
+    "simulation_run": SimulationRunEvidence,
+    "optimization_run": OptimizationRun,
+    "walk_forward_run": WalkForwardRun,
+    "promotion_bundle": PromotionEvidenceBundle,
+}
+
+_RESEARCH_EVIDENCE_TYPE_BY_MODEL: dict[type[BaseModel], str] = {
+    model: evidence_type for evidence_type, model in _RESEARCH_EVIDENCE_TYPES.items()
+}
 
 
 class SQLiteRuntimeStore:
@@ -49,13 +83,30 @@ class SQLiteRuntimeStore:
                 connection.execute(
                     """
                     INSERT INTO internal_orders
-                        (order_id, account_id, origin, deployment_id, program_id, client_order_id, status, payload)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                        (
+                            order_id, account_id, origin, deployment_id, program_id,
+                            strategy_id, strategy_version_id, signal_plan_id,
+                            opening_signal_plan_id, current_signal_plan_id,
+                            position_lineage_id, account_evaluation_id,
+                            governor_decision_id, leg_label, lifecycle_intent,
+                            client_order_id, status, payload
+                        )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(order_id) DO UPDATE SET
                         account_id = excluded.account_id,
                         origin = excluded.origin,
                         deployment_id = excluded.deployment_id,
                         program_id = excluded.program_id,
+                        strategy_id = excluded.strategy_id,
+                        strategy_version_id = excluded.strategy_version_id,
+                        signal_plan_id = excluded.signal_plan_id,
+                        opening_signal_plan_id = excluded.opening_signal_plan_id,
+                        current_signal_plan_id = excluded.current_signal_plan_id,
+                        position_lineage_id = excluded.position_lineage_id,
+                        account_evaluation_id = excluded.account_evaluation_id,
+                        governor_decision_id = excluded.governor_decision_id,
+                        leg_label = excluded.leg_label,
+                        lifecycle_intent = excluded.lifecycle_intent,
                         client_order_id = excluded.client_order_id,
                         status = excluded.status,
                         payload = excluded.payload
@@ -66,6 +117,16 @@ class SQLiteRuntimeStore:
                         order.origin.value,
                         str(order.deployment_id) if order.deployment_id is not None else None,
                         str(order.program_id) if order.program_id is not None else None,
+                        str(order.strategy_id) if order.strategy_id is not None else None,
+                        str(order.strategy_version_id) if order.strategy_version_id is not None else None,
+                        str(order.signal_plan_id) if order.signal_plan_id is not None else None,
+                        str(order.opening_signal_plan_id) if order.opening_signal_plan_id is not None else None,
+                        str(order.current_signal_plan_id) if order.current_signal_plan_id is not None else None,
+                        str(order.position_lineage_id) if order.position_lineage_id is not None else None,
+                        str(order.account_evaluation_id) if order.account_evaluation_id is not None else None,
+                        str(order.governor_decision_id) if order.governor_decision_id is not None else None,
+                        order.leg_label,
+                        order.lifecycle_intent,
                         order.client_order_id,
                         order.status.value,
                         _dump_model(order),
@@ -89,6 +150,15 @@ class SQLiteRuntimeStore:
 
     def list_orders_by_program(self, program_id: UUID) -> tuple[InternalOrder, ...]:
         return self._load_orders("SELECT payload FROM internal_orders WHERE program_id = ? ORDER BY rowid", str(program_id))
+
+    def list_orders_by_signal_plan(self, signal_plan_id: UUID) -> tuple[InternalOrder, ...]:
+        return self._load_orders("SELECT payload FROM internal_orders WHERE signal_plan_id = ? ORDER BY rowid", str(signal_plan_id))
+
+    def list_orders_by_position_lineage(self, position_lineage_id: UUID) -> tuple[InternalOrder, ...]:
+        return self._load_orders(
+            "SELECT payload FROM internal_orders WHERE position_lineage_id = ? ORDER BY rowid",
+            str(position_lineage_id),
+        )
 
     def list_orders(self) -> tuple[InternalOrder, ...]:
         rows = self._fetch_all("SELECT payload FROM internal_orders ORDER BY rowid")
@@ -309,17 +379,185 @@ class SQLiteRuntimeStore:
         rows = self._fetch_all("SELECT payload FROM broker_order_mappings ORDER BY rowid")
         return tuple(_load_model(BrokerOrderMapping, row["payload"]) for row in rows)
 
+    def save_risk_plan(self, risk_plan: RiskPlan, *, account_id: UUID | None = None) -> RiskPlan:
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO risk_plans
+                    (
+                        risk_plan_id, name, status, risk_tier, risk_score,
+                        source, account_id, created_at, updated_at, payload
+                    )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(risk_plan_id) DO UPDATE SET
+                    name = excluded.name,
+                    status = excluded.status,
+                    risk_tier = excluded.risk_tier,
+                    risk_score = excluded.risk_score,
+                    source = excluded.source,
+                    account_id = excluded.account_id,
+                    created_at = excluded.created_at,
+                    updated_at = excluded.updated_at,
+                    payload = excluded.payload
+                """,
+                (
+                    str(risk_plan.risk_plan_id),
+                    risk_plan.name,
+                    risk_plan.status.value,
+                    risk_plan.risk_tier.value,
+                    risk_plan.risk_score,
+                    risk_plan.source.value,
+                    str(account_id) if account_id is not None else None,
+                    risk_plan.created_at.isoformat(),
+                    risk_plan.updated_at.isoformat(),
+                    _dump_model(risk_plan),
+                ),
+            )
+        return risk_plan
+
+    def load_risk_plan(self, risk_plan_id: UUID) -> RiskPlan:
+        row = self._fetch_one("SELECT payload FROM risk_plans WHERE risk_plan_id = ?", (str(risk_plan_id),))
+        if row is None:
+            raise KeyError(f"unknown risk plan: {risk_plan_id}")
+        return _load_model(RiskPlan, row["payload"])
+
+    def list_risk_plans(
+        self,
+        *,
+        status: str | None = None,
+        risk_tier: str | None = None,
+        source: str | None = None,
+        account_id: UUID | None = None,
+    ) -> tuple[RiskPlan, ...]:
+        conditions: list[str] = []
+        params: list[str] = []
+        if status is not None:
+            conditions.append("status = ?")
+            params.append(status)
+        if risk_tier is not None:
+            conditions.append("risk_tier = ?")
+            params.append(risk_tier)
+        if source is not None:
+            conditions.append("source = ?")
+            params.append(source)
+        if account_id is not None:
+            conditions.append("account_id = ?")
+            params.append(str(account_id))
+        where = f" WHERE {' AND '.join(conditions)}" if conditions else ""
+        rows = self._fetch_all(
+            f"SELECT payload FROM risk_plans{where} ORDER BY updated_at DESC, name, risk_plan_id",
+            tuple(params),
+        )
+        return tuple(_load_model(RiskPlan, row["payload"]) for row in rows)
+
+    def save_risk_plan_version(self, version: RiskPlanVersion) -> RiskPlanVersion:
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO risk_plan_versions
+                    (
+                        risk_plan_version_id, risk_plan_id, version, status,
+                        config_fingerprint, created_at, activated_at,
+                        archived_at, payload
+                    )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(risk_plan_version_id) DO UPDATE SET
+                    risk_plan_id = excluded.risk_plan_id,
+                    version = excluded.version,
+                    status = excluded.status,
+                    config_fingerprint = excluded.config_fingerprint,
+                    created_at = excluded.created_at,
+                    activated_at = excluded.activated_at,
+                    archived_at = excluded.archived_at,
+                    payload = excluded.payload
+                """,
+                (
+                    str(version.risk_plan_version_id),
+                    str(version.risk_plan_id),
+                    version.version,
+                    version.status.value,
+                    version.config_fingerprint,
+                    version.created_at.isoformat(),
+                    version.activated_at.isoformat() if version.activated_at is not None else None,
+                    version.archived_at.isoformat() if version.archived_at is not None else None,
+                    _dump_model(version),
+                ),
+            )
+        return version
+
+    def load_risk_plan_version(self, risk_plan_version_id: UUID) -> RiskPlanVersion:
+        row = self._fetch_one(
+            "SELECT payload FROM risk_plan_versions WHERE risk_plan_version_id = ?",
+            (str(risk_plan_version_id),),
+        )
+        if row is None:
+            raise KeyError(f"unknown risk plan version: {risk_plan_version_id}")
+        return _load_model(RiskPlanVersion, row["payload"])
+
+    def list_risk_plan_versions(
+        self,
+        risk_plan_id: UUID,
+        *,
+        status: str | None = None,
+    ) -> tuple[RiskPlanVersion, ...]:
+        conditions = ["risk_plan_id = ?"]
+        params = [str(risk_plan_id)]
+        if status is not None:
+            conditions.append("status = ?")
+            params.append(status)
+        rows = self._fetch_all(
+            f"SELECT payload FROM risk_plan_versions WHERE {' AND '.join(conditions)} ORDER BY version, created_at",
+            tuple(params),
+        )
+        return tuple(_load_model(RiskPlanVersion, row["payload"]) for row in rows)
+
+    def list_broker_accounts_by_default_risk_plan(self, risk_plan_id: UUID) -> tuple[BrokerAccount, ...]:
+        rows = self._fetch_all(
+            """
+            SELECT payload FROM broker_accounts
+            WHERE default_risk_plan_id = ?
+            ORDER BY created_at, account_id
+            """,
+            (str(risk_plan_id),),
+        )
+        accounts = tuple(_load_model(BrokerAccount, row["payload"]) for row in rows)
+        return tuple(account for account in accounts if not account.is_archived)
+
+    def list_backtest_runs_for_risk_plan_versions(
+        self,
+        risk_plan_version_ids: tuple[UUID, ...],
+        *,
+        limit: int = 20,
+    ) -> tuple[BacktestRun, ...]:
+        if not risk_plan_version_ids:
+            return ()
+        version_ids = {str(version_id) for version_id in risk_plan_version_ids}
+        runs = [
+            evidence
+            for evidence in self.list_research_evidence(evidence_type="backtest_run")
+            if isinstance(evidence, BacktestRun)
+            and str(evidence.metrics.get("risk_plan_version_id") or "") in version_ids
+        ]
+        runs.sort(key=lambda run: (run.created_at, run.run_id), reverse=True)
+        return tuple(runs[:limit])
+
     def save_broker_account(self, account: BrokerAccount) -> BrokerAccount:
         with self._connect() as connection:
             connection.execute(
                 """
                 INSERT INTO broker_accounts
-                    (account_id, provider, mode, external_account_id, validation_status, created_at, payload)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                    (
+                        account_id, provider, mode, external_account_id,
+                        default_risk_plan_id, default_risk_plan_version_id,
+                        validation_status, created_at, payload
+                    )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(account_id) DO UPDATE SET
                     provider = excluded.provider,
                     mode = excluded.mode,
                     external_account_id = excluded.external_account_id,
+                    default_risk_plan_id = excluded.default_risk_plan_id,
+                    default_risk_plan_version_id = excluded.default_risk_plan_version_id,
                     validation_status = excluded.validation_status,
                     created_at = excluded.created_at,
                     payload = excluded.payload
@@ -329,6 +567,10 @@ class SQLiteRuntimeStore:
                     account.provider,
                     account.mode.value,
                     account.external_account_id,
+                    str(account.default_risk_plan_id) if account.default_risk_plan_id is not None else None,
+                    str(account.default_risk_plan_version_id)
+                    if account.default_risk_plan_version_id is not None
+                    else None,
                     account.validation_status.value,
                     account.created_at.isoformat(),
                     _dump_model(account),
@@ -407,12 +649,40 @@ class SQLiteRuntimeStore:
             )
         return snapshot
 
+    def replace_broker_position_snapshots(
+        self,
+        account_id: UUID,
+        snapshots: tuple[BrokerPositionSnapshot, ...],
+    ) -> tuple[BrokerPositionSnapshot, ...]:
+        with self._connect() as connection:
+            connection.execute("DELETE FROM broker_position_snapshots WHERE account_id = ?", (str(account_id),))
+            for snapshot in snapshots:
+                connection.execute(
+                    """
+                    INSERT INTO broker_position_snapshots (account_id, symbol, payload)
+                    VALUES (?, ?, ?)
+                    """,
+                    (str(snapshot.account_id), snapshot.symbol.upper(), _dump_model(snapshot)),
+                )
+        return snapshots
+
     def list_broker_position_snapshots(self, account_id: UUID) -> tuple[BrokerPositionSnapshot, ...]:
         rows = self._fetch_all(
             "SELECT payload FROM broker_position_snapshots WHERE account_id = ? ORDER BY symbol",
             (str(account_id),),
         )
         return tuple(_load_model(BrokerPositionSnapshot, row["payload"]) for row in rows)
+
+    def list_all_broker_position_snapshots(self) -> tuple[BrokerPositionSnapshot, ...]:
+        rows = self._fetch_all("SELECT payload FROM broker_position_snapshots ORDER BY account_id, symbol")
+        return tuple(_load_model(BrokerPositionSnapshot, row["payload"]) for row in rows)
+
+    def list_broker_position_snapshots_by_deployment(self, deployment_id: UUID) -> tuple[BrokerPositionSnapshot, ...]:
+        return tuple(
+            snapshot
+            for snapshot in self.list_all_broker_position_snapshots()
+            if snapshot.deployment_id == deployment_id
+        )
 
     def save_broker_open_order_snapshot(self, snapshot: BrokerOpenOrderSnapshot) -> BrokerOpenOrderSnapshot:
         with self._connect() as connection:
@@ -438,6 +708,31 @@ class SQLiteRuntimeStore:
                 ),
             )
         return snapshot
+
+    def replace_broker_open_order_snapshots(
+        self,
+        account_id: UUID,
+        snapshots: tuple[BrokerOpenOrderSnapshot, ...],
+    ) -> tuple[BrokerOpenOrderSnapshot, ...]:
+        with self._connect() as connection:
+            connection.execute("DELETE FROM broker_open_order_snapshots WHERE account_id = ?", (str(account_id),))
+            for snapshot in snapshots:
+                connection.execute(
+                    """
+                    INSERT INTO broker_open_order_snapshots
+                        (broker_order_id, account_id, client_order_id, symbol, status, payload)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        snapshot.broker_order_id,
+                        str(snapshot.account_id),
+                        snapshot.client_order_id,
+                        snapshot.symbol.upper(),
+                        snapshot.status.value,
+                        _dump_model(snapshot),
+                    ),
+                )
+        return snapshots
 
     def list_broker_open_order_snapshots(self, account_id: UUID | None = None) -> tuple[BrokerOpenOrderSnapshot, ...]:
         if account_id is None:
@@ -530,6 +825,334 @@ class SQLiteRuntimeStore:
             raise KeyError(f"unknown control plane state: {control_plane_id}")
         return _load_model(ControlPlaneState, row["payload"])
 
+    def save_research_evidence(self, evidence: ResearchEvidence) -> ResearchEvidence:
+        evidence_type = _research_evidence_type(evidence)
+        evidence_id = _research_evidence_id(evidence)
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO research_evidence
+                    (evidence_id, evidence_type, strategy_id, strategy_version_id, created_at, payload)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(evidence_id) DO UPDATE SET
+                    evidence_type = excluded.evidence_type,
+                    strategy_id = excluded.strategy_id,
+                    strategy_version_id = excluded.strategy_version_id,
+                    created_at = excluded.created_at,
+                    payload = excluded.payload
+                """,
+                (
+                    str(evidence_id),
+                    evidence_type,
+                    str(evidence.strategy_id),
+                    str(evidence.strategy_version_id),
+                    evidence.created_at.isoformat(),
+                    _dump_model(evidence),
+                ),
+            )
+        return evidence
+
+    def load_research_evidence(self, evidence_id: UUID) -> ResearchEvidence:
+        row = self._fetch_one(
+            "SELECT evidence_type, payload FROM research_evidence WHERE evidence_id = ?",
+            (str(evidence_id),),
+        )
+        if row is None:
+            raise KeyError(f"unknown research evidence: {evidence_id}")
+        return _load_research_evidence_row(row)
+
+    def save_risk_decision_card(self, card: RiskDecisionCard) -> RiskDecisionCard:
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO risk_decision_cards
+                    (
+                        risk_decision_id, mode, run_id, session_id, account_id,
+                        simulated_account_id, strategy_id, strategy_version_id,
+                        deployment_id, signal_plan_id, risk_plan_id,
+                        risk_plan_version_id, symbol, decision, timestamp,
+                        created_at, payload
+                    )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(risk_decision_id) DO UPDATE SET
+                    mode = excluded.mode,
+                    run_id = excluded.run_id,
+                    session_id = excluded.session_id,
+                    account_id = excluded.account_id,
+                    simulated_account_id = excluded.simulated_account_id,
+                    strategy_id = excluded.strategy_id,
+                    strategy_version_id = excluded.strategy_version_id,
+                    deployment_id = excluded.deployment_id,
+                    signal_plan_id = excluded.signal_plan_id,
+                    risk_plan_id = excluded.risk_plan_id,
+                    risk_plan_version_id = excluded.risk_plan_version_id,
+                    symbol = excluded.symbol,
+                    decision = excluded.decision,
+                    timestamp = excluded.timestamp,
+                    created_at = excluded.created_at,
+                    payload = excluded.payload
+                """,
+                (
+                    str(card.risk_decision_id),
+                    card.mode.value,
+                    str(card.run_id),
+                    str(card.session_id) if card.session_id is not None else None,
+                    str(card.account_id) if card.account_id is not None else None,
+                    str(card.simulated_account_id) if card.simulated_account_id is not None else None,
+                    str(card.strategy_id),
+                    str(card.strategy_version_id),
+                    str(card.deployment_id) if card.deployment_id is not None else None,
+                    str(card.signal_plan_id),
+                    str(card.risk_plan_id),
+                    str(card.risk_plan_version_id),
+                    card.symbol.upper(),
+                    card.decision.value,
+                    card.timestamp.isoformat(),
+                    card.created_at.isoformat(),
+                    _dump_model(card),
+                ),
+            )
+        return card
+
+    def load_risk_decision_card(self, risk_decision_id: UUID) -> RiskDecisionCard:
+        row = self._fetch_one(
+            "SELECT payload FROM risk_decision_cards WHERE risk_decision_id = ?",
+            (str(risk_decision_id),),
+        )
+        if row is None:
+            raise KeyError(f"unknown risk decision card: {risk_decision_id}")
+        return _load_model(RiskDecisionCard, row["payload"])
+
+    def list_risk_decision_cards(
+        self,
+        *,
+        run_id: UUID | None = None,
+        signal_plan_id: UUID | None = None,
+        account_id: UUID | None = None,
+        strategy_version_id: UUID | None = None,
+    ) -> tuple[RiskDecisionCard, ...]:
+        conditions: list[str] = []
+        params: list[object] = []
+        if run_id is not None:
+            conditions.append("run_id = ?")
+            params.append(str(run_id))
+        if signal_plan_id is not None:
+            conditions.append("signal_plan_id = ?")
+            params.append(str(signal_plan_id))
+        if account_id is not None:
+            conditions.append("account_id = ?")
+            params.append(str(account_id))
+        if strategy_version_id is not None:
+            conditions.append("strategy_version_id = ?")
+            params.append(str(strategy_version_id))
+        where = f" WHERE {' AND '.join(conditions)}" if conditions else ""
+        rows = self._fetch_all(
+            f"SELECT payload FROM risk_decision_cards{where} ORDER BY created_at, risk_decision_id",
+            tuple(params),
+        )
+        return tuple(_load_model(RiskDecisionCard, row["payload"]) for row in rows)
+
+    def list_risk_decision_cards_for_risk_plan_versions(
+        self,
+        risk_plan_version_ids: tuple[UUID, ...],
+    ) -> tuple[RiskDecisionCard, ...]:
+        if not risk_plan_version_ids:
+            return ()
+        placeholders = ", ".join("?" for _ in risk_plan_version_ids)
+        rows = self._fetch_all(
+            f"""
+            SELECT payload FROM risk_decision_cards
+            WHERE risk_plan_version_id IN ({placeholders})
+            ORDER BY created_at DESC, risk_decision_id
+            """,
+            tuple(str(version_id) for version_id in risk_plan_version_ids),
+        )
+        return tuple(_load_model(RiskDecisionCard, row["payload"]) for row in rows)
+
+    def save_historical_dataset(self, payload: dict[str, Any], *, dataset_id: str) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO historical_datasets
+                    (
+                        dataset_id, provider, symbol, timeframe, coverage_start,
+                        coverage_end, adjustment_policy, timezone, ingested_at,
+                        bar_count, aggregate_quality_status, payload
+                    )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(dataset_id) DO UPDATE SET
+                    provider = excluded.provider,
+                    symbol = excluded.symbol,
+                    timeframe = excluded.timeframe,
+                    coverage_start = excluded.coverage_start,
+                    coverage_end = excluded.coverage_end,
+                    adjustment_policy = excluded.adjustment_policy,
+                    timezone = excluded.timezone,
+                    ingested_at = excluded.ingested_at,
+                    bar_count = excluded.bar_count,
+                    aggregate_quality_status = excluded.aggregate_quality_status,
+                    payload = excluded.payload
+                """,
+                (
+                    dataset_id,
+                    str(payload["provider"]),
+                    str(payload["symbol"]).upper(),
+                    str(payload["timeframe"]),
+                    str(payload["coverage_start"]),
+                    str(payload["coverage_end"]),
+                    str(payload["adjustment_policy"]),
+                    str(payload["timezone"]),
+                    str(payload["ingested_at"]),
+                    int(payload["bar_count"]),
+                    str(payload.get("aggregate_quality_status", "ok")),
+                    json.dumps(payload, sort_keys=True, default=str),
+                ),
+            )
+
+    def load_historical_dataset(self, dataset_id: str) -> dict[str, Any] | None:
+        row = self._fetch_one(
+            "SELECT payload FROM historical_datasets WHERE dataset_id = ?",
+            (dataset_id,),
+        )
+        if row is None:
+            return None
+        return json.loads(str(row["payload"]))
+
+    def find_historical_dataset(
+        self,
+        *,
+        provider: str,
+        symbol: str,
+        timeframe: str,
+        adjustment_policy: str,
+    ) -> dict[str, Any] | None:
+        row = self._fetch_one(
+            """
+            SELECT payload FROM historical_datasets
+            WHERE provider = ? AND symbol = ? AND timeframe = ? AND adjustment_policy = ?
+            """,
+            (provider, symbol.upper(), timeframe, adjustment_policy),
+        )
+        if row is None:
+            return None
+        return json.loads(str(row["payload"]))
+
+    def list_historical_datasets(self) -> tuple[dict[str, Any], ...]:
+        rows = self._fetch_all(
+            "SELECT payload FROM historical_datasets ORDER BY ingested_at, dataset_id"
+        )
+        return tuple(json.loads(str(row["payload"])) for row in rows)
+
+    def save_research_job(self, job: ResearchJob) -> ResearchJob:
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO research_jobs
+                    (
+                        job_id, kind, status,
+                        progress_current, progress_total, progress_label,
+                        cancel_requested, result_run_id, error,
+                        created_at, started_at, finished_at,
+                        operator_session_id, payload
+                    )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(job_id) DO UPDATE SET
+                    kind = excluded.kind,
+                    status = excluded.status,
+                    progress_current = excluded.progress_current,
+                    progress_total = excluded.progress_total,
+                    progress_label = excluded.progress_label,
+                    cancel_requested = excluded.cancel_requested,
+                    result_run_id = excluded.result_run_id,
+                    error = excluded.error,
+                    created_at = excluded.created_at,
+                    started_at = excluded.started_at,
+                    finished_at = excluded.finished_at,
+                    operator_session_id = excluded.operator_session_id,
+                    payload = excluded.payload
+                """,
+                (
+                    str(job.job_id),
+                    job.kind.value,
+                    job.status.value,
+                    int(job.progress.current),
+                    int(job.progress.total),
+                    job.progress.label,
+                    int(job.cancel_requested),
+                    str(job.result_run_id) if job.result_run_id else None,
+                    job.error,
+                    job.created_at.isoformat(),
+                    job.started_at.isoformat() if job.started_at else None,
+                    job.finished_at.isoformat() if job.finished_at else None,
+                    job.operator_session_id,
+                    _dump_model(job),
+                ),
+            )
+        return job
+
+    def load_research_job(self, job_id: UUID) -> ResearchJob:
+        row = self._fetch_one(
+            "SELECT payload FROM research_jobs WHERE job_id = ?",
+            (str(job_id),),
+        )
+        if row is None:
+            raise KeyError(f"unknown research job: {job_id}")
+        return _load_model(ResearchJob, row["payload"])
+
+    def list_research_jobs(
+        self,
+        *,
+        status: str | None = None,
+        kind: str | None = None,
+        limit: int = 100,
+    ) -> tuple[ResearchJob, ...]:
+        conditions: list[str] = []
+        params: list[object] = []
+        if status is not None:
+            conditions.append("status = ?")
+            params.append(status)
+        if kind is not None:
+            conditions.append("kind = ?")
+            params.append(kind)
+        where = f" WHERE {' AND '.join(conditions)}" if conditions else ""
+        rows = self._fetch_all(
+            f"SELECT payload FROM research_jobs{where} ORDER BY created_at DESC, job_id LIMIT ?",
+            (*params, int(max(1, min(limit, 500)))),
+        )
+        return tuple(_load_model(ResearchJob, row["payload"]) for row in rows)
+
+    def request_research_job_cancel(self, job_id: UUID) -> ResearchJob:
+        job = self.load_research_job(job_id)
+        if job.status.value in {"completed", "failed", "canceled"}:
+            return job
+        updated = job.model_copy(update={"cancel_requested": True})
+        return self.save_research_job(updated)
+
+    def list_research_evidence(
+        self,
+        *,
+        strategy_id: UUID | None = None,
+        strategy_version_id: UUID | None = None,
+        evidence_type: str | None = None,
+    ) -> tuple[ResearchEvidence, ...]:
+        conditions: list[str] = []
+        params: list[object] = []
+        if strategy_id is not None:
+            conditions.append("strategy_id = ?")
+            params.append(str(strategy_id))
+        if strategy_version_id is not None:
+            conditions.append("strategy_version_id = ?")
+            params.append(str(strategy_version_id))
+        if evidence_type is not None:
+            conditions.append("evidence_type = ?")
+            params.append(evidence_type)
+        where = f" WHERE {' AND '.join(conditions)}" if conditions else ""
+        rows = self._fetch_all(
+            f"SELECT evidence_type, payload FROM research_evidence{where} ORDER BY created_at, evidence_id",
+            tuple(params),
+        )
+        return tuple(_load_research_evidence_row(row) for row in rows)
+
     def _save_trade_payload(
         self,
         *,
@@ -611,12 +1234,30 @@ class SQLiteRuntimeStore:
         }
         if "external_account_id" not in broker_account_columns:
             connection.execute("ALTER TABLE broker_accounts ADD COLUMN external_account_id TEXT")
+        if "default_risk_plan_id" not in broker_account_columns:
+            connection.execute("ALTER TABLE broker_accounts ADD COLUMN default_risk_plan_id TEXT")
+        if "default_risk_plan_version_id" not in broker_account_columns:
+            connection.execute("ALTER TABLE broker_accounts ADD COLUMN default_risk_plan_version_id TEXT")
         internal_order_columns = {
             row["name"]
             for row in connection.execute("PRAGMA table_info(internal_orders)").fetchall()
         }
         if "origin" not in internal_order_columns:
             connection.execute("ALTER TABLE internal_orders ADD COLUMN origin TEXT NOT NULL DEFAULT 'program'")
+        lineage_columns = {
+            "strategy_id",
+            "strategy_version_id",
+            "signal_plan_id",
+            "opening_signal_plan_id",
+            "current_signal_plan_id",
+            "position_lineage_id",
+            "account_evaluation_id",
+            "governor_decision_id",
+            "leg_label",
+            "lifecycle_intent",
+        }
+        for column in sorted(lineage_columns - internal_order_columns):
+            connection.execute(f"ALTER TABLE internal_orders ADD COLUMN {column} TEXT")
         internal_order_info = connection.execute("PRAGMA table_info(internal_orders)").fetchall()
         nullable_lineage = {
             row["name"]: row["notnull"]
@@ -632,13 +1273,36 @@ class SQLiteRuntimeStore:
                     origin TEXT NOT NULL DEFAULT 'program',
                     deployment_id TEXT,
                     program_id TEXT,
+                    strategy_id TEXT,
+                    strategy_version_id TEXT,
+                    signal_plan_id TEXT,
+                    opening_signal_plan_id TEXT,
+                    current_signal_plan_id TEXT,
+                    position_lineage_id TEXT,
+                    account_evaluation_id TEXT,
+                    governor_decision_id TEXT,
+                    leg_label TEXT,
+                    lifecycle_intent TEXT,
                     client_order_id TEXT NOT NULL UNIQUE,
                     status TEXT NOT NULL,
                     payload TEXT NOT NULL
                 );
                 INSERT OR IGNORE INTO internal_orders_v2
-                    (order_id, account_id, origin, deployment_id, program_id, client_order_id, status, payload)
-                SELECT order_id, account_id, origin, deployment_id, program_id, client_order_id, status, payload
+                    (
+                        order_id, account_id, origin, deployment_id, program_id,
+                        strategy_id, strategy_version_id, signal_plan_id,
+                        opening_signal_plan_id, current_signal_plan_id,
+                        position_lineage_id, account_evaluation_id,
+                        governor_decision_id, leg_label, lifecycle_intent,
+                        client_order_id, status, payload
+                    )
+                SELECT
+                    order_id, account_id, origin, deployment_id, program_id,
+                    strategy_id, strategy_version_id, signal_plan_id,
+                    opening_signal_plan_id, current_signal_plan_id,
+                    position_lineage_id, account_evaluation_id,
+                    governor_decision_id, leg_label, lifecycle_intent,
+                    client_order_id, status, payload
                 FROM internal_orders;
                 DROP TABLE internal_orders;
                 ALTER TABLE internal_orders_v2 RENAME TO internal_orders;
@@ -646,13 +1310,29 @@ class SQLiteRuntimeStore:
                 CREATE INDEX IF NOT EXISTS ix_internal_orders_origin ON internal_orders(origin);
                 CREATE INDEX IF NOT EXISTS ix_internal_orders_deployment_id ON internal_orders(deployment_id);
                 CREATE INDEX IF NOT EXISTS ix_internal_orders_program_id ON internal_orders(program_id);
+                CREATE INDEX IF NOT EXISTS ix_internal_orders_signal_plan_id ON internal_orders(signal_plan_id);
+                CREATE INDEX IF NOT EXISTS ix_internal_orders_opening_signal_plan_id ON internal_orders(opening_signal_plan_id);
+                CREATE INDEX IF NOT EXISTS ix_internal_orders_position_lineage_id ON internal_orders(position_lineage_id);
                 """
             )
+        connection.execute("CREATE INDEX IF NOT EXISTS ix_internal_orders_signal_plan_id ON internal_orders(signal_plan_id)")
+        connection.execute(
+            "CREATE INDEX IF NOT EXISTS ix_internal_orders_opening_signal_plan_id ON internal_orders(opening_signal_plan_id)"
+        )
+        connection.execute(
+            "CREATE INDEX IF NOT EXISTS ix_internal_orders_position_lineage_id ON internal_orders(position_lineage_id)"
+        )
         connection.execute(
             """
             CREATE UNIQUE INDEX IF NOT EXISTS ux_broker_accounts_external_identity
             ON broker_accounts(provider, mode, external_account_id)
             WHERE external_account_id IS NOT NULL
+            """
+        )
+        connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS ix_broker_accounts_default_risk_plan
+            ON broker_accounts(default_risk_plan_id, default_risk_plan_version_id)
             """
         )
 
@@ -702,6 +1382,18 @@ class SQLiteOrderLedger(OrderLedger):
 
     def by_program(self, program_id: UUID) -> tuple[InternalOrder, ...]:
         return self._runtime_store.list_orders_by_program(program_id)
+
+    def by_client_order_id(self, client_order_id: str) -> InternalOrder | None:
+        for order in self._runtime_store.list_orders():
+            if order.client_order_id == client_order_id:
+                return order
+        return None
+
+    def by_signal_plan(self, signal_plan_id: UUID) -> tuple[InternalOrder, ...]:
+        return self._runtime_store.list_orders_by_signal_plan(signal_plan_id)
+
+    def by_position_lineage(self, position_lineage_id: UUID) -> tuple[InternalOrder, ...]:
+        return self._runtime_store.list_orders_by_position_lineage(position_lineage_id)
 
     def all(self) -> tuple[InternalOrder, ...]:
         return self._runtime_store.list_orders()
@@ -771,3 +1463,26 @@ def _dump_model(model: BaseModel) -> str:
 
 def _load_model(model_type: type[ModelT], payload: str) -> ModelT:
     return model_type.model_validate(json.loads(payload))
+
+
+def _research_evidence_id(evidence: ResearchEvidence) -> UUID:
+    for field_name in ("evidence_id", "run_id", "bundle_id"):
+        value = getattr(evidence, field_name, None)
+        if isinstance(value, UUID):
+            return value
+    raise KeyError("research evidence has no canonical id")
+
+
+def _research_evidence_type(evidence: ResearchEvidence) -> str:
+    evidence_type = _RESEARCH_EVIDENCE_TYPE_BY_MODEL.get(type(evidence))
+    if evidence_type is None:
+        raise KeyError(f"unsupported research evidence type: {type(evidence).__name__}")
+    return evidence_type
+
+
+def _load_research_evidence_row(row: sqlite3.Row) -> ResearchEvidence:
+    evidence_type = str(row["evidence_type"])
+    model_type = _RESEARCH_EVIDENCE_TYPES.get(evidence_type)
+    if model_type is None:
+        raise KeyError(f"unsupported research evidence type: {evidence_type}")
+    return _load_model(model_type, row["payload"])  # type: ignore[return-value]

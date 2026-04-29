@@ -69,6 +69,12 @@ class OrderLedger:
     def by_program(self, program_id: UUID) -> tuple[InternalOrder, ...]:
         return self._orders_for(self._order_ids_by_program.get(program_id, []))
 
+    def by_client_order_id(self, client_order_id: str) -> InternalOrder | None:
+        for order in self._orders_by_id.values():
+            if order.client_order_id == client_order_id:
+                return order
+        return None
+
     def all(self) -> tuple[InternalOrder, ...]:
         return tuple(self._orders_by_id.values())
 

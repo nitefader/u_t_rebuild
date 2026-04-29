@@ -74,7 +74,7 @@ def test_invalid_param_rejection() -> None:
 
 def test_unsupported_feature_rejection() -> None:
     with pytest.raises(FeatureValidationError):
-        parse_feature_expression("5m.supertrend:length=10[0]")
+        parse_feature_expression("5m.bollinger_bands:length=10[0]")
 
 
 @pytest.mark.parametrize("expression", ["60m.close[0]", "5min.close[0]", "day.high[0]", "1D.high[0]"])

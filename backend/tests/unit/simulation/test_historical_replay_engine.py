@@ -19,12 +19,13 @@ from backend.app.domain import (
 from backend.app.domain.execution_style import BracketSpec
 from backend.app.domain.risk_profile import PositionSizingMethod
 from backend.app.domain.strategy import CandidateSide, IntentType, SignalRule
-from backend.app.features import BatchFeatureEngine, NormalizedBar, ResolvedProgramComponents
+from backend.app.features import IncrementalFeatureEngine, NormalizedBar, ResolvedDeploymentComponents
 from backend.app.simulation import HistoricalReplayEngine, SimulatedEventType, SimulatedOrderIntent, SimulatedOrderStatus
+from backend.app.simulation.models import SimulatedOrderSide
 import backend.app.simulation.historical_replay as historical_replay
 
 
-class CountingFeatureEngine(BatchFeatureEngine):
+class CountingFeatureEngine(IncrementalFeatureEngine):
     def __init__(self) -> None:
         super().__init__()
         self.calls = 0
@@ -34,7 +35,16 @@ class CountingFeatureEngine(BatchFeatureEngine):
         return super().compute(plan, bars)
 
 
-def _components(*, with_protective: bool = True, trailing: bool = False) -> ResolvedProgramComponents:
+class RecordingResearchEvidenceStore:
+    def __init__(self) -> None:
+        self.saved: list[object] = []
+
+    def save_research_evidence(self, evidence):  # type: ignore[no-untyped-def]
+        self.saved.append(evidence)
+        return evidence
+
+
+def _components(*, with_protective: bool = True, trailing: bool = False) -> ResolvedDeploymentComponents:
     strategy_id = uuid4()
     controls_id = uuid4()
     risk_id = uuid4()
@@ -102,7 +112,86 @@ def _components(*, with_protective: bool = True, trailing: bool = False) -> Reso
         execution_style_version_id=execution_id,
         universe_snapshot_id=universe_id,
     )
-    return ResolvedProgramComponents(
+    return ResolvedDeploymentComponents(
+        program=program,
+        strategy=strategy,
+        strategy_controls=controls,
+        risk_profile=risk,
+        execution_style=execution,
+        universe=universe,
+    )
+
+
+def _short_components(*, with_target: bool = True, trailing: bool = False) -> ResolvedDeploymentComponents:
+    """SHORT-side strategy: red-bar entry, stop above entry (5m.high[0]), optional target below entry (5m.low[0])."""
+    strategy_id = uuid4()
+    controls_id = uuid4()
+    risk_id = uuid4()
+    execution_id = uuid4()
+    universe_id = uuid4()
+    strategy = StrategyVersion(
+        id=strategy_id,
+        strategy_id=uuid4(),
+        version=1,
+        name="Short Replay Strategy",
+        entry_rules=[
+            SignalRule(
+                name="red_bar_short_entry",
+                side=CandidateSide.SHORT,
+                intent_type=IntentType.ENTRY,
+                condition=ConditionNode(
+                    left_feature="5m.close[0]",
+                    operator=ConditionOperator.LESS_THAN,
+                    right_feature="5m.open[0]",
+                ),
+                stop_candidate_feature="5m.high[0]",
+                target_candidate_feature="5m.low[0]" if with_target else None,
+            )
+        ],
+    )
+    controls = StrategyControlsVersion(
+        id=controls_id,
+        strategy_controls_id=uuid4(),
+        version=1,
+        name="5m Controls",
+        timeframe="5m",
+    )
+    risk = RiskProfileVersion(
+        id=risk_id,
+        risk_profile_id=uuid4(),
+        version=1,
+        name="Fixed Shares",
+        sizing_method=PositionSizingMethod.FIXED_SHARES,
+        fixed_shares=10,
+    )
+    execution = ExecutionStyleVersion(
+        id=execution_id,
+        execution_style_id=uuid4(),
+        version=1,
+        name="Short Market Bracket",
+        entry_order_type=OrderType.MARKET,
+        bracket=BracketSpec(enabled=True, take_profit_r_multiple=2, stop_loss_r_multiple=1),
+        trailing_stop_enabled=trailing,
+    )
+    universe = UniverseSnapshot(
+        id=universe_id,
+        universe_id=uuid4(),
+        version=1,
+        name="One Symbol",
+        symbols=[UniverseSymbol(symbol="SPY")],
+    )
+    program = ProgramVersion(
+        id=uuid4(),
+        program_id=uuid4(),
+        name="Short Replay Program",
+        version=1,
+        strategy_version_id=strategy_id,
+        strategy_controls_version_id=controls_id,
+        risk_profile_version_id=risk_id,
+        execution_style_version_id=execution_id,
+        universe_snapshot_id=universe_id,
+    )
+    return ResolvedDeploymentComponents(
         program=program,
         strategy=strategy,
         strategy_controls=controls,
@@ -128,9 +217,9 @@ def _bar(index: int, *, open_: float, high: float, low: float, close: float) -> 
 def _run(
     bars: list[NormalizedBar],
     *,
-    components: ResolvedProgramComponents | None = None,
+    components: ResolvedDeploymentComponents | None = None,
     partial_fill_ratio: float = 1.0,
-    feature_engine: BatchFeatureEngine | None = None,
+    feature_engine: IncrementalFeatureEngine | None = None,
 ):
     return HistoricalReplayEngine(
         feature_engine=feature_engine,
@@ -157,6 +246,7 @@ def test_deterministic_replay_produces_same_results() -> None:
     for dumped in (first, second):
         dumped["session"]["created_at"] = None
         dumped["session"]["feature_plan_id"] = None
+        dumped["evidence"]["created_at"] = None
 
     assert first == second
 
@@ -229,6 +319,32 @@ def test_trailing_stop_logic_updates_and_fills() -> None:
     assert any(event.event_type == SimulatedEventType.TRAILING_STOP_UPDATED for event in result.events)
 
 
+def test_historical_replay_saves_simulation_run_evidence() -> None:
+    bars = [
+        _bar(0, open_=99, high=110, low=95, close=100),
+        _bar(1, open_=111, high=112, low=109, close=109),
+    ]
+    components = _components()
+    store = RecordingResearchEvidenceStore()
+
+    result = HistoricalReplayEngine(evidence_recorder=store).run(
+        components=components,
+        bars=bars,
+        start=bars[0].timestamp,
+        end=bars[-1].timestamp + timedelta(minutes=5),
+        initial_cash=100_000,
+        session_id=UUID("00000000-0000-0000-0000-000000000001"),
+    )
+
+    assert result.evidence is not None
+    assert result.evidence.run_id == result.session.id
+    assert result.evidence.strategy_id == components.strategy.strategy_id
+    assert result.evidence.strategy_version_id == components.strategy.id
+    assert result.evidence.simulated_order_count == len(result.orders)
+    assert result.evidence.simulated_fill_count == len(result.fills)
+    assert store.saved == [result.evidence]
+
+
 def test_sim_lab_uses_feature_engine_and_does_not_expose_external_broker_fields() -> None:
     feature_engine = CountingFeatureEngine()
     result = _run(
@@ -264,3 +380,124 @@ def test_simulation_uses_only_simulated_order_manager_boundary() -> None:
     assert ".create_order(" in source
     assert ".submit_order(" not in source
     assert ".apply_result(" not in source
+
+
+def test_short_entry_routes_sell_to_open_and_records_short_position() -> None:
+    # Red bar (close < open) triggers SHORT entry at close=100. Stop sits at
+    # bar.high=110 (above entry). Position qty becomes negative (sold-short).
+    result = _run(
+        [
+            _bar(0, open_=101, high=110, low=95, close=100),
+            _bar(1, open_=99, high=99.5, low=98, close=98.5),
+        ],
+        components=_short_components(with_target=False),
+    )
+
+    open_orders = [order for order in result.orders if order.intent == SimulatedOrderIntent.OPEN]
+    assert len(open_orders) == 1
+    assert open_orders[0].side == SimulatedOrderSide.SELL
+    assert open_orders[0].status == SimulatedOrderStatus.FILLED
+
+    spy = next(position for position in result.positions if position.symbol == "SPY")
+    # Last bar leaves the short open; qty must be negative for shorts.
+    assert spy.qty == -10
+    assert spy.avg_price == 100
+    # Protective stop is a BUY-to-cover at 110 (above entry).
+    stops = [order for order in result.orders if order.intent == SimulatedOrderIntent.STOP_LOSS]
+    assert stops and stops[-1].side == SimulatedOrderSide.BUY
+    assert stops[-1].stop_price == 110
+
+
+def test_short_take_profit_triggers_when_low_reaches_target() -> None:
+    # Red bar entry at 100, target at low=95 (below entry). Next bar dips
+    # to 94 — target fires; cover at 95. Realized = (100 - 95) * 10 = 50.
+    result = _run(
+        [
+            _bar(0, open_=101, high=102, low=95, close=100),
+            _bar(1, open_=98, high=99, low=94, close=96),
+        ],
+        components=_short_components(with_target=True),
+    )
+
+    assert result.trades, "expected at least one closed trade"
+    trade = result.trades[0]
+    assert trade.side == "short"
+    assert trade.exit_reason == SimulatedOrderIntent.TAKE_PROFIT
+    assert trade.exit_price == 95
+    assert trade.realized_pnl == 50
+    assert result.realized_pnl == 50
+
+
+def test_short_stop_loss_triggers_when_high_breaks_above_stop() -> None:
+    # Red bar entry at 100, stop at bar.high=102. Next bar rallies and
+    # bar.high (108) breaks the 102 stop. Cover at 102; realized loss = -20.
+    result = _run(
+        [
+            _bar(0, open_=101, high=102, low=95, close=100),
+            _bar(1, open_=104, high=108, low=103, close=107),
+        ],
+        components=_short_components(with_target=False),
+    )
+
+    assert result.trades
+    trade = result.trades[0]
+    assert trade.side == "short"
+    assert trade.exit_reason == SimulatedOrderIntent.STOP_LOSS
+    assert trade.exit_price == 102
+    assert trade.realized_pnl == -20
+    assert result.max_drawdown == 20
+
+
+def test_short_trailing_stop_ratchets_down_and_covers_for_a_gain() -> None:
+    # Red bar entry at 100, initial trailing stop at high=102 (distance 2).
+    # Next bar drops to low=85 → trailing ratchets to 85 + 2 = 87. The same
+    # bar's high (90) breaks the new stop → cover at 87; realized = (100-87)*10 = 130.
+    result = _run(
+        [
+            _bar(0, open_=101, high=102, low=95, close=100),
+            _bar(1, open_=98, high=90, low=85, close=88),
+        ],
+        components=_short_components(with_target=False, trailing=True),
+    )
+
+    assert any(event.event_type == SimulatedEventType.TRAILING_STOP_UPDATED for event in result.events)
+    assert result.trades
+    trade = result.trades[0]
+    assert trade.side == "short"
+    assert trade.exit_reason == SimulatedOrderIntent.TRAILING_STOP
+    assert trade.exit_price == 87
+    assert trade.realized_pnl == 130
+
+
+def test_long_entry_blocked_when_short_position_open() -> None:
+    # Mixed strategy: SHORT-on-red (fires bar 0) + LONG-on-green (fires bar 1)
+    # — the long entry must be rejected with reason 'opposite_side_position_open'
+    # because cross-side flips are not supported in this slice.
+    short_components = _short_components(with_target=False)
+    short_components.strategy.entry_rules.append(
+        SignalRule(
+            name="green_bar_long_entry",
+            side=CandidateSide.LONG,
+            intent_type=IntentType.ENTRY,
+            condition=ConditionNode(
+                left_feature="5m.close[0]",
+                operator=ConditionOperator.GREATER_THAN,
+                right_feature="5m.open[0]",
+            ),
+        )
+    )
+    result = _run(
+        [
+            _bar(0, open_=101, high=110, low=95, close=100),  # red → short open
+            _bar(1, open_=98, high=105, low=97, close=104),   # green → long entry attempted
+        ],
+        components=short_components,
+    )
+
+    blocked = [
+        event
+        for event in result.events
+        if event.event_type == SimulatedEventType.SIGNAL_BLOCKED
+        and event.message == "opposite_side_position_open"
+    ]
+    assert blocked, "expected long entry to be blocked while a short is open"

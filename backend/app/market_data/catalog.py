@@ -75,9 +75,11 @@ class MarketDataServiceCatalog:
         *,
         store_path: str | Path | None = None,
         validator: MarketDataProviderValidator | None = None,
+        credential_store: object | None = None,
     ) -> None:
         self._store_path = Path(store_path) if store_path is not None else None
         self._validator = validator or MarketDataProviderValidator()
+        self._credential_store = credential_store
         self._records: dict[UUID, MarketDataServiceRecord] = {}
         self._load()
 
@@ -101,6 +103,7 @@ class MarketDataServiceCatalog:
                     f"a {request.provider.value} service with these credentials already exists "
                     f"as '{existing.name}' (id={existing.id}); duplicates are not allowed"
                 )
+            self._store_credentials(existing.id, request)
             return existing
         record = MarketDataServiceRecord(
             name=request.name,
@@ -118,6 +121,7 @@ class MarketDataServiceCatalog:
             default_for=tuple(_dedupe_purposes(request.default_for)),
         )
         self._records[record.id] = record
+        self._store_credentials(record.id, request)
         # Single-canonical-default per purpose: any other Service that held one
         # of the new tags loses it. Stays consistent with set_default_for.
         if record.default_for:
@@ -148,6 +152,12 @@ class MarketDataServiceCatalog:
     def get_service(self, service_id: UUID) -> MarketDataServiceRecord:
         return self._records[_known(service_id, self._records, "market data service")]
 
+    def get_credentials(self, service_id: UUID) -> tuple[str, str]:
+        self.get_service(service_id)
+        if self._credential_store is None or not hasattr(self._credential_store, "get"):
+            raise MarketDataCatalogError(f"no credential store configured for market data service {service_id}")
+        return self._credential_store.get(service_id)
+
     def update_service(self, service_id: UUID, request: MarketDataServiceWrite) -> MarketDataServiceRecord:
         existing = self.get_service(service_id)
         manual_capabilities = request.capabilities is not None
@@ -171,6 +181,7 @@ class MarketDataServiceCatalog:
             }
         )
         self._records[service_id] = updated
+        self._store_credentials(service_id, request)
         self._save()
         return updated
 
@@ -314,6 +325,35 @@ class MarketDataServiceCatalog:
         self._save()
         return updated
 
+    def enable_service(self, service_id: UUID) -> MarketDataServiceRecord:
+        existing = self.get_service(service_id)
+        restored_status = (
+            ServiceStatus.VALID
+            if existing.validation_status == MarketDataValidationStatus.VALID
+            else ServiceStatus.DRAFT
+        )
+        updated = existing.model_copy(
+            update={
+                "status": restored_status,
+                "disabled_at": None,
+                "updated_at": utc_now(),
+            }
+        )
+        self._records[service_id] = updated
+        self._save()
+        return updated
+
+    def delete_service(self, service_id: UUID) -> None:
+        """Remove the service record from the catalog (hard delete).
+
+        Callers must ensure no pipelines still reference this ``service_id``.
+        """
+        _known(service_id, self._records, "market data service")
+        del self._records[service_id]
+        if self._credential_store is not None and hasattr(self._credential_store, "delete"):
+            self._credential_store.delete(service_id)
+        self._save()
+
     def resolve(self, request: ResolveMarketDataRequest, *, pipeline_registry: object | None = None) -> ResolverResult:
         lookup = pipeline_registry.lookup_default_for_provider if pipeline_registry is not None else None
         return resolve_market_data_service(
@@ -343,6 +383,12 @@ class MarketDataServiceCatalog:
                 f"market data catalog at {self._store_path} could not be parsed: {exc}"
             ) from exc
         self._records = self._dedupe(snapshot.market_data_services)
+
+    def _store_credentials(self, service_id: UUID, request: MarketDataServiceWrite) -> None:
+        if self._credential_store is None or not hasattr(self._credential_store, "put"):
+            return
+        if request.api_key and request.api_secret:
+            self._credential_store.put(service_id, api_key=request.api_key, api_secret=request.api_secret)
 
     @staticmethod
     def _dedupe(services: tuple[MarketDataServiceRecord, ...]) -> dict[UUID, MarketDataServiceRecord]:

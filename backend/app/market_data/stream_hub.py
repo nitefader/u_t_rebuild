@@ -1,18 +1,8 @@
-"""MarketDataStreamHub — one bar stream, many consumers.
+"""MarketDataStreamHub: one live stock bar stream, many consumers.
 
-Per ``final_roadmap`` §market-data: subscribe once at the lowest required
-live bar timeframe (1m), then dispatch by symbol to every consumer that
-asked for that symbol. Higher timeframes are built inside each consumer.
-
-Consumers register a ``(consumer_id, symbols, on_bar)`` triple. The hub
-takes the union of all consumers' symbols, asks the adapter to subscribe
-to that union exactly once, runs the underlying stream client in a daemon
-thread, and routes each incoming ``NormalizedBar`` to every consumer
-that asked for that symbol.
-
-Consumers today: ``BrokerRuntimeSupervisor`` (paper, later live), Sim Lab
-Live Simulation, Chart Lab Live Preview, anything else needing live bars.
-The hub does not care what a consumer does with the bar — it only routes.
+The hub owns the shared live stock stream boundary. Consumers register a
+``(consumer_id, symbols, on_bar)`` triple; the hub keeps one provider
+stream open and routes incoming ``NormalizedBar`` objects by symbol.
 """
 
 from __future__ import annotations
@@ -20,12 +10,14 @@ from __future__ import annotations
 from collections import defaultdict
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from threading import Lock
 from typing import Any
 
 from backend.app.features import NormalizedBar
 
 from .alpaca import AlpacaMarketDataAdapter, AlpacaMarketDataError, MarketDataStreamRunner
+from .models import LiveStockMarketDataStreamState, LiveStockMarketDataStreamStatus
 
 
 @dataclass(frozen=True)
@@ -40,7 +32,7 @@ class MarketDataStreamHubError(ValueError):
 
 
 class MarketDataStreamHub:
-    """Single market-data stream, multi-consumer dispatch by symbol."""
+    """Single live stock market-data stream with multi-consumer dispatch."""
 
     def __init__(
         self,
@@ -56,6 +48,11 @@ class MarketDataStreamHub:
         self._symbol_index: dict[str, set[str]] = defaultdict(set)
         self._runner: Any | None = None
         self._stream: Any | None = None
+        self._started_at: datetime | None = None
+        self._last_message_at: datetime | None = None
+        self._last_bar_at_by_symbol: dict[str, datetime] = {}
+        self._last_error: str | None = None
+        self._reconnect_count = 0
         self._lock = Lock()
 
     @property
@@ -70,20 +67,32 @@ class MarketDataStreamHub:
     def consumer_ids(self) -> tuple[str, ...]:
         return tuple(sorted(self._consumers))
 
+    def status(self) -> LiveStockMarketDataStreamStatus:
+        running = self.is_running
+        open_ = self._stream is not None
+        return LiveStockMarketDataStreamStatus(
+            stream_id="live-stock-data",
+            enabled_by_settings=True,
+            open=open_,
+            connected=running,
+            authenticated=open_ and self._last_error is None,
+            status=self._status_state(open_=open_, running=running),
+            subscribed_symbols=self.subscribed_symbols,
+            consumer_ids=self.consumer_ids,
+            last_message_at=self._last_message_at,
+            last_bar_at_by_symbol=dict(self._last_bar_at_by_symbol),
+            reconnect_count=self._reconnect_count,
+            last_error=self._last_error,
+            started_at=self._started_at,
+        )
+
     def register(
         self,
         consumer_id: str,
         symbols: Iterable[str],
         on_bar: Callable[[NormalizedBar], None],
     ) -> None:
-        """Register ``on_bar`` to receive bars for ``symbols``.
-
-        Live-safe — supports register / unregister while the hub is running.
-        Re-registering with the same ``consumer_id`` replaces the prior
-        subscription. Symbols not previously subscribed to are added to
-        the underlying stream client; symbols no longer needed by any
-        consumer are removed.
-        """
+        """Register ``on_bar`` to receive bars for ``symbols``."""
         if not consumer_id:
             raise MarketDataStreamHubError("consumer_id is required")
         normalized = frozenset(str(symbol).upper() for symbol in symbols)
@@ -116,26 +125,26 @@ class MarketDataStreamHub:
         with self._lock:
             if self._runner is not None:
                 raise MarketDataStreamHubError("hub is already running")
-            if not self._symbol_index:
-                # Nothing to subscribe to — leave the hub idle. Calling
-                # stop() on an idle hub is a no-op.
-                return
             try:
-                stream = self._adapter.subscribe_bars(
-                    sorted(self._symbol_index),
-                    emit=self._dispatch,
-                    timeframe=self._timeframe,
-                )
+                if self._symbol_index:
+                    stream = self._adapter.subscribe_bars(
+                        sorted(self._symbol_index),
+                        emit=self._dispatch,
+                        timeframe=self._timeframe,
+                    )
+                else:
+                    stream = self._adapter.open_stream()
             except AlpacaMarketDataError as exc:
+                self._last_error = str(exc)
                 raise MarketDataStreamHubError(str(exc)) from exc
             runner = self._runner_factory(stream)
             runner.start()
             self._stream = stream
             self._runner = runner
+            self._started_at = datetime.now(timezone.utc)
+            self._last_error = None
 
     def stop(self, *, timeout: float = 5.0) -> None:
-        # Don't hold the registration lock for the full join — a slow stream
-        # shutdown shouldn't block parallel register/unregister calls.
         with self._lock:
             runner = self._runner
             self._runner = None
@@ -143,29 +152,14 @@ class MarketDataStreamHub:
         if runner is not None:
             runner.stop(timeout=timeout)
 
-    def _unsubscribe_symbols(self, symbols: set[str]) -> None:
-        """Best-effort: ask the underlying stream to drop ``symbols``.
-
-        alpaca-py's StockDataStream exposes ``unsubscribe_bars(*symbols)``;
-        if the client doesn't, log-and-skip rather than crash. Either way,
-        the hub's dispatch already skips symbols with no consumers.
-        """
-        if self._stream is None:
-            return
-        method = getattr(self._stream, "unsubscribe_bars", None)
-        if method is None:
-            return
-        try:
-            method(*sorted(symbols))
-        except Exception:  # noqa: BLE001 - best-effort
-            pass
-
     def dispatch_bar(self, bar: NormalizedBar) -> None:
         """Public dispatch hook so tests can feed bars without a real stream."""
         self._dispatch(bar)
 
     def _dispatch(self, bar: NormalizedBar) -> None:
         symbol = bar.symbol.upper()
+        self._last_message_at = bar.timestamp
+        self._last_bar_at_by_symbol[symbol] = bar.timestamp
         consumer_ids = self._symbol_index.get(symbol)
         if not consumer_ids:
             return
@@ -175,6 +169,17 @@ class MarketDataStreamHub:
                 continue
             entry.on_bar(bar)
 
+    def _unsubscribe_symbols(self, symbols: set[str]) -> None:
+        if self._stream is None:
+            return
+        method = getattr(self._stream, "unsubscribe_bars", None)
+        if method is None:
+            return
+        try:
+            method(*sorted(symbols))
+        except Exception:  # noqa: BLE001 - best-effort provider cleanup
+            pass
+
     def _unregister_locked(self, consumer_id: str) -> None:
         entry = self._consumers.pop(consumer_id, None)
         if entry is None:
@@ -183,3 +188,19 @@ class MarketDataStreamHub:
             self._symbol_index[symbol].discard(consumer_id)
             if not self._symbol_index[symbol]:
                 del self._symbol_index[symbol]
+
+    def _status_state(
+        self,
+        *,
+        open_: bool,
+        running: bool,
+    ) -> LiveStockMarketDataStreamState:
+        if not open_:
+            if self._last_error is not None:
+                return LiveStockMarketDataStreamState.DOWN
+            return LiveStockMarketDataStreamState.DISABLED
+        if running:
+            return LiveStockMarketDataStreamState.CONNECTED
+        if self._last_error is not None:
+            return LiveStockMarketDataStreamState.DOWN
+        return LiveStockMarketDataStreamState.OPEN

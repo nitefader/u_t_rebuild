@@ -20,11 +20,11 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict
 
-from backend.app.domain import TradingMode
 from backend.app.domain._base import utc_now
 
 from .pipeline import (
     DEFAULT_DATA_FEED,
+    MarketDataAssetClass,
     MarketDataPipeline,
     MarketDataPipelineEdit,
     MarketDataPipelineList,
@@ -38,7 +38,7 @@ class PipelineRegistryError(ValueError):
     """Operator-readable Pipeline registry failure."""
 
 
-CURRENT_PIPELINE_REGISTRY_SCHEMA_VERSION = 2  # v2 added service_id + data_feed
+CURRENT_PIPELINE_REGISTRY_SCHEMA_VERSION = 3  # v3 replaced mode identity with asset_class
 
 
 class PipelineRegistrySnapshot(BaseModel):
@@ -76,11 +76,11 @@ class MarketDataPipelineRegistry:
         from .capability_profiles import provider_capability_profile
 
         capabilities = request.capabilities or provider_capability_profile(request.provider).capabilities
-        # Invariant: ≤1 ACTIVE pipeline per (service_id, trading_mode, data_feed).
+        # Invariant: at most one ACTIVE pipeline per (service_id, asset_class, data_feed).
         # Reject create that would create a duplicate ACTIVE stream identity.
         self._enforce_pipeline_key_uniqueness(
             service_id=request.service_id,
-            trading_mode=request.trading_mode,
+            asset_class=request.asset_class,
             data_feed=request.data_feed,
         )
         pipeline = MarketDataPipeline(
@@ -88,7 +88,7 @@ class MarketDataPipelineRegistry:
             provider=request.provider,
             service_id=request.service_id,
             data_feed=request.data_feed,
-            trading_mode=request.trading_mode,
+            asset_class=request.asset_class,
             capabilities=capabilities,
             status=PipelineStatus.ACTIVE,
         )
@@ -100,7 +100,7 @@ class MarketDataPipelineRegistry:
         self,
         *,
         service_id: UUID | None,
-        trading_mode: TradingMode | None,
+        asset_class: MarketDataAssetClass,
         data_feed: str,
         ignore_pipeline_id: UUID | None = None,
     ) -> None:
@@ -121,13 +121,13 @@ class MarketDataPipelineRegistry:
                 continue  # invariant only fires against ACTIVE pipelines (per DE B2)
             if existing.service_id != service_id:
                 continue
-            if existing.trading_mode != trading_mode:
+            if existing.asset_class != asset_class:
                 continue
             if (existing.data_feed or DEFAULT_DATA_FEED).lower() != normalized_feed:
                 continue
             raise PipelineRegistryError(
                 f"a pipeline already exists for service={service_id} "
-                f"mode={trading_mode.value if trading_mode else 'none'} "
+                f"asset_class={asset_class.value} "
                 f"feed={normalized_feed!r} (id={pipeline_id}); "
                 "duplicate active streams are not allowed"
             )
@@ -140,7 +140,7 @@ class MarketDataPipelineRegistry:
     def update_pipeline(self, pipeline_id: UUID, request: MarketDataPipelineEdit) -> MarketDataPipeline:
         """Partial update: ``display_name`` and ``capabilities`` only.
 
-        Identity-changing fields (``service_id``, ``trading_mode``,
+        Identity-changing fields (``service_id``, ``asset_class``,
         ``data_feed``) are intentionally not editable here — they
         determine which physical stream the pipeline maps to, and
         subscribers hold ``pipeline_id`` references for fan-out.
@@ -248,12 +248,12 @@ class MarketDataPipelineRegistry:
         """Backfill ``service_id`` on a legacy pipeline that loaded without one.
 
         Composes with ``_enforce_pipeline_key_uniqueness`` so the operator
-        can't bind the same Service+mode+feed twice via two pipelines.
+        can't bind the same Service+asset-class+feed twice via two pipelines.
         """
         existing = self.get_pipeline(pipeline_id)
         self._enforce_pipeline_key_uniqueness(
             service_id=service_id,
-            trading_mode=existing.trading_mode,
+            asset_class=existing.asset_class,
             data_feed=existing.data_feed,
             ignore_pipeline_id=pipeline_id,
         )

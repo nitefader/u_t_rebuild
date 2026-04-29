@@ -20,7 +20,7 @@ from backend.app.domain.risk_profile import PositionSizingMethod
 from backend.app.domain.strategy import CandidateSide, IntentType, SignalRule
 from backend.app.features import (
     FeaturePlan,
-    ResolvedProgramComponents,
+    ResolvedDeploymentComponents,
     SubscriptionDelta,
     SubscriptionEntry,
     SubscriptionManager,
@@ -28,7 +28,7 @@ from backend.app.features import (
 )
 
 
-def _components(refs: list[str]) -> ResolvedProgramComponents:
+def _components(refs: list[str]) -> ResolvedDeploymentComponents:
     strategy_id = uuid4()
     controls_id = uuid4()
     risk_id = uuid4()
@@ -73,7 +73,7 @@ def _components(refs: list[str]) -> ResolvedProgramComponents:
         execution_style_version_id=execution_id,
         universe_snapshot_id=universe_id,
     )
-    return ResolvedProgramComponents(
+    return ResolvedDeploymentComponents(
         program=program,
         strategy=strategy,
         strategy_controls=controls,

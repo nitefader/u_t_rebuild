@@ -51,6 +51,18 @@ class _RecordingAdapter:
             self._stream = stream
         return stream
 
+    def open_stream(self):  # type: ignore[no-untyped-def]
+        adapter = self
+
+        class _FakeStream:
+            def run(self) -> None: ...
+            def stop(self) -> None: ...
+            def unsubscribe_bars(self, *symbols) -> None:  # type: ignore[no-untyped-def]
+                adapter.unsubscribe_calls.append(tuple(symbols))
+
+        self._stream = _FakeStream()
+        return self._stream
+
 
 class _FakeRunner:
     def __init__(self, stream) -> None:  # type: ignore[no-untyped-def]
@@ -173,12 +185,20 @@ def test_double_start_is_rejected() -> None:
         hub.stop()
 
 
-def test_start_with_no_consumers_leaves_hub_idle() -> None:
+def test_start_with_no_consumers_opens_stream_envelope() -> None:
     hub, adapter, runners = _make_hub()
     hub.start()
-    assert adapter.subscribed_symbols is None
-    assert hub.is_running is False
-    assert runners == []
+    try:
+        status = hub.status()
+        assert adapter.subscribed_symbols is None
+        assert hub.is_running is True
+        assert len(runners) == 1
+        assert status.open is True
+        assert status.connected is True
+        assert status.subscribed_symbols == ()
+        assert status.consumer_ids == ()
+    finally:
+        hub.stop()
 
 
 def test_stop_before_start_is_noop() -> None:

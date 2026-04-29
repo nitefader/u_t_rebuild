@@ -37,6 +37,39 @@ class MarketDataValidationStatus(StrEnum):
     DISABLED = "disabled"
 
 
+class LiveStockMarketDataStreamState(StrEnum):
+    OPEN = "open"
+    CONNECTED = "connected"
+    RECONNECTING = "reconnecting"
+    DEGRADED = "degraded"
+    DOWN = "down"
+    DISABLED = "disabled"
+
+
+class LiveStockMarketDataStreamStatus(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    stream_id: str
+    provider_id: UUID | None = None
+    enabled_by_settings: bool
+    open: bool
+    connected: bool
+    authenticated: bool
+    status: LiveStockMarketDataStreamState
+    subscribed_symbols: tuple[str, ...] = ()
+    consumer_ids: tuple[str, ...] = ()
+    last_message_at: datetime | None = None
+    last_bar_at_by_symbol: dict[str, datetime] = Field(default_factory=dict)
+    reconnect_count: int = Field(default=0, ge=0)
+    last_error: str | None = None
+    started_at: datetime | None = None
+
+    @field_validator("subscribed_symbols")
+    @classmethod
+    def normalize_symbols(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        return tuple(symbol.upper() for symbol in value)
+
+
 class ServicePurpose(StrEnum):
     """Operator-driven role tags. Replaces .env bootstrap.
 
@@ -102,6 +135,21 @@ class MarketDataServiceRecord(BaseModel):
         if self.capability_notes:
             return self.capability_notes
         return provider_capability_profile(self.provider).notes
+
+
+class DeleteMarketDataServiceRequest(BaseModel):
+    """Hard-delete guard — operator must type the current service display name."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    confirm_service_name: str = Field(min_length=1)
+
+
+class MarketDataServiceDeletionResponse(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    service_id: UUID
+    message: str
 
 
 class MarketDataServiceWrite(BaseModel):

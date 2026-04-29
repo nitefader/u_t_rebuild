@@ -7,15 +7,13 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field
 
 from backend.app.brokers import BrokerOrderResult
-from backend.app.domain import CandidateTradeIntent
+from backend.app.domain import AccountSignalPlanEvaluation, CandidateTradeIntent, SignalPlan
 from backend.app.governor import GovernorDecision
 from backend.app.orders import InternalOrder
-from backend.app.runtime import ExecutionIntent
 
 
 class PipelineEventType(StrEnum):
     CANDIDATE_TRADE_INTENT = "candidate_trade_intent"
-    EXECUTION_INTENT = "execution_intent"
     GOVERNOR_DECISION = "governor_decision"
     ORDER_CREATED = "order_created"
     BROKER_RESULT = "broker_result"
@@ -41,7 +39,8 @@ class PipelineResult(BaseModel):
 
     events: tuple[PipelineEvent, ...]
     candidate_intents: tuple[CandidateTradeIntent, ...] = ()
-    execution_intents: tuple[ExecutionIntent, ...] = ()
+    signal_plans: tuple[SignalPlan, ...] = ()
+    account_evaluations: tuple[AccountSignalPlanEvaluation, ...] = ()
     governor_decisions: tuple[GovernorDecision, ...] = ()
     orders: tuple[InternalOrder, ...] = ()
     broker_results: tuple[BrokerOrderResult, ...] = ()

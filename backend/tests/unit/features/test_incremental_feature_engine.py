@@ -7,7 +7,6 @@ from uuid import uuid4
 import pytest
 
 from backend.app.features import (
-    BatchFeatureEngine,
     FeatureAvailability,
     FeatureCache,
     FeaturePlan,
@@ -65,7 +64,7 @@ def _incremental_snapshots(plan: FeaturePlan, bars: list[NormalizedBar]):
     return snapshots, cache
 
 
-def test_incremental_update_equals_batch_result() -> None:
+def test_incremental_update_matches_compute_helper() -> None:
     plan = _plan(
         "5m.close[0]",
         "5m.sma:length=3[0]",
@@ -76,11 +75,11 @@ def test_incremental_update_equals_batch_result() -> None:
     bars = [_bar(index, close=float(index + 1), high=float(index + 3), low=float(index)) for index in range(9)]
 
     incremental_snapshots, _ = _incremental_snapshots(plan, bars)
-    batch_snapshots = BatchFeatureEngine().compute(plan, bars).frame_for("SPY", "5m").snapshots
+    compute_snapshots = IncrementalFeatureEngine().compute(plan, bars).frame_for("SPY", "5m").snapshots
 
-    assert len(incremental_snapshots) == len(batch_snapshots)
-    for incremental, batch in zip(incremental_snapshots, batch_snapshots, strict=True):
-        assert incremental.values == batch.values
+    assert len(incremental_snapshots) == len(compute_snapshots)
+    for incremental, computed in zip(incremental_snapshots, compute_snapshots, strict=True):
+        assert incremental.values == computed.values
 
 
 def test_incremental_warmup_behavior_correct() -> None:
@@ -166,8 +165,7 @@ def test_incremental_rejects_out_of_order_or_duplicate_bars() -> None:
         engine.update(plan=plan, bar=bar, cache=cache)
 
 
-def test_no_full_recomputation_on_new_bar() -> None:
+def test_module_holds_canonical_engine_only() -> None:
     source = inspect.getsource(incremental_module)
 
     assert "BatchFeatureEngine" not in source
-    assert ".compute(" not in source

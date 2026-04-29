@@ -4,7 +4,6 @@ import argparse
 import json
 import os
 import sys
-from datetime import datetime, timezone
 from pathlib import Path
 from uuid import UUID
 
@@ -19,16 +18,12 @@ except ImportError:  # pragma: no cover
         return False
 
 from backend.app.brokers import AlpacaBrokerAdapter, BrokerOrderResult, BrokerSync
-from backend.app.domain import CandidateSide, IntentType, OrderType, TimeInForce
-from backend.app.governor import BrokerSyncFreshness, GovernorRequest, PortfolioGovernor, PortfolioSnapshot
+from backend.app.domain import CandidateSide, OrderType, TimeInForce
 from backend.app.orders import OrderManager
-from backend.app.runtime import ExecutionIntent, RuntimeState
 
 
 PAPER_BASE_URL = "https://paper-api.alpaca.markets"
 DEFAULT_ACCOUNT_ID = UUID("00000000-0000-0000-0000-000000000001")
-DEFAULT_DEPLOYMENT_ID = UUID("00000000-0000-0000-0000-000000000002")
-DEFAULT_PROGRAM_ID = UUID("00000000-0000-0000-0000-000000000003")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -46,12 +41,7 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     account_id = _account_id()
-    _print_step("Creating Governor-approved test ExecutionIntent")
-    intent = _approved_execution_intent(
-        account_id=account_id,
-        symbol=args.symbol.upper(),
-        qty=args.qty,
-    )
+    _print_step("Preparing operator-confirmed paper smoke order")
     _print_step("Creating AlpacaBrokerAdapter")
     adapter = AlpacaBrokerAdapter()
     _print_step("Checking Alpaca market clock")
@@ -64,7 +54,16 @@ def main(argv: list[str] | None = None) -> int:
     broker_sync = BrokerSync(ledger=order_manager.ledger, adapter=adapter)
 
     _print_step("Creating internal order via OrderManager")
-    order = order_manager.create_order(account_id=account_id, execution_intent=intent)
+    order = order_manager.create_manual_order(
+        account_id=account_id,
+        symbol=args.symbol.upper(),
+        side=CandidateSide.LONG,
+        quantity=args.qty,
+        intent="open",
+        order_type=OrderType.MARKET,
+        time_in_force=TimeInForce.DAY,
+        reason="operator_confirmed_paper_smoke",
+    )
     _print_step("Submitting exactly one paper market order via AlpacaBrokerAdapter")
     broker_result = adapter.submit_order(order)
     _print_step("Applying broker result via BrokerSync")
@@ -87,8 +86,8 @@ def main(argv: list[str] | None = None) -> int:
                     "status": ledger_update.status.value,
                     "filled_quantity": ledger_update.filled_quantity,
                     "account_id": str(ledger_update.account_id),
-                    "deployment_id": str(ledger_update.deployment_id),
-                    "program_id": str(ledger_update.program_id),
+                    "deployment_id": str(ledger_update.deployment_id) if ledger_update.deployment_id else None,
+                    "program_id": str(ledger_update.program_id) if ledger_update.program_id else None,
                 },
             },
             sort_keys=True,
@@ -117,35 +116,6 @@ def _account_id() -> UUID:
     if not raw:
         return DEFAULT_ACCOUNT_ID
     return UUID(raw)
-
-
-def _approved_execution_intent(*, account_id: UUID, symbol: str, qty: float) -> ExecutionIntent:
-    intent = ExecutionIntent(
-        deployment_id=DEFAULT_DEPLOYMENT_ID,
-        program_version_id=DEFAULT_PROGRAM_ID,
-        symbol=symbol,
-        side=CandidateSide.LONG,
-        intent_type=IntentType.ENTRY,
-        qty=qty,
-        order_type=OrderType.MARKET,
-        time_in_force=TimeInForce.DAY,
-        timestamp=datetime.now(timezone.utc),
-        signal_name="manual_paper_smoke",
-        reason="operator_confirmed_paper_smoke",
-    )
-    governor = PortfolioGovernor()
-    decision = governor.evaluate(
-        GovernorRequest(
-            account_id=account_id,
-            execution_intent=intent,
-            runtime_state=RuntimeState(deployment_id=intent.deployment_id),
-            broker_sync=BrokerSyncFreshness(),
-            portfolio=PortfolioSnapshot(),
-        )
-    )
-    if not decision.approved:
-        raise RuntimeError(f"paper smoke intent rejected by governor: {decision.reason}")
-    return intent.model_copy(update={"governor_approved": True, "governor_reason": decision.reason})
 
 
 def _broker_result_payload(result: BrokerOrderResult) -> dict[str, object]:

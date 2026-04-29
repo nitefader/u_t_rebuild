@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from backend.app.domain._base import utc_now
 from backend.app.orders.models import InternalOrderIntent
@@ -93,13 +94,40 @@ class GovernorRequest(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     account_id: UUID
-    execution_intent: object
+    deployment_id: UUID
+    symbol: str
     runtime_state: object
     broker_sync: BrokerSyncFreshness
     portfolio: PortfolioSnapshot
+    execution_intent: object | None = None
+    program_id: UUID | None = None
+    signal_plan_id: UUID | None = None
+    position_lineage_id: UUID | None = None
     order_intent: InternalOrderIntent | None = None
     candidate_market_value: float = Field(default=0, ge=0)
     candidate_open_risk: float = Field(default=0, ge=0)
+
+    @model_validator(mode="before")
+    @classmethod
+    def derive_canonical_fields_from_execution_intent(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        intent = data.get("execution_intent")
+        if intent is None:
+            return data
+        derived = dict(data)
+        if "deployment_id" not in derived and hasattr(intent, "deployment_id"):
+            derived["deployment_id"] = intent.deployment_id
+        if "symbol" not in derived and hasattr(intent, "symbol"):
+            derived["symbol"] = intent.symbol
+        if "program_id" not in derived and hasattr(intent, "program_version_id"):
+            derived["program_id"] = intent.program_version_id
+        return derived
+
+    @field_validator("symbol")
+    @classmethod
+    def normalize_symbol(cls, value: str) -> str:
+        return value.upper()
 
 
 class GovernorDecision(BaseModel):

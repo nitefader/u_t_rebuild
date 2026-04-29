@@ -46,7 +46,7 @@ from backend.app.orders import (
     OrderManager,
     TradeLedger,
 )
-from backend.app.runtime import ExecutionIntent
+from backend.tests.fixtures.legacy_intent import LegacyExecutionIntent as ExecutionIntent
 
 
 PAPER_BASE_URL = "https://paper-api.alpaca.markets"

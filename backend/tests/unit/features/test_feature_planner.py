@@ -18,7 +18,7 @@ from backend.app.domain import (
 )
 from backend.app.domain.risk_profile import PositionSizingMethod
 from backend.app.domain.strategy import CandidateSide, IntentType, SignalRule
-from backend.app.features import FeaturePlanError, ResolvedProgramComponents, build_feature_plan
+from backend.app.features import FeaturePlanError, ResolvedDeploymentComponents, build_feature_plan
 
 
 def _components(
@@ -28,7 +28,7 @@ def _components(
     controls_regime_refs: list[str] | None = None,
     risk_feature_refs: list[str] | None = None,
     execution_feature_refs: list[str] | None = None,
-) -> ResolvedProgramComponents:
+) -> ResolvedDeploymentComponents:
     strategy_id = uuid4()
     controls_id = uuid4()
     risk_id = uuid4()
@@ -99,7 +99,7 @@ def _components(
         execution_style_version_id=execution_id,
         universe_snapshot_id=universe_id,
     )
-    return ResolvedProgramComponents(
+    return ResolvedDeploymentComponents(
         program=program,
         strategy=strategy,
         strategy_controls=controls,
@@ -122,6 +122,16 @@ def test_feature_plan_deduplicates_by_feature_key() -> None:
     close_specs = [spec for spec in plan.feature_specs if spec.kind == "close"]
     assert len(close_specs) == 1
     assert plan.symbols == ("QQQ", "SPY")
+
+
+def test_feature_plan_defaults_bare_bar_refs_to_strategy_controls_timeframe() -> None:
+    components = _components(strategy_feature_refs=["close", "open"])
+
+    plan = build_feature_plan(components, consumer="backtest")
+
+    specs = {(spec.timeframe, spec.kind) for spec in plan.feature_specs}
+    assert ("5m", "close") in specs
+    assert ("5m", "open") in specs
 
 
 def test_feature_plan_includes_multi_timeframe_requirements() -> None:
@@ -147,7 +157,7 @@ def test_feature_plan_computes_warmup_by_timeframe() -> None:
 
 
 def test_feature_plan_rejects_invalid_feature() -> None:
-    components = _components(risk_feature_refs=["5m.supertrend:length=10[0]"])
+    components = _components(risk_feature_refs=["5m.bollinger_bands:length=10[0]"])
 
     with pytest.raises(FeaturePlanError):
         build_feature_plan(components, consumer="chart_lab")

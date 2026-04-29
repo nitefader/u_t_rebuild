@@ -45,7 +45,7 @@ class PortfolioGovernor:
                 rule_id="account_pause_blocks_open",
                 projected_state=projected_state,
             )
-        if request.execution_intent.deployment_id in self._policy.paused_deployment_ids:
+        if request.deployment_id in self._policy.paused_deployment_ids:
             return GovernorDecision.reject(
                 reason="deployment_pause_active",
                 rule_id="deployment_pause_blocks_open",
@@ -96,6 +96,8 @@ class PortfolioGovernor:
     def _resolve_order_intent(self, request: GovernorRequest) -> InternalOrderIntent:
         if request.order_intent is not None:
             return request.order_intent
+        if request.execution_intent is None:
+            return InternalOrderIntent.OPEN
         if request.execution_intent.intent_type == IntentType.ENTRY:
             return InternalOrderIntent.OPEN
         return InternalOrderIntent.CLOSE
@@ -103,8 +105,16 @@ class PortfolioGovernor:
     def _is_protective_exit(self, order_intent: InternalOrderIntent) -> bool:
         return order_intent in {
             InternalOrderIntent.CLOSE,
+            InternalOrderIntent.REDUCE,
+            InternalOrderIntent.TARGET,
+            InternalOrderIntent.STOP,
+            InternalOrderIntent.TRAIL,
+            InternalOrderIntent.BREAKEVEN,
+            InternalOrderIntent.RUNNER,
+            InternalOrderIntent.LOGICAL_EXIT,
             InternalOrderIntent.TAKE_PROFIT,
             InternalOrderIntent.STOP_LOSS,
+            InternalOrderIntent.SCALE,
         }
 
     def _exceeds_limit(self, projected_state: dict[str, object], key: str, limit: float | None) -> bool:
@@ -114,7 +124,7 @@ class PortfolioGovernor:
         projected_open_positions = request.portfolio.open_position_count()
         if order_intent == InternalOrderIntent.OPEN:
             projected_open_positions += 1
-        symbol = request.execution_intent.symbol.upper()
+        symbol = request.symbol.upper()
         candidate_market_value = request.candidate_market_value if order_intent == InternalOrderIntent.OPEN else 0
         candidate_open_risk = request.candidate_open_risk if order_intent == InternalOrderIntent.OPEN else 0
         gross_value = request.portfolio.gross_market_value()
@@ -136,8 +146,8 @@ class PortfolioGovernor:
             new_open_slots_remaining = max(self._policy.max_open_positions - projected_open_positions, 0)
         return {
             "account_id": str(request.account_id),
-            "deployment_id": str(request.execution_intent.deployment_id),
-            "program_id": str(request.execution_intent.program_version_id),
+            "deployment_id": str(request.deployment_id),
+            "program_id": str(request.program_id) if request.program_id is not None else None,
             "symbol": symbol,
             "order_intent": order_intent.value,
             "open_positions": request.portfolio.open_position_count(),

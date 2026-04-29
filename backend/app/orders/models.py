@@ -17,9 +17,17 @@ class OrderManagerError(ValueError):
 class InternalOrderIntent(StrEnum):
     OPEN = "open"
     CLOSE = "close"
+    REDUCE = "reduce"
+    TARGET = "target"
+    STOP = "stop"
+    TRAIL = "trail"
+    BREAKEVEN = "breakeven"
+    RUNNER = "runner"
+    LOGICAL_EXIT = "logical_exit"
     TAKE_PROFIT = "tp"
     STOP_LOSS = "sl"
     SCALE = "scale"
+    MANUAL_OPERATOR = "manual_operator"
 
 
 class InternalOrderStatus(StrEnum):
@@ -36,6 +44,7 @@ class InternalOrderStatus(StrEnum):
 
 class OrderOrigin(StrEnum):
     PROGRAM = "program"
+    SIGNAL_PLAN = "signal_plan"
     MANUAL_OPERATOR = "manual_operator"
 
 
@@ -48,6 +57,16 @@ class InternalOrder(BaseModel):
     origin: OrderOrigin = OrderOrigin.PROGRAM
     deployment_id: UUID | None = None
     program_id: UUID | None = None
+    strategy_id: UUID | None = None
+    strategy_version_id: UUID | None = None
+    signal_plan_id: UUID | None = None
+    opening_signal_plan_id: UUID | None = None
+    current_signal_plan_id: UUID | None = None
+    position_lineage_id: UUID | None = None
+    account_evaluation_id: UUID | None = None
+    governor_decision_id: UUID | None = None
+    leg_label: str | None = None
+    lifecycle_intent: str | None = None
     symbol: str
     side: CandidateSide
     quantity: float = Field(gt=0)
@@ -76,8 +95,35 @@ class InternalOrder(BaseModel):
             raise ValueError("filled_quantity cannot exceed quantity")
         if self.origin == OrderOrigin.PROGRAM and (self.deployment_id is None or self.program_id is None):
             raise ValueError("program orders require deployment_id and program_id")
+        if self.origin == OrderOrigin.SIGNAL_PLAN:
+            required = {
+                "deployment_id": self.deployment_id,
+                "strategy_id": self.strategy_id,
+                "signal_plan_id": self.signal_plan_id,
+                "current_signal_plan_id": self.current_signal_plan_id,
+                "position_lineage_id": self.position_lineage_id,
+                "account_evaluation_id": self.account_evaluation_id,
+                "governor_decision_id": self.governor_decision_id,
+            }
+            missing = sorted(name for name, value in required.items() if value is None)
+            if missing:
+                raise ValueError(f"signal plan orders require lineage fields: {missing}")
         if self.origin == OrderOrigin.MANUAL_OPERATOR and (self.deployment_id is not None or self.program_id is not None):
             raise ValueError("manual operator orders cannot carry deployment/program lineage")
+        if self.origin == OrderOrigin.MANUAL_OPERATOR and any(
+            value is not None
+            for value in (
+                self.strategy_id,
+                self.strategy_version_id,
+                self.signal_plan_id,
+                self.opening_signal_plan_id,
+                self.current_signal_plan_id,
+                self.position_lineage_id,
+                self.account_evaluation_id,
+                self.governor_decision_id,
+            )
+        ):
+            raise ValueError("manual operator orders cannot carry signal plan lineage")
         return self
 
     @model_validator(mode="before")

@@ -4,7 +4,12 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "node frontend/scripts/check-frontend.mjs",
-    "test": "node --test frontend/tests/*.test.mjs && npm run build"
+    "dev": "npm run dev --prefix frontend",
+    "build": "npm run build --prefix frontend",
+    "preview": "npm run preview --prefix frontend",
+    "typecheck": "npm run typecheck --prefix frontend",
+    "lint": "npm run lint --prefix frontend",
+    "lint:names": "npm run lint:names --prefix frontend",
+    "test": "npm test --prefix frontend"
   }
 }

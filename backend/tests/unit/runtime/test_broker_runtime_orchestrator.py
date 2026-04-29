@@ -26,7 +26,7 @@ from backend.app.domain import (
 )
 from backend.app.domain.risk_profile import PositionSizingMethod
 from backend.app.domain.strategy import SignalRule
-from backend.app.features import NormalizedBar, ResolvedProgramComponents
+from backend.app.features import NormalizedBar, ResolvedDeploymentComponents
 from backend.app.governor import GovernorPolicy, PortfolioGovernor
 from backend.app.orders import OrderManager, OrderManagerError
 from backend.app.persistence import SQLiteOrderLedger, SQLiteRuntimeStore
@@ -39,7 +39,7 @@ DEPLOYMENT_ID = UUID("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
 OTHER_DEPLOYMENT_ID = UUID("bbbbbbbb-cccc-dddd-eeee-ffffffffffff")
 
 
-def _components(*, symbol: str = "SPY") -> ResolvedProgramComponents:
+def _components(*, symbol: str = "SPY") -> ResolvedDeploymentComponents:
     strategy_id = uuid4()
     controls_id = uuid4()
     risk_id = uuid4()
@@ -49,7 +49,7 @@ def _components(*, symbol: str = "SPY") -> ResolvedProgramComponents:
         id=strategy_id,
         strategy_id=uuid4(),
         version=1,
-        name="Broker Runtime Strategy",
+        name="Runtime Strategy",
         entry_rules=[
             SignalRule(
                 name="close_above_open",
@@ -96,7 +96,7 @@ def _components(*, symbol: str = "SPY") -> ResolvedProgramComponents:
     program = ProgramVersion(
         id=uuid4(),
         program_id=uuid4(),
-        name="Broker Runtime Program",
+        name="Runtime Strategy Version",
         version=1,
         strategy_version_id=strategy_id,
         strategy_controls_version_id=controls_id,
@@ -104,7 +104,7 @@ def _components(*, symbol: str = "SPY") -> ResolvedProgramComponents:
         execution_style_version_id=execution_id,
         universe_snapshot_id=universe_id,
     )
-    return ResolvedProgramComponents(
+    return ResolvedDeploymentComponents(
         program=program,
         strategy=strategy,
         strategy_controls=controls,
@@ -114,11 +114,17 @@ def _components(*, symbol: str = "SPY") -> ResolvedProgramComponents:
     )
 
 
-def _deployment(components: ResolvedProgramComponents, *, deployment_id: UUID = DEPLOYMENT_ID) -> DeploymentContext:
+def _deployment(
+    components: ResolvedDeploymentComponents,
+    *,
+    deployment_id: UUID = DEPLOYMENT_ID,
+    mode: TradingMode = TradingMode.BROKER_PAPER,
+) -> DeploymentContext:
     return DeploymentContext(
         deployment_id=deployment_id,
-        program=components.program,
-        mode=TradingMode.BROKER_PAPER.value,
+        strategy_version_id=components.strategy.id,
+        strategy_version=components.strategy.version,
+        mode=mode.value,
         status=RuntimeStatus.RECOVERED_READY,
     )
 
@@ -166,16 +172,18 @@ def _runtime(
     *,
     account_id: UUID = ACCOUNT_ID,
     deployment_id: UUID = DEPLOYMENT_ID,
-    components: ResolvedProgramComponents | None = None,
+    components: ResolvedDeploymentComponents | None = None,
     broker: FakeBrokerAdapter | None = None,
     governor: PortfolioGovernor | None = None,
     control_plane: ControlPlane | None = None,
     order_manager: OrderManager | None = None,
     broker_sync: BrokerSync | None = None,
     bar_source=None,
+    mode: TradingMode = TradingMode.BROKER_PAPER,
+    live_order_submission_enabled: bool = False,
 ) -> tuple[BrokerRuntimeOrchestrator, SQLiteRuntimeStore, FakeBrokerAdapter]:
     store = SQLiteRuntimeStore(tmp_path / f"{deployment_id}.sqlite")
-    _seed_account(store, account_id)
+    _seed_account(store, account_id, mode=mode)
     resolved = components or _components()
     try:
         store.load_deployment_runtime_state(deployment_id)
@@ -188,9 +196,10 @@ def _runtime(
     runtime = BrokerRuntimeOrchestrator(
         deployments=(
             BrokerRuntimeDeployment(
-                deployment=_deployment(resolved, deployment_id=deployment_id),
+                deployment=_deployment(resolved, deployment_id=deployment_id, mode=mode),
                 components=resolved,
                 account_id=account_id,
+                live_order_submission_enabled=live_order_submission_enabled,
             ),
         ),
         runtime_store=store,
@@ -209,13 +218,16 @@ class CountingSignalEngine(SignalEngine):
         super().__init__()
         self.evaluate_calls = 0
 
-    def evaluate(self, strategy, snapshot):  # type: ignore[no-untyped-def]
+    def evaluate(self, strategy, snapshot, *, position_contexts=None):  # type: ignore[no-untyped-def]
         self.evaluate_calls += 1
-        return super().evaluate(strategy, snapshot)
+        return super().evaluate(strategy, snapshot, position_contexts=position_contexts)
 
 
 class FailingOrderManager(OrderManager):
     def create_order(self, **kwargs):  # type: ignore[no-untyped-def]
+        raise OrderManagerError("create failed")
+
+    def create_signal_plan_order(self, **kwargs):  # type: ignore[no-untyped-def]
         raise OrderManagerError("create failed")
 
 
@@ -234,7 +246,7 @@ def test_run_once_processes_completed_bar_through_feature_engine_and_signal_engi
 
     assert result is not None
     assert signal_engine.evaluate_calls == 1
-    assert len(result.execution_intents) == 1
+    assert len(result.signal_plans) == 1
     assert len(broker.submitted_orders) == 1
     assert store.load_deployment_runtime_state(DEPLOYMENT_ID).last_bar_timestamp_by_symbol_timeframe["SPY:5m"] == bar.timestamp
 
@@ -384,7 +396,7 @@ def test_broker_sync_failure_marks_runtime_degraded_and_blocks_further_opens(tmp
     assert len(broker.submitted_orders) == 1
 
 
-def test_broker_live_account_is_rejected_by_paper_runtime_path(tmp_path) -> None:
+def test_broker_account_mode_must_match_deployment_mode(tmp_path) -> None:
     runtime, store, broker = _runtime(tmp_path)
     _seed_account(store, ACCOUNT_ID, mode=TradingMode.BROKER_LIVE)
 
@@ -392,7 +404,7 @@ def test_broker_live_account_is_rejected_by_paper_runtime_path(tmp_path) -> None
 
     assert store.list_orders() == ()
     assert broker.submitted_orders == []
-    assert store.load_deployment_runtime_state(DEPLOYMENT_ID).last_error == "paper_runtime_rejected_non_paper_account"
+    assert store.load_deployment_runtime_state(DEPLOYMENT_ID).last_error == "broker_account_mode_mismatch"
 
 
 def test_sim_lab_and_chart_lab_do_not_import_or_use_broker_adapter() -> None:
@@ -429,6 +441,77 @@ def test_multiple_broker_accounts_and_deployments_run_independently(tmp_path) ->
 
     assert first_broker.submitted_orders[0].account_id == ACCOUNT_ID
     assert second_broker.submitted_orders[0].account_id == OTHER_ACCOUNT_ID
+
+
+def test_one_deployment_can_fan_out_signal_plan_to_multiple_accounts(tmp_path) -> None:
+    components = _components()
+    store = SQLiteRuntimeStore(tmp_path / "runtime.db")
+    _seed_account(store, ACCOUNT_ID)
+    _seed_account(store, OTHER_ACCOUNT_ID)
+    deployment = _deployment(components)
+    store.save_deployment_runtime_state(RuntimeState(deployment_id=deployment.deployment_id, status=RuntimeStatus.RECOVERED_READY))
+    broker = FakeBrokerAdapter([BrokerOrderStatus.ACCEPTED, BrokerOrderStatus.ACCEPTED])
+    order_manager = OrderManager()
+    runtime = BrokerRuntimeOrchestrator(
+        deployments=(
+            BrokerRuntimeDeployment(
+                deployment=deployment,
+                components=components,
+                account_id=ACCOUNT_ID,
+                account_ids=(ACCOUNT_ID, OTHER_ACCOUNT_ID),
+            ),
+        ),
+        runtime_store=store,
+        broker_adapter=broker,
+        broker_sync=BrokerSync(ledger=order_manager.ledger, adapter=broker, runtime_store=store),
+        order_manager=order_manager,
+        control_plane=ControlPlane(state_store=store),
+    )
+
+    result = runtime.process_completed_bar(DEPLOYMENT_ID, _bar())
+
+    assert result is not None
+    assert len(result.signal_plans) == 1
+    assert [evaluation.account_id for evaluation in result.account_evaluations] == [ACCOUNT_ID, OTHER_ACCOUNT_ID]
+    assert [order.account_id for order in result.orders] == [ACCOUNT_ID, OTHER_ACCOUNT_ID]
+
+
+def test_live_account_records_rejection_without_explicit_submit_enablement(tmp_path) -> None:
+    class LiveFakeBrokerAdapter(FakeBrokerAdapter):
+        mode = TradingMode.BROKER_LIVE
+
+    runtime, _store, broker = _runtime(
+        tmp_path,
+        broker=LiveFakeBrokerAdapter([BrokerOrderStatus.ACCEPTED]),
+        mode=TradingMode.BROKER_LIVE,
+    )
+
+    result = runtime.process_completed_bar(DEPLOYMENT_ID, _bar())
+
+    assert result is not None
+    assert result.broker_results[0].status == BrokerOrderStatus.REJECTED
+    assert result.broker_results[0].reason == "live_submission_disabled"
+    assert result.ledger_updates[0].status.value == "rejected"
+    assert broker.submitted_orders == []
+    assert runtime.loop_status(DEPLOYMENT_ID).state == RuntimeStatus.RUNNING
+
+
+def test_live_account_submits_only_when_explicitly_enabled(tmp_path) -> None:
+    class LiveFakeBrokerAdapter(FakeBrokerAdapter):
+        mode = TradingMode.BROKER_LIVE
+
+    runtime, _store, broker = _runtime(
+        tmp_path,
+        broker=LiveFakeBrokerAdapter([BrokerOrderStatus.ACCEPTED]),
+        mode=TradingMode.BROKER_LIVE,
+        live_order_submission_enabled=True,
+    )
+
+    result = runtime.process_completed_bar(DEPLOYMENT_ID, _bar())
+
+    assert result is not None
+    assert result.broker_results[0].status == BrokerOrderStatus.ACCEPTED
+    assert len(broker.submitted_orders) == 1
 
 
 def test_operations_center_detail_endpoint_returns_runtime_loop_status_and_timestamps(tmp_path) -> None:

@@ -23,6 +23,7 @@ from backend.app.broker_accounts.models import (
     CreateBrokerAccountRequest,
     DeleteBrokerAccountRequest,
     ReplaceBrokerAccountCredentialsRequest,
+    UpdateBrokerAccountDetailsRequest,
 )
 from backend.app.broker_accounts.service import BrokerAccountCreationError
 
@@ -70,12 +71,12 @@ def create_broker_account(
         )
     except BrokerAccountCreationError as exc:
         raise _operator_error(str(exc)) from exc
+    # Build the BrokerSync / OrderManager stack before opening the stream so
+    # the first broker event has a truth writer.
+    _ensure_manual_trade_composition_for_account(service, result.account)
     # Per the runtime architecture spec: every Account's Broker Trade
     # Update Stream starts at boot OR right after creation.
-    _ensure_trade_stream_started(result.account.id)
-    # And the manual-trade composition root needs an entry for this
-    # account so the operator can place orders without a service restart.
-    _ensure_manual_trade_composition_for_account(service, result.account)
+    _ensure_trade_stream_started(service, result.account)
     return BrokerAccountResponse(account=result.account, already_exists=result.already_exists)
 
 
@@ -89,7 +90,7 @@ def _list_accounts(service: Any) -> tuple[BrokerAccount, ...]:
     return ()
 
 
-def _ensure_trade_stream_started(account_id: UUID) -> None:
+def _ensure_trade_stream_started(service: Any, account: BrokerAccount, *, restart: bool = False) -> None:
     """Start a per-Account trade dispatcher, if one isn't already running.
 
     Failures are surfaced via ``TradeEventDispatcher.last_error`` (visible
@@ -99,13 +100,12 @@ def _ensure_trade_stream_started(account_id: UUID) -> None:
     import logging
 
     try:
-        from backend.app.runtime.runtime_context import trade_dispatcher_registry
+        from backend.app.runtime.runtime_context import ensure_account_trade_sync_started
 
-        dispatcher = trade_dispatcher_registry().get_or_create(account_id)
-        dispatcher.start()
+        ensure_account_trade_sync_started(service, account, restart=restart)
     except Exception as exc:  # noqa: BLE001 - log loudly, do not crash route
         logging.getLogger(__name__).warning(
-            "trade dispatcher start failed for account %s: %s", account_id, exc, exc_info=True
+            "trade dispatcher start failed for account %s: %s", account.id, exc, exc_info=True
         )
 
 
@@ -130,6 +130,20 @@ def _ensure_manual_trade_composition_for_account(service: Any, account: BrokerAc
         )
 
 
+@router.patch("/{account_id}", response_model=BrokerAccountResponse)
+def update_broker_account_details(
+    account_id: UUID,
+    request: UpdateBrokerAccountDetailsRequest,
+    service: BrokerAccountServiceDependency,
+) -> BrokerAccountResponse:
+    """Rename or adjust operator-visible labels. Does not touch secrets or mode."""
+    try:
+        account = service.update_account_details(account_id=account_id, display_name=request.display_name)
+    except BrokerAccountCreationError as exc:
+        raise _operator_error(str(exc)) from exc
+    return BrokerAccountResponse(account=account, already_exists=False)
+
+
 @router.put("/{account_id}/credentials", response_model=BrokerAccountCredentialUpdateResponse)
 def replace_broker_account_credentials(
     account_id: UUID,
@@ -148,6 +162,7 @@ def replace_broker_account_credentials(
     # so the new credentials are picked up without a restart.
     if response.account is not None and response.validation_status.value == "valid":
         _ensure_manual_trade_composition_for_account(service, response.account)
+        _ensure_trade_stream_started(service, response.account, restart=True)
     return response
 
 

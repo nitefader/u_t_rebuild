@@ -22,7 +22,7 @@ from backend.app.brokers import (
 )
 from backend.app.domain import CandidateSide, IntentType, OrderType, TimeInForce, TradingMode
 from backend.app.orders import OrderManager, TradeLedger
-from backend.app.runtime import ExecutionIntent
+from backend.tests.fixtures.legacy_intent import LegacyExecutionIntent as ExecutionIntent
 
 
 ACCOUNT_ID = UUID("11111111-2222-3333-4444-555555555555")

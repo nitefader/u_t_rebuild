@@ -105,13 +105,10 @@ class RuntimeRecoveryOrchestrator:
 
     def _recover_account(self, account_id: UUID, loaded: "_LoadedRuntimeState") -> list[str]:
         issues: list[str] = []
-        account_snapshot = self._broker_adapter.get_account_snapshot(account_id)
-        positions = self._broker_adapter.get_positions(account_id)
-        open_orders = self._broker_adapter.list_open_orders(account_id)
-
-        self._broker_sync.sync_account(account_id)
-        self._broker_sync.sync_positions(account_id)
+        account_snapshot = self._broker_sync.sync_account(account_id)
+        positions = self._broker_sync.sync_positions(account_id)
         synced_orders = self._broker_sync.sync_open_orders(account_id)
+        open_orders = self._broker_adapter.list_open_orders(account_id)
         freshness = self._broker_sync.record_sync_freshness(account_snapshot)
 
         local_by_client_order_id = {

@@ -10,9 +10,11 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from backend.app.ai import (
     AIProviderCatalogError,
+    AIServiceDeletionResponse,
     AIServiceList,
     AIServiceRecord,
     AIServiceWrite,
+    DeleteAIServiceRequest,
 )
 
 if TYPE_CHECKING:
@@ -76,7 +78,25 @@ def set_default_provider(service_id: UUID, catalog: CatalogDependency) -> AIServ
 
 @router.post("/providers/{service_id}/disable", response_model=AIServiceRecord)
 def disable_provider(service_id: UUID, catalog: CatalogDependency) -> AIServiceRecord:
+    """Soft-retire (archive): record stays on disk but is excluded from routing."""
     return catalog.disable_service(service_id)
+
+
+@router.post("/providers/{service_id}/delete", response_model=AIServiceDeletionResponse)
+def delete_ai_provider(
+    service_id: UUID,
+    request: DeleteAIServiceRequest,
+    catalog: CatalogDependency,
+) -> AIServiceDeletionResponse:
+    """Hard-delete: remove catalog row after name confirmation."""
+    try:
+        existing = catalog.get_service(service_id)
+    except AIProviderCatalogError as exc:
+        raise _operator_error(str(exc)) from exc
+    if request.confirm_service_name.strip() != existing.name:
+        raise _operator_error("confirm_service_name did not match provider name")
+    catalog.delete_service(service_id)
+    return AIServiceDeletionResponse(service_id=service_id, message="AI provider removed from catalog")
 
 
 def _operator_error(message: str) -> Exception:

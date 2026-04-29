@@ -30,7 +30,7 @@ def test_feature_key_determinism_contract() -> None:
 
 def test_invalid_feature_rejection_contract() -> None:
     with pytest.raises(FeatureValidationError, match="unsupported feature"):
-        registry.create_spec(kind="supertrend", timeframe="5m")
+        registry.create_spec(kind="bollinger_bands", timeframe="5m")
 
 
 @pytest.mark.parametrize("timeframe", ["60m", "5min", "day", "1D"])

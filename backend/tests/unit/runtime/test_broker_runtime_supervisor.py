@@ -26,7 +26,7 @@ from backend.app.domain import (
 )
 from backend.app.domain.risk_profile import PositionSizingMethod
 from backend.app.domain.strategy import SignalRule
-from backend.app.features import NormalizedBar, ResolvedProgramComponents
+from backend.app.features import NormalizedBar, ResolvedDeploymentComponents
 from backend.app.market_data import MarketDataStreamHub
 from backend.app.orders import OrderManager
 from backend.app.persistence import SQLiteOrderLedger, SQLiteRuntimeStore
@@ -46,13 +46,13 @@ DEPLOYMENT_ID_A = UUID("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
 DEPLOYMENT_ID_B = UUID("bbbbbbbb-cccc-dddd-eeee-ffffffffffff")
 
 
-def _components(*, symbol: str = "SPY") -> ResolvedProgramComponents:
+def _components(*, symbol: str = "SPY") -> ResolvedDeploymentComponents:
     strategy_id = uuid4()
     controls_id = uuid4()
     risk_id = uuid4()
     execution_id = uuid4()
     universe_id = uuid4()
-    return ResolvedProgramComponents(
+    return ResolvedDeploymentComponents(
         program=ProgramVersion(
             id=uuid4(),
             program_id=uuid4(),
@@ -112,6 +112,15 @@ def _components(*, symbol: str = "SPY") -> ResolvedProgramComponents:
             name="u",
             symbols=[UniverseSymbol(symbol=symbol)],
         ),
+    )
+
+
+def _deployment(deployment_id: UUID, components: ResolvedDeploymentComponents) -> DeploymentContext:
+    return DeploymentContext(
+        deployment_id=deployment_id,
+        strategy_version_id=components.strategy.id,
+        strategy_version=components.strategy.version,
+        mode=TradingMode.BROKER_PAPER.value,
     )
 
 
@@ -226,12 +235,12 @@ def test_supervisor_registers_with_hub_and_dispatches_bars_via_hub(tmp_path) -> 
     qqq_components = _components(symbol="QQQ")
     deployments = (
         BrokerRuntimeDeployment(
-            deployment=DeploymentContext(deployment_id=DEPLOYMENT_ID_A, program=spy_components.program, mode=TradingMode.BROKER_PAPER.value),
+            deployment=_deployment(DEPLOYMENT_ID_A, spy_components),
             components=spy_components,
             account_id=ACCOUNT_ID,
         ),
         BrokerRuntimeDeployment(
-            deployment=DeploymentContext(deployment_id=DEPLOYMENT_ID_B, program=qqq_components.program, mode=TradingMode.BROKER_PAPER.value),
+            deployment=_deployment(DEPLOYMENT_ID_B, qqq_components),
             components=qqq_components,
             account_id=ACCOUNT_ID,
         ),
@@ -240,7 +249,7 @@ def test_supervisor_registers_with_hub_and_dispatches_bars_via_hub(tmp_path) -> 
     hub = _make_hub()
     broker_runner = _RecordingBrokerStreamRunner()
     supervisor = BrokerRuntimeSupervisor(
-        broker_runtime=runtime,
+        account_trading=runtime,
         market_data_hub=hub,
         broker_stream_runner=broker_runner,
     )
@@ -272,7 +281,7 @@ def test_multiple_consumers_share_the_same_hub_subscription(tmp_path) -> None:
     components = _components(symbol="SPY")
     deployments = (
         BrokerRuntimeDeployment(
-            deployment=DeploymentContext(deployment_id=DEPLOYMENT_ID_A, program=components.program, mode=TradingMode.BROKER_PAPER.value),
+            deployment=_deployment(DEPLOYMENT_ID_A, components),
             components=components,
             account_id=ACCOUNT_ID,
         ),
@@ -281,7 +290,7 @@ def test_multiple_consumers_share_the_same_hub_subscription(tmp_path) -> None:
     hub = _make_hub()
     sim_received: list[str] = []
     hub.register("sim-lab-live", ["SPY", "QQQ"], lambda bar: sim_received.append(bar.symbol))
-    supervisor = BrokerRuntimeSupervisor(broker_runtime=runtime, market_data_hub=hub)
+    supervisor = BrokerRuntimeSupervisor(account_trading=runtime, market_data_hub=hub)
     supervisor.start(deployments)
 
     try:
@@ -304,13 +313,13 @@ def test_double_start_raises(tmp_path) -> None:
     components = _components()
     deployments = (
         BrokerRuntimeDeployment(
-            deployment=DeploymentContext(deployment_id=DEPLOYMENT_ID_A, program=components.program, mode=TradingMode.BROKER_PAPER.value),
+            deployment=_deployment(DEPLOYMENT_ID_A, components),
             components=components,
             account_id=ACCOUNT_ID,
         ),
     )
     runtime, _ = _build_runtime(tmp_path, deployments=deployments)
-    supervisor = BrokerRuntimeSupervisor(broker_runtime=runtime, market_data_hub=_make_hub())
+    supervisor = BrokerRuntimeSupervisor(account_trading=runtime, market_data_hub=_make_hub())
     supervisor.start(deployments)
     try:
         with pytest.raises(BrokerRuntimeSupervisorError):
@@ -321,7 +330,7 @@ def test_double_start_raises(tmp_path) -> None:
 
 def test_stop_before_start_is_noop(tmp_path) -> None:
     runtime, _ = _build_runtime(tmp_path, deployments=())
-    supervisor = BrokerRuntimeSupervisor(broker_runtime=runtime, market_data_hub=_make_hub())
+    supervisor = BrokerRuntimeSupervisor(account_trading=runtime, market_data_hub=_make_hub())
     supervisor.stop()  # no exception
     assert supervisor.is_running is False
 
@@ -329,7 +338,7 @@ def test_stop_before_start_is_noop(tmp_path) -> None:
 def test_supervisor_with_no_deployments_skips_hub_registration(tmp_path) -> None:
     runtime, _ = _build_runtime(tmp_path, deployments=())
     hub = _make_hub()
-    supervisor = BrokerRuntimeSupervisor(broker_runtime=runtime, market_data_hub=hub)
+    supervisor = BrokerRuntimeSupervisor(account_trading=runtime, market_data_hub=hub)
     supervisor.start(())
     try:
         assert supervisor.is_running is True

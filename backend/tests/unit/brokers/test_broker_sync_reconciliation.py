@@ -21,7 +21,8 @@ from backend.app.brokers import (
 from backend.app.domain import CandidateSide, IntentType, OrderType, TimeInForce, TradingMode
 from backend.app.governor import BrokerSyncFreshness, GovernorRequest, PortfolioGovernor, PortfolioSnapshot
 from backend.app.orders import InternalOrder, InternalOrderStatus, OrderManager
-from backend.app.runtime import ExecutionIntent, RuntimeState
+from backend.app.runtime import RuntimeState
+from backend.tests.fixtures.legacy_intent import LegacyExecutionIntent as ExecutionIntent
 
 
 ACCOUNT_ID = UUID("11111111-2222-3333-4444-555555555555")
@@ -54,12 +55,14 @@ class ReconciliationAdapter:
         self.missing_client_order_ids = missing_client_order_ids or set()
         self.fail_account_snapshot = fail_account_snapshot
         self.submitted_orders: list[InternalOrder] = []
+        self.get_order_client_ids: list[str] = []
 
     def submit_order(self, order: InternalOrder) -> BrokerOrderResult:
         self.submitted_orders.append(order)
         return _result(order, BrokerOrderStatus.ACCEPTED)
 
     def get_order(self, order: InternalOrder) -> BrokerOrderResult:
+        self.get_order_client_ids.append(order.client_order_id)
         if order.client_order_id in self.missing_client_order_ids:
             raise BrokerAdapterError("missing broker order")
         return self.order_results_by_client_id.get(order.client_order_id, _result(order, BrokerOrderStatus.ACCEPTED))
@@ -141,6 +144,46 @@ class RecordingTradeLedger:
         self.fills.append(event)
 
 
+class RecordingRuntimeStore:
+    def __init__(self) -> None:
+        self.open_order_replacements: list[tuple[UUID, tuple[BrokerOpenOrderSnapshot, ...]]] = []
+        self.open_order_saves: list[BrokerOpenOrderSnapshot] = []
+        self.position_replacements: list[tuple[UUID, tuple[BrokerPositionSnapshot, ...]]] = []
+        self.position_saves: list[BrokerPositionSnapshot] = []
+        self.sync_states: list[object] = []
+
+    def save_broker_account_snapshot(self, snapshot: BrokerAccountSnapshot) -> BrokerAccountSnapshot:
+        return snapshot
+
+    def replace_broker_position_snapshots(
+        self,
+        account_id: UUID,
+        snapshots: tuple[BrokerPositionSnapshot, ...],
+    ) -> tuple[BrokerPositionSnapshot, ...]:
+        self.position_replacements.append((account_id, snapshots))
+        return snapshots
+
+    def save_broker_position_snapshot(self, snapshot: BrokerPositionSnapshot) -> BrokerPositionSnapshot:
+        self.position_saves.append(snapshot)
+        return snapshot
+
+    def save_broker_sync_freshness(self, state):  # type: ignore[no-untyped-def]
+        self.sync_states.append(state)
+        return state
+
+    def replace_broker_open_order_snapshots(
+        self,
+        account_id: UUID,
+        snapshots: tuple[BrokerOpenOrderSnapshot, ...],
+    ) -> tuple[BrokerOpenOrderSnapshot, ...]:
+        self.open_order_replacements.append((account_id, snapshots))
+        return snapshots
+
+    def save_broker_open_order_snapshot(self, snapshot: BrokerOpenOrderSnapshot) -> BrokerOpenOrderSnapshot:
+        self.open_order_saves.append(snapshot)
+        return snapshot
+
+
 def test_missing_local_order_flagged() -> None:
     manager = OrderManager()
     adapter = ReconciliationAdapter(open_orders=(_external_snapshot(),))
@@ -152,6 +195,55 @@ def test_missing_local_order_flagged() -> None:
     assert issue.issue_type == BrokerReconciliationIssueType.MISSING_LOCAL_ORDER
     assert issue.action == "preserve_external_order_and_flag"
     assert issue.actual == "unknown_intent"
+
+
+def test_reconcile_persists_current_open_broker_order_snapshots_for_operations_visibility() -> None:
+    manager = OrderManager()
+    snapshot = _external_snapshot()
+    position = BrokerPositionSnapshot(
+        account_id=ACCOUNT_ID,
+        symbol="SPY",
+        quantity=3,
+        side=BrokerPositionSide.LONG,
+        avg_entry_price=100,
+        market_value=300,
+    )
+    store = RecordingRuntimeStore()
+    adapter = ReconciliationAdapter(open_orders=(snapshot,), positions=(position,))
+
+    BrokerSyncService(
+        adapter=adapter,
+        broker_sync=BrokerSync(ledger=manager.ledger, adapter=adapter, runtime_store=store),
+        order_ledger=manager.ledger,
+        runtime_store=store,
+    ).reconcile(ACCOUNT_ID)
+
+    assert store.open_order_replacements == [(ACCOUNT_ID, (snapshot,))]
+    assert store.position_replacements == [(ACCOUNT_ID, (position,))]
+
+
+def test_stream_position_update_persists_position_snapshot_for_operations_visibility() -> None:
+    store = RecordingRuntimeStore()
+    manager = OrderManager()
+    adapter = ReconciliationAdapter()
+    service = BrokerSyncService(
+        adapter=adapter,
+        broker_sync=BrokerSync(ledger=manager.ledger, adapter=adapter, runtime_store=store),
+        order_ledger=manager.ledger,
+        runtime_store=store,
+    )
+    position = BrokerPositionSnapshot(
+        account_id=ACCOUNT_ID,
+        symbol="SPY",
+        quantity=3,
+        side=BrokerPositionSide.LONG,
+        avg_entry_price=100,
+        market_value=300,
+    )
+
+    service.handle_position_update(position)
+
+    assert store.position_saves == [position]
 
 
 def test_missing_broker_order_flagged() -> None:
@@ -174,6 +266,27 @@ def test_filled_order_reconciles() -> None:
     assert report.updated_order_count == 1
     assert updated.status == InternalOrderStatus.FILLED
     assert updated.filled_quantity == order.quantity
+
+
+def test_reconcile_skips_terminal_internal_orders_during_quiet_polling() -> None:
+    manager, active_order = _manager_and_order()
+    terminal_order = manager.ledger.update_status(
+        order_id=active_order.order_id,
+        status=InternalOrderStatus.FILLED,
+    )
+    second_order = manager.create_order(
+        account_id=ACCOUNT_ID,
+        execution_intent=_intent().model_copy(update={"signal_name": "entry-2"}),
+    )
+    adapter = ReconciliationAdapter(
+        order_results_by_client_id={second_order.client_order_id: _result(second_order, BrokerOrderStatus.ACCEPTED)}
+    )
+
+    report = BrokerSync(ledger=manager.ledger, adapter=adapter).reconcile(ACCOUNT_ID)
+
+    assert adapter.get_order_client_ids == [second_order.client_order_id]
+    assert report.matched_orders == (second_order.client_order_id,)
+    assert terminal_order.client_order_id not in report.unmatched_internal_orders
 
 
 def test_reconciliation_reports_mismatched_fill_quantities() -> None:
@@ -381,6 +494,38 @@ def test_streaming_order_update_updates_order_ledger_through_broker_sync() -> No
 
     assert updated.status == InternalOrderStatus.FILLED
     assert manager.ledger.get(order.order_id).filled_quantity == order.quantity
+    assert service.current_sync_state(ACCOUNT_ID).is_stale is False
+
+
+def test_streaming_external_open_order_update_is_preserved_for_operations_visibility() -> None:
+    store = RecordingRuntimeStore()
+    manager = OrderManager()
+    service = BrokerSyncService(
+        adapter=ReconciliationAdapter(),
+        broker_sync=BrokerSync(ledger=manager.ledger, runtime_store=store),
+        order_ledger=manager.ledger,
+    )
+
+    updated = service.handle_order_update(
+        BrokerOrderUpdateEvent(
+            account_id=ACCOUNT_ID,
+            client_order_id="external-client-1",
+            status=BrokerOrderStatus.ACCEPTED,
+            broker_order_id="external-broker-1",
+            symbol="SPY",
+            side="buy",
+            qty=2,
+            order_type="limit",
+            limit_price=700,
+        )
+    )
+
+    assert updated is None
+    assert len(store.open_order_saves) == 1
+    snapshot = store.open_order_saves[0]
+    assert snapshot.client_order_id == "external-client-1"
+    assert snapshot.symbol == "SPY"
+    assert snapshot.qty == 2
     assert service.current_sync_state(ACCOUNT_ID).is_stale is False
 
 

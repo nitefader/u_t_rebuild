@@ -19,7 +19,7 @@ from backend.app.brokers import (
 from backend.app.domain import CandidateSide, OrderType, TimeInForce, TradingMode
 from backend.app.domain._base import utc_now
 from backend.app.orders import InternalOrder, InternalOrderIntent, InternalOrderStatus
-from backend.app.runtime import ExecutionIntent
+from backend.tests.fixtures.legacy_intent import LegacyExecutionIntent as ExecutionIntent
 import backend.app.brokers.alpaca as alpaca_module
 
 try:
@@ -34,7 +34,14 @@ DEPLOYMENT_ID = UUID("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
 PROGRAM_ID = UUID("99999999-8888-7777-6666-555555555555")
 
 
-def _order(*, order_type: OrderType = OrderType.MARKET, limit_price: float | None = None) -> InternalOrder:
+def _order(
+    *,
+    order_type: OrderType = OrderType.MARKET,
+    limit_price: float | None = None,
+    stop_price: float | None = None,
+    side: CandidateSide = CandidateSide.LONG,
+    intent: InternalOrderIntent = InternalOrderIntent.OPEN,
+) -> InternalOrder:
     now = utc_now()
     return InternalOrder(
         order_id=uuid4(),
@@ -43,12 +50,13 @@ def _order(*, order_type: OrderType = OrderType.MARKET, limit_price: float | Non
         deployment_id=DEPLOYMENT_ID,
         program_id=PROGRAM_ID,
         symbol="SPY",
-        side=CandidateSide.LONG,
+        side=side,
         quantity=10,
         order_type=order_type,
         time_in_force=TimeInForce.DAY,
         limit_price=limit_price,
-        intent=InternalOrderIntent.OPEN,
+        stop_price=stop_price,
+        intent=intent,
         status=InternalOrderStatus.CREATED,
         created_at=now,
         updated_at=now,
@@ -68,6 +76,7 @@ class FakeTradingClient:
         self.submitted_order_data = None
         self.get_order_calls = 0
         self.submit_order_calls = 0
+        self.get_orders_filter = None
 
     def submit_order(self, *, order_data):
         self.submit_order_calls += 1
@@ -82,7 +91,8 @@ class FakeTradingClient:
         payload["client_order_id"] = client_order_id
         return payload
 
-    def get_orders(self):
+    def get_orders(self, filter=None):  # noqa: A002
+        self.get_orders_filter = filter
         return [self.response]
 
     def get_account(self):
@@ -121,18 +131,58 @@ def test_market_order_translation_correct() -> None:
     }
 
 
-def test_limit_order_translation_rejected_for_v1_safe_path() -> None:
+def test_long_position_exit_translates_to_alpaca_sell_order() -> None:
+    request = _adapter().translate_order_request(
+        _order(side=CandidateSide.SHORT, intent=InternalOrderIntent.LOGICAL_EXIT)
+    )
+
+    assert request["side"] == "sell"
+
+
+def test_short_position_exit_translates_to_alpaca_buy_order() -> None:
+    request = _adapter().translate_order_request(
+        _order(side=CandidateSide.LONG, intent=InternalOrderIntent.LOGICAL_EXIT)
+    )
+
+    assert request["side"] == "buy"
+
+
+def test_limit_order_translation_correct() -> None:
+    request = _adapter().translate_order_request(_order(order_type=OrderType.LIMIT, limit_price=101.25))
+
+    assert request["type"] == "limit"
+    assert request["limit_price"] == 101.25
+
+
+def test_stop_order_translation_correct() -> None:
+    request = _adapter().translate_order_request(_order(order_type=OrderType.STOP, stop_price=99.50))
+
+    assert request["type"] == "stop"
+    assert request["stop_price"] == 99.50
+
+
+def test_stop_limit_order_translation_correct() -> None:
+    request = _adapter().translate_order_request(
+        _order(order_type=OrderType.STOP_LIMIT, limit_price=99.25, stop_price=99.50)
+    )
+
+    assert request["type"] == "stop_limit"
+    assert request["limit_price"] == 99.25
+    assert request["stop_price"] == 99.50
+
+
+def test_limit_order_without_limit_price_rejected() -> None:
     with pytest.raises(AlpacaBrokerError) as exc_info:
-        _adapter().translate_order_request(_order(order_type=OrderType.LIMIT, limit_price=101.25))
+        _adapter().translate_order_request(_order(order_type=OrderType.LIMIT))
 
-    assert exc_info.value.details.code == "submit_supports_market_only"
+    assert exc_info.value.details.code == "limit_price_required"
 
 
-def test_invalid_unsupported_order_type_rejected() -> None:
+def test_stop_order_without_stop_price_rejected() -> None:
     with pytest.raises(AlpacaBrokerError) as exc_info:
         _adapter().translate_order_request(_order(order_type=OrderType.STOP))
 
-    assert exc_info.value.details.code == "submit_supports_market_only"
+    assert exc_info.value.details.code == "stop_price_required"
 
 
 def test_status_normalization_works() -> None:
@@ -143,6 +193,7 @@ def test_status_normalization_works() -> None:
     assert adapter.normalize_status("OrderStatus.PENDING_NEW") == BrokerOrderStatus.ACCEPTED
     assert adapter.normalize_status("new") == BrokerOrderStatus.ACCEPTED
     assert adapter.normalize_status("accepted") == BrokerOrderStatus.ACCEPTED
+    assert adapter.normalize_status("partial_fill") == BrokerOrderStatus.PARTIAL_FILL
     assert adapter.normalize_status("partially_filled") == BrokerOrderStatus.PARTIAL_FILL
     assert adapter.normalize_status("filled") == BrokerOrderStatus.FILLED
     assert adapter.normalize_status("rejected") == BrokerOrderStatus.REJECTED
@@ -190,6 +241,26 @@ def test_account_snapshot_normalization_works() -> None:
             "buying_power": "50000",
             "cash": "25000",
             "equity": "55000",
+            "daytrading_buying_power": "45000",
+            "regt_buying_power": "40000",
+            "non_marginable_buying_power": "12000",
+            "multiplier": "2",
+            "portfolio_value": "56000",
+            "long_market_value": "1000",
+            "short_market_value": "0",
+            "initial_margin": "500",
+            "maintenance_margin": "250",
+            "last_maintenance_margin": "200",
+            "last_equity": "54000",
+            "sma": "100",
+            "daytrade_count": 1,
+            "trade_suspended_by_user": False,
+            "transfers_blocked": True,
+            "crypto_status": "ACTIVE",
+            "currency": "USD",
+            "accrued_fees": "1.25",
+            "pending_transfer_in": "10",
+            "pending_transfer_out": "5",
             "trading_blocked": False,
             "account_blocked": False,
             "pattern_day_trader": True,
@@ -201,6 +272,25 @@ def test_account_snapshot_normalization_works() -> None:
     assert snapshot.provider == "alpaca"
     assert snapshot.mode == TradingMode.BROKER_PAPER
     assert snapshot.buying_power == 50_000
+    assert snapshot.daytrading_buying_power == 45_000
+    assert snapshot.regt_buying_power == 40_000
+    assert snapshot.non_marginable_buying_power == 12_000
+    assert snapshot.multiplier == 2
+    assert snapshot.portfolio_value == 56_000
+    assert snapshot.long_market_value == 1_000
+    assert snapshot.short_market_value == 0
+    assert snapshot.initial_margin == 500
+    assert snapshot.maintenance_margin == 250
+    assert snapshot.last_maintenance_margin == 200
+    assert snapshot.last_equity == 54_000
+    assert snapshot.sma == 100
+    assert snapshot.daytrade_count == 1
+    assert snapshot.transfers_blocked is True
+    assert snapshot.crypto_status == "ACTIVE"
+    assert snapshot.currency == "USD"
+    assert snapshot.accrued_fees == 1.25
+    assert snapshot.pending_transfer_in == 10
+    assert snapshot.pending_transfer_out == 5
     assert snapshot.pattern_day_trader is True
     assert snapshot.shorting_enabled is True
 
@@ -288,6 +378,19 @@ def test_mocked_submission_uses_trading_client(monkeypatch) -> None:
     assert fake_client.submit_order_calls == 1
     assert isinstance(fake_client.submitted_order_data, FakeOrderRequest)
     assert fake_client.submitted_order_data.kwargs["client_order_id"] == "utos-11111111-aaaaaaaa-99999999-open-000001"
+
+
+def test_mocked_limit_submission_uses_limit_order_request(monkeypatch) -> None:
+    monkeypatch.setattr(alpaca_module, "LimitOrderRequest", FakeOrderRequest)
+    fake_client = FakeTradingClient()
+    adapter = AlpacaBrokerAdapter(mode=TradingMode.BROKER_PAPER, trading_client=fake_client)
+
+    result = adapter.submit_order(_order(order_type=OrderType.LIMIT, limit_price=101.25))
+
+    assert result.status == BrokerOrderStatus.ACCEPTED
+    assert fake_client.submit_order_calls == 1
+    assert isinstance(fake_client.submitted_order_data, FakeOrderRequest)
+    assert fake_client.submitted_order_data.kwargs["limit_price"] == 101.25
 
 
 def test_adapter_builds_trading_client_with_explicit_credentials(monkeypatch) -> None:

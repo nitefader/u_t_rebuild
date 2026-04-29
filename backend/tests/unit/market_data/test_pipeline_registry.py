@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import pytest
 
-from backend.app.domain import TradingMode
 from backend.app.market_data import (
+    MarketDataAssetClass,
     MarketDataPipeline,
     MarketDataPipelineRegistry,
     MarketDataPipelineWrite,
@@ -104,7 +104,7 @@ def test_persistence_round_trip(tmp_path) -> None:
         MarketDataPipelineWrite(
             display_name="Alpaca Premium",
             provider=Provider.ALPACA,
-            trading_mode=TradingMode.BROKER_PAPER,
+            asset_class=MarketDataAssetClass.STOCK,
         )
     )
     reg.set_default_for_provider(pipeline.id)
@@ -112,24 +112,13 @@ def test_persistence_round_trip(tmp_path) -> None:
     reloaded = MarketDataPipelineRegistry(store_path=store)
     assert reloaded.lookup_default_for_provider(Provider.ALPACA) == str(pipeline.id)
     survivor = reloaded.get_pipeline(pipeline.id)
-    assert survivor.trading_mode == TradingMode.BROKER_PAPER
+    assert survivor.asset_class == MarketDataAssetClass.STOCK
     assert survivor.is_default_for_provider is True
 
 
-def test_pipeline_rejects_non_broker_trading_mode() -> None:
-    with pytest.raises(ValueError, match="BROKER mode"):
-        MarketDataPipeline(display_name="bad", provider=Provider.ALPACA, trading_mode=TradingMode.CHART_LAB_BATCH)
-
-
-def test_pipeline_write_rejects_non_broker_trading_mode() -> None:
-    with pytest.raises(ValueError, match="BROKER mode"):
-        MarketDataPipelineWrite(display_name="bad", provider=Provider.ALPACA, trading_mode=TradingMode.SIM_LAB_HISTORICAL)
-
-
-def test_pipeline_accepts_none_trading_mode_for_vendor_only() -> None:
-    """Yahoo and other vendor-only pipelines have no broker credential tie."""
-    pipeline = MarketDataPipeline(display_name="Yahoo", provider=Provider.YAHOO, trading_mode=None)
-    assert pipeline.trading_mode is None
+def test_pipeline_defaults_to_stock_asset_class() -> None:
+    pipeline = MarketDataPipeline(display_name="Yahoo", provider=Provider.YAHOO)
+    assert pipeline.asset_class == MarketDataAssetClass.STOCK
 
 
 def test_unknown_pipeline_id_raises(tmp_path) -> None:
@@ -141,7 +130,7 @@ def test_unknown_pipeline_id_raises(tmp_path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Round 2: service_id FK + (service_id, trading_mode, data_feed) invariant
+# Round 2: service_id FK + (service_id, asset_class, data_feed) invariant
 # ---------------------------------------------------------------------------
 
 
@@ -156,7 +145,7 @@ def test_pipeline_carries_service_id_and_data_feed_when_supplied(tmp_path) -> No
             provider=Provider.ALPACA,
             service_id=service_id,
             data_feed="sip",
-            trading_mode=TradingMode.BROKER_PAPER,
+            asset_class=MarketDataAssetClass.STOCK,
         )
     )
     assert pipeline.service_id == service_id
@@ -169,7 +158,7 @@ def test_pipeline_data_feed_defaults_to_iex(tmp_path) -> None:
     assert pipeline.data_feed == "iex"
 
 
-def test_create_pipeline_rejects_duplicate_service_mode_feed_when_existing_active(tmp_path) -> None:
+def test_create_pipeline_rejects_duplicate_service_asset_feed_when_existing_active(tmp_path) -> None:
     from uuid import uuid4
 
     reg = _registry(tmp_path)
@@ -180,7 +169,7 @@ def test_create_pipeline_rejects_duplicate_service_mode_feed_when_existing_activ
             provider=Provider.ALPACA,
             service_id=service_id,
             data_feed="iex",
-            trading_mode=TradingMode.BROKER_PAPER,
+            asset_class=MarketDataAssetClass.STOCK,
         )
     )
     with pytest.raises(PipelineRegistryError, match="duplicate active streams"):
@@ -190,7 +179,7 @@ def test_create_pipeline_rejects_duplicate_service_mode_feed_when_existing_activ
                 provider=Provider.ALPACA,
                 service_id=service_id,
                 data_feed="iex",
-                trading_mode=TradingMode.BROKER_PAPER,
+                asset_class=MarketDataAssetClass.STOCK,
             )
         )
 
@@ -207,7 +196,7 @@ def test_create_pipeline_allows_different_data_feed_for_same_service(tmp_path) -
             provider=Provider.ALPACA,
             service_id=service_id,
             data_feed="iex",
-            trading_mode=TradingMode.BROKER_PAPER,
+            asset_class=MarketDataAssetClass.STOCK,
         )
     )
     sip = reg.create_pipeline(
@@ -216,7 +205,7 @@ def test_create_pipeline_allows_different_data_feed_for_same_service(tmp_path) -
             provider=Provider.ALPACA,
             service_id=service_id,
             data_feed="sip",
-            trading_mode=TradingMode.BROKER_PAPER,
+            asset_class=MarketDataAssetClass.STOCK,
         )
     )
     assert iex.data_feed != sip.data_feed
@@ -233,7 +222,7 @@ def test_disabled_pipeline_does_not_block_re_creation_for_same_identity(tmp_path
             provider=Provider.ALPACA,
             service_id=service_id,
             data_feed="iex",
-            trading_mode=TradingMode.BROKER_PAPER,
+            asset_class=MarketDataAssetClass.STOCK,
         )
     )
     reg.disable_pipeline(first.id)
@@ -244,7 +233,7 @@ def test_disabled_pipeline_does_not_block_re_creation_for_same_identity(tmp_path
             provider=Provider.ALPACA,
             service_id=service_id,
             data_feed="iex",
-            trading_mode=TradingMode.BROKER_PAPER,
+            asset_class=MarketDataAssetClass.STOCK,
         )
     )
     assert second.id != first.id
@@ -254,10 +243,10 @@ def test_pipeline_with_no_service_id_is_exempt_from_invariant(tmp_path) -> None:
     """Legacy / vendor-only pipelines (no service_id) don't dedup against each other."""
     reg = _registry(tmp_path)
     a = reg.create_pipeline(
-        MarketDataPipelineWrite(display_name="Vendor A", provider=Provider.YAHOO, trading_mode=None)
+        MarketDataPipelineWrite(display_name="Vendor A", provider=Provider.YAHOO, asset_class=MarketDataAssetClass.STOCK)
     )
     b = reg.create_pipeline(
-        MarketDataPipelineWrite(display_name="Vendor B", provider=Provider.YAHOO, trading_mode=None)
+        MarketDataPipelineWrite(display_name="Vendor B", provider=Provider.YAHOO, asset_class=MarketDataAssetClass.STOCK)
     )
     assert a.id != b.id
 
@@ -267,7 +256,7 @@ def test_attach_service_id_backfills_legacy_pipeline(tmp_path) -> None:
 
     reg = _registry(tmp_path)
     legacy = reg.create_pipeline(
-        MarketDataPipelineWrite(display_name="Legacy", provider=Provider.ALPACA, trading_mode=TradingMode.BROKER_PAPER)
+        MarketDataPipelineWrite(display_name="Legacy", provider=Provider.ALPACA, asset_class=MarketDataAssetClass.STOCK)
     )
     assert legacy.service_id is None
     service_id = uuid4()
@@ -287,11 +276,11 @@ def test_attach_service_id_enforces_invariant(tmp_path) -> None:
             provider=Provider.ALPACA,
             service_id=service_id,
             data_feed="iex",
-            trading_mode=TradingMode.BROKER_PAPER,
+            asset_class=MarketDataAssetClass.STOCK,
         )
     )
     legacy = reg.create_pipeline(
-        MarketDataPipelineWrite(display_name="Legacy", provider=Provider.ALPACA, trading_mode=TradingMode.BROKER_PAPER)
+        MarketDataPipelineWrite(display_name="Legacy", provider=Provider.ALPACA, asset_class=MarketDataAssetClass.STOCK)
     )
     with pytest.raises(PipelineRegistryError, match="duplicate active streams"):
         reg.attach_service_id(legacy.id, service_id)
@@ -312,17 +301,17 @@ def test_update_pipeline_only_changes_display_name_and_capabilities(tmp_path) ->
             provider=Provider.ALPACA,
             service_id=service_id,
             data_feed="sip",
-            trading_mode=TradingMode.BROKER_PAPER,
+            asset_class=MarketDataAssetClass.STOCK,
         )
     )
     new_caps = MarketDataCapabilities(supports_streaming=False, supports_historical=True)
     updated = reg.update_pipeline(pipeline.id, MarketDataPipelineEdit(display_name="Renamed", capabilities=new_caps))
     assert updated.display_name == "Renamed"
     assert updated.capabilities.supports_streaming is False
-    # Identity preserved: service_id, data_feed, trading_mode all unchanged.
+    # Identity preserved: service_id, asset_class, data_feed all unchanged.
     assert updated.service_id == service_id
     assert updated.data_feed == "sip"
-    assert updated.trading_mode == TradingMode.BROKER_PAPER
+    assert updated.asset_class == MarketDataAssetClass.STOCK
 
 
 def test_update_pipeline_omitted_fields_preserve_existing(tmp_path) -> None:
@@ -338,7 +327,7 @@ def test_update_pipeline_omitted_fields_preserve_existing(tmp_path) -> None:
             provider=Provider.ALPACA,
             service_id=uuid4(),
             data_feed="iex",
-            trading_mode=TradingMode.BROKER_PAPER,
+            asset_class=MarketDataAssetClass.STOCK,
         )
     )
     # Edit nothing — no-op return.
@@ -366,7 +355,7 @@ def test_disabled_pipeline_does_not_block_invariant_check(tmp_path) -> None:
         provider=Provider.ALPACA,
         service_id=service_id,
         data_feed="iex",
-        trading_mode=TradingMode.BROKER_PAPER,
+        asset_class=MarketDataAssetClass.STOCK,
         status=PipelineStatus.DRAFT,
     )
     reg._records[draft_pipeline.id] = draft_pipeline
@@ -378,7 +367,7 @@ def test_disabled_pipeline_does_not_block_invariant_check(tmp_path) -> None:
             provider=Provider.ALPACA,
             service_id=service_id,
             data_feed="iex",
-            trading_mode=TradingMode.BROKER_PAPER,
+            asset_class=MarketDataAssetClass.STOCK,
         )
     )
     assert active.id != draft_pipeline.id

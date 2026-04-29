@@ -9,10 +9,19 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from backend.app.operations.models import (
     AccountOperations,
+    AccountSignalPlanEvaluationListResponse,
     DeploymentOperations,
     FlattenRequestResponse,
     OrderDetail,
     RuntimeOverview,
+)
+from backend.app.domain import (
+    BacktestRun,
+    ChartLabPreviewEvidence,
+    OptimizationRun,
+    PromotionEvidenceBundle,
+    SimulationRunEvidence,
+    WalkForwardRun,
 )
 
 if TYPE_CHECKING:
@@ -46,6 +55,22 @@ class OperatorRouteError(HTTPException):
 
     def __init__(self, detail: str) -> None:
         super().__init__(status_code=503, detail=detail)
+
+
+ResearchEvidenceResponse = (
+    ChartLabPreviewEvidence
+    | BacktestRun
+    | SimulationRunEvidence
+    | OptimizationRun
+    | WalkForwardRun
+    | PromotionEvidenceBundle
+)
+
+
+class ResearchEvidenceListResponse(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    evidence: tuple[ResearchEvidenceResponse, ...] = ()
 
 
 def get_operations_center_service() -> "OperationsCenterService":
@@ -98,6 +123,62 @@ def get_order_detail(order_id: UUID, service: OperationsServiceDependency) -> Or
         return service.get_order_detail(order_id)
     except Exception as exc:  # noqa: BLE001
         raise _operator_error(f"Unable to load order detail for {order_id}", exc) from exc
+
+
+@router.get("/broker-orders/{broker_order_id}", response_model=OrderDetail)
+def get_order_detail_by_broker_order_id(broker_order_id: str, service: OperationsServiceDependency) -> OrderDetail:
+    try:
+        return service.get_order_detail_by_broker_order_id(broker_order_id)
+    except Exception as exc:  # noqa: BLE001
+        raise _operator_error(f"Unable to load order detail for broker order {broker_order_id}", exc) from exc
+
+
+@router.get("/evaluations", response_model=AccountSignalPlanEvaluationListResponse)
+def list_account_signal_plan_evaluations(
+    service: OperationsServiceDependency,
+    account_id: UUID | None = None,
+    deployment_id: UUID | None = None,
+    signal_plan_id: UUID | None = None,
+    limit: int = 100,
+) -> AccountSignalPlanEvaluationListResponse:
+    try:
+        return AccountSignalPlanEvaluationListResponse(
+            evaluations=service.list_account_signal_plan_evaluations(
+                account_id=account_id,
+                deployment_id=deployment_id,
+                signal_plan_id=signal_plan_id,
+                limit=limit,
+            )
+        )
+    except Exception as exc:  # noqa: BLE001
+        raise _operator_error("Unable to load account SignalPlan evaluations", exc) from exc
+
+
+@router.get("/research-evidence", response_model=ResearchEvidenceListResponse)
+def list_research_evidence(
+    service: OperationsServiceDependency,
+    strategy_id: UUID | None = None,
+    strategy_version_id: UUID | None = None,
+    evidence_type: str | None = None,
+) -> ResearchEvidenceListResponse:
+    try:
+        return ResearchEvidenceListResponse(
+            evidence=service.list_research_evidence(
+                strategy_id=strategy_id,
+                strategy_version_id=strategy_version_id,
+                evidence_type=evidence_type,
+            )
+        )
+    except Exception as exc:  # noqa: BLE001
+        raise _operator_error("Unable to load research evidence", exc) from exc
+
+
+@router.get("/research-evidence/{evidence_id}", response_model=ResearchEvidenceResponse)
+def get_research_evidence(evidence_id: UUID, service: OperationsServiceDependency) -> ResearchEvidenceResponse:
+    try:
+        return service.get_research_evidence(evidence_id)
+    except Exception as exc:  # noqa: BLE001
+        raise _operator_error(f"Unable to load research evidence {evidence_id}", exc) from exc
 
 
 @router.post("/deployments/{deployment_id}/pause", response_model=ControlCommandResponse)

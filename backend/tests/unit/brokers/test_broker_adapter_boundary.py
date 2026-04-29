@@ -9,7 +9,7 @@ import pytest
 from backend.app.brokers import BrokerAdapterError, BrokerOrderResult, BrokerOrderStatus, BrokerSync, FakeBrokerAdapter
 from backend.app.domain import CandidateSide, IntentType, OrderType, TimeInForce
 from backend.app.orders import InternalOrderStatus, OrderManager, OrderManagerError
-from backend.app.runtime import ExecutionIntent
+from backend.tests.fixtures.legacy_intent import LegacyExecutionIntent as ExecutionIntent
 import backend.app.brokers.fake as fake_module
 
 

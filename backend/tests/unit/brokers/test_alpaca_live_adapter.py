@@ -10,7 +10,7 @@ from backend.app.brokers import AlpacaBrokerAdapter, AlpacaBrokerError, BrokerOr
 from backend.app.domain import CandidateSide, OrderType, TimeInForce
 from backend.app.domain._base import utc_now
 from backend.app.orders import InternalOrder, InternalOrderIntent, InternalOrderStatus
-from backend.app.runtime import ExecutionIntent
+from backend.tests.fixtures.legacy_intent import LegacyExecutionIntent as ExecutionIntent
 import backend.app.brokers.alpaca as alpaca_module
 
 
@@ -31,6 +31,7 @@ class FakeAlpacaClient:
         self.submit_order_calls = 0
         self.get_order_calls = 0
         self.submitted_order_data = None
+        self.get_orders_filter = None
 
     def submit_order(self, *, order_data):
         self.submit_order_calls += 1
@@ -45,10 +46,13 @@ class FakeAlpacaClient:
         payload["client_order_id"] = client_order_id
         return payload
 
-    def get_orders(self):
+    def get_orders(self, filter=None):  # noqa: A002
+        self.get_orders_filter = filter
         return [
             _alpaca_order(status="new"),
             _alpaca_order(status="partially_filled", filled_qty="4", broker_id="alpaca-open-2"),
+            _alpaca_order(status="accepted_for_bidding", broker_id="alpaca-open-3"),
+            _alpaca_order(status="pending_cancel", broker_id="alpaca-open-4"),
             _alpaca_order(status="filled", broker_id="alpaca-filled"),
         ]
 
@@ -200,10 +204,19 @@ def test_positions_snapshot_mapping() -> None:
 
 
 def test_open_orders_mapping() -> None:
-    open_orders = _adapter(FakeAlpacaClient()).list_open_orders(ACCOUNT_ID)
+    client = FakeAlpacaClient()
+    open_orders = _adapter(client).list_open_orders(ACCOUNT_ID)
 
-    assert [order.status for order in open_orders] == [BrokerOrderStatus.ACCEPTED, BrokerOrderStatus.PARTIAL_FILL]
+    assert [order.status for order in open_orders] == [
+        BrokerOrderStatus.ACCEPTED,
+        BrokerOrderStatus.PARTIAL_FILL,
+        BrokerOrderStatus.ACCEPTED,
+        BrokerOrderStatus.PENDING_CANCEL,
+    ]
     assert open_orders[0].client_order_id == "utos-11111111-aaaaaaaa-99999999-open-000001"
+    assert getattr(client.get_orders_filter.status, "value", client.get_orders_filter.status) == "open"
+    assert client.get_orders_filter.limit == 500
+    assert client.get_orders_filter.nested is False
 
 
 def test_unknown_status_fails_closed() -> None:

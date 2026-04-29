@@ -29,7 +29,7 @@ from backend.app.domain import (
 from backend.app.domain.risk_profile import PositionSizingMethod
 from backend.app.domain.strategy import CandidateSide, IntentType, SignalRule
 from backend.app.features import (
-    ResolvedProgramComponents,
+    ResolvedDeploymentComponents,
     SubscriptionManager,
     build_feature_plan,
 )
@@ -40,7 +40,7 @@ from backend.app.market_data import (
 )
 
 
-def _components(refs: list[str]) -> ResolvedProgramComponents:
+def _components(refs: list[str]) -> ResolvedDeploymentComponents:
     strategy_id = uuid4()
     controls_id = uuid4()
     risk_id = uuid4()
@@ -57,7 +57,7 @@ def _components(refs: list[str]) -> ResolvedProgramComponents:
             SignalRule(name="entry", side=CandidateSide.LONG, intent_type=IntentType.ENTRY, condition=condition)
         ],
     )
-    return ResolvedProgramComponents(
+    return ResolvedDeploymentComponents(
         program=ProgramVersion(
             id=uuid4(),
             program_id=uuid4(),

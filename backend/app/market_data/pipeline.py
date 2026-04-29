@@ -11,19 +11,16 @@ Pipelines are mediated by FeatureEngine — Deployments declare feature demand,
 the resolver picks a pipeline per FeatureKey, and FeatureEngine subscribes
 once per ``(pipeline, FeatureKey)``.
 
-Trading-mode binding
---------------------
-``trading_mode`` is ``TradingMode | None``:
+Asset pipeline binding
+----------------------
+Market-data pipelines are grouped by asset class, not broker account mode.
+Paper/live are Account metadata and only influence broker API endpoints.
 
-- ``TradingMode.BROKER_PAPER`` — pipeline uses broker-paper credentials
-  (e.g. Alpaca paper-environment API key for market data).
-- ``TradingMode.BROKER_LIVE`` — pipeline uses broker-live credentials.
-- ``None`` — vendor-data-only pipeline that requires no broker credential
-  (e.g. Yahoo historical, future news vendor).
+Examples:
 
-Only ``BROKER_PAPER`` / ``BROKER_LIVE`` are accepted; chart-lab and sim-lab
-modes are out of scope for credential-tied pipelines (they consume snapshots
-from broker- or vendor-credentialed pipelines, they don't own credentials).
+- ``stock`` — equities bars/quotes/news where supported.
+- ``crypto`` — crypto bars/quotes/trades where supported.
+- ``option`` — option market data where supported.
 """
 
 from __future__ import annotations
@@ -34,7 +31,6 @@ from uuid import UUID, uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from backend.app.domain import BROKER_MODES, TradingMode
 from backend.app.domain._base import utc_now
 
 from .resolver import MarketDataCapabilities, Provider
@@ -44,6 +40,14 @@ class PipelineStatus(StrEnum):
     DRAFT = "draft"
     ACTIVE = "active"
     DISABLED = "disabled"
+
+
+class MarketDataAssetClass(StrEnum):
+    STOCK = "stock"
+    CRYPTO = "crypto"
+    OPTION = "option"
+    FUTURE = "future"
+    FOREX = "forex"
 
 
 DEFAULT_DATA_FEED = "iex"
@@ -61,10 +65,10 @@ class MarketDataPipeline(BaseModel):
 
     ``data_feed`` keys the actual stream endpoint (``iex`` / ``sip`` /
     ``delayed_sip`` / ``boats`` / ``overnight`` / ``otc`` for Alpaca).
-    Two consumers on different feeds for the same symbol must not share
-    a hub; the hub registry uses ``(provider, trading_mode, data_feed)``
-    today, the matching tuple in the catalog is ``(service_id,
-    trading_mode, data_feed)``.
+    ``asset_class`` keys the instrument family. Two consumers on different
+    feeds or asset classes for the same symbol must not share a hub; the
+    live stock hub registry uses ``(provider, asset_class, data_feed)``.
+    Paper/live is Account metadata, not market-data stream identity.
 
     ``provider`` is retained as a denormalized field for
     backward-compat reads of legacy snapshots; new code should derive
@@ -78,8 +82,8 @@ class MarketDataPipeline(BaseModel):
     display_name: str = Field(min_length=1)
     provider: Provider
     service_id: UUID | None = None
+    asset_class: MarketDataAssetClass = MarketDataAssetClass.STOCK
     data_feed: str = DEFAULT_DATA_FEED
-    trading_mode: TradingMode | None = None
     capabilities: MarketDataCapabilities = Field(default_factory=MarketDataCapabilities)
     status: PipelineStatus = PipelineStatus.DRAFT
     is_default_for_provider: bool = False
@@ -87,17 +91,12 @@ class MarketDataPipeline(BaseModel):
     updated_at: datetime = Field(default_factory=utc_now)
     disabled_at: datetime | None = None
 
-    @field_validator("trading_mode")
+    @field_validator("asset_class", mode="before")
     @classmethod
-    def trading_mode_must_be_broker_or_none(cls, value: TradingMode | None) -> TradingMode | None:
-        if value is None:
-            return None
-        if value not in BROKER_MODES:
-            raise ValueError(
-                f"MarketDataPipeline.trading_mode must be None or a BROKER mode "
-                f"(BROKER_PAPER / BROKER_LIVE); got {value.value}"
-            )
-        return value
+    def asset_class_normalize(cls, value: object) -> object:
+        if value is None or value == "":
+            return MarketDataAssetClass.STOCK
+        return str(value).lower()
 
     @field_validator("data_feed")
     @classmethod
@@ -113,19 +112,16 @@ class MarketDataPipelineWrite(BaseModel):
     display_name: str = Field(min_length=1)
     provider: Provider
     service_id: UUID | None = None
+    asset_class: MarketDataAssetClass = MarketDataAssetClass.STOCK
     data_feed: str = DEFAULT_DATA_FEED
-    trading_mode: TradingMode | None = None
     capabilities: MarketDataCapabilities | None = None
 
-    @field_validator("trading_mode")
+    @field_validator("asset_class", mode="before")
     @classmethod
-    def trading_mode_must_be_broker_or_none(cls, value: TradingMode | None) -> TradingMode | None:
-        if value is None or value in BROKER_MODES:
-            return value
-        raise ValueError(
-            f"MarketDataPipeline.trading_mode must be None or a BROKER mode "
-            f"(BROKER_PAPER / BROKER_LIVE); got {value.value}"
-        )
+    def asset_class_normalize(cls, value: object) -> object:
+        if value is None or value == "":
+            return MarketDataAssetClass.STOCK
+        return str(value).lower()
 
     @field_validator("data_feed")
     @classmethod
@@ -138,11 +134,11 @@ class MarketDataPipelineEdit(BaseModel):
 
     PUT /pipelines/{id} is intentionally narrowed to the two safe fields
     that don't change the stream's identity tuple
-    ``(service_id, trading_mode, data_feed)``. Identity changes go
+    ``(service_id, asset_class, data_feed)``. Identity changes go
     through dedicated endpoints:
 
     - ``service_id`` rebind → ``POST /pipelines/{id}/attach-service``
-    - ``service_id`` / ``trading_mode`` / ``data_feed`` change → disable
+    - ``service_id`` / ``asset_class`` / ``data_feed`` change → disable
       this pipeline and create a new one (subscribers are bound to the
       old pipeline_id and need to migrate explicitly).
 

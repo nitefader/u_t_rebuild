@@ -91,14 +91,19 @@ class BrokerAccountService:
         # Reflect needs_credentials based on the live state of the
         # credential store. Records that pre-date the encrypted store
         # are flagged so the UI can prompt the operator to re-enter.
-        return tuple(
-            account.model_copy(
-                update={
-                    "needs_credentials": not self._credential_store.has(account.id),
-                }
-            )
-            for account in accounts
-        )
+        return tuple(self._project_account_list_record(account) for account in accounts)
+
+    def _project_account_list_record(self, account: BrokerAccount) -> BrokerAccount:
+        update = {"needs_credentials": not self._credential_store.has(account.id)}
+        try:
+            update["last_account_snapshot"] = self._runtime_store.load_broker_account_snapshot(account.id)
+        except KeyError:
+            pass
+        try:
+            update["broker_sync_freshness"] = self._runtime_store.load_broker_sync_freshness(account.id)
+        except KeyError:
+            pass
+        return account.model_copy(update=update)
 
     # ------------------------------------------------------------------
     # Create
@@ -187,6 +192,20 @@ class BrokerAccountService:
             raise BrokerAccountCreationError(
                 f"Unable to validate {provider} {mode.value} account: {exc}"
             ) from exc
+
+    # ------------------------------------------------------------------
+    # Update operator-visible metadata
+    # ------------------------------------------------------------------
+
+    def update_account_details(self, *, account_id: UUID, display_name: str) -> BrokerAccount:
+        try:
+            account = self._runtime_store.load_broker_account(account_id)
+        except KeyError as exc:
+            raise BrokerAccountCreationError("unknown broker account") from exc
+        new_name = display_name.strip()
+        if not new_name:
+            raise BrokerAccountCreationError("display_name cannot be empty")
+        return self._runtime_store.save_broker_account(account.model_copy(update={"display_name": new_name}))
 
     # ------------------------------------------------------------------
     # Replace credentials

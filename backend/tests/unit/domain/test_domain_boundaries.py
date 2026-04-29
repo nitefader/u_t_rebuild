@@ -125,6 +125,83 @@ def test_strategy_version_contains_signal_definition_and_feature_refs_only() -> 
     assert not hasattr(strategy, "broker_account_id")
 
 
+def test_strategy_version_does_not_own_risk_or_account_sizing() -> None:
+    forbidden_fields = {
+        "account_id",
+        "account_ids",
+        "risk",
+        "risk_settings",
+        "risk_profile_id",
+        "risk_profile_version_id",
+        "account_risk",
+        "position_size",
+        "position_sizing",
+        "sizing_method",
+        "risk_per_trade_pct",
+        "max_loss",
+        "buying_power",
+        "broker_account_id",
+        "deployment_id",
+        "runtime_overrides",
+        "runtime_state",
+    }
+
+    assert forbidden_fields.isdisjoint(StrategyVersion.model_fields)
+
+
+@pytest.mark.parametrize(
+    "field_name",
+    [
+        "risk_profile_version_id",
+        "risk_per_trade_pct",
+        "position_sizing",
+        "buying_power",
+        "account_id",
+        "watchlist_id",
+        "watchlist_ids",
+        "universe_id",
+        "universe_snapshot_id",
+        "symbols",
+        "deployment_id",
+        "runtime_overrides",
+    ],
+)
+def test_strategy_version_rejects_risk_universe_account_and_runtime_ownership_fields(
+    field_name: str,
+) -> None:
+    condition = ConditionNode(
+        left_feature="5m.close[0]",
+        operator=ConditionOperator.GT,
+        right_feature="5m.ema:length=20[0]",
+    )
+    payload: dict[str, object] = {
+        "id": uuid4(),
+        "strategy_id": uuid4(),
+        "version": 1,
+        "name": "EMA Breakout",
+        "feature_refs": ["5m.close[0]", "5m.ema:length=20[0]"],
+        "entry_rules": [
+            SignalRule(
+                name="long_breakout",
+                side=CandidateSide.LONG,
+                intent_type=IntentType.ENTRY,
+                condition=condition,
+            )
+        ],
+        field_name: uuid4(),
+    }
+
+    with pytest.raises(ValidationError, match="strategy version cannot own"):
+        StrategyVersion(**payload)
+
+
+def test_deployment_owns_watchlists_and_account_subscriptions_not_strategy_version() -> None:
+    strategy_fields = set(StrategyVersion.model_fields)
+
+    assert "watchlist_ids" not in strategy_fields
+    assert "subscribed_account_ids" not in strategy_fields
+
+
 def test_component_schemas_are_separate() -> None:
     controls = StrategyControlsVersion(
         id=uuid4(),

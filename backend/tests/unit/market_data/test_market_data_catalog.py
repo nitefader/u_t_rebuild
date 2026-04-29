@@ -59,6 +59,21 @@ class LearnedIntradayLimitValidator:
         )
 
 
+class RecordingCredentialStore:
+    def __init__(self) -> None:
+        self.credentials: dict[object, tuple[str, str]] = {}
+        self.deleted: list[object] = []
+
+    def put(self, service_id, *, api_key: str, api_secret: str):  # type: ignore[no-untyped-def]
+        self.credentials[service_id] = (api_key, api_secret)
+
+    def get(self, service_id):  # type: ignore[no-untyped-def]
+        return self.credentials[service_id]
+
+    def delete(self, service_id) -> None:  # type: ignore[no-untyped-def]
+        self.deleted.append(service_id)
+
+
 def test_market_data_crud_defaults_validation_and_resolver(tmp_path) -> None:
     catalog = MarketDataServiceCatalog(store_path=tmp_path / "catalog.json", validator=FakeMarketDataValidator())
 
@@ -96,8 +111,8 @@ def test_market_data_crud_defaults_validation_and_resolver(tmp_path) -> None:
     assert disabled.is_default is False
 
     intent = DataIntent(
-        consumer=DataConsumer.BROKER_RUNTIME,
-        mode=DataIntentMode.LIVE_RUNTIME,
+        consumer=DataConsumer.ACCOUNT_TRADING,
+        mode=DataIntentMode.LIVE_TRADING,
         symbols=["SPY"],
         timeframe=Timeframe.M5,
         purpose=DataPurpose.RUNTIME_TRADING,
@@ -109,6 +124,40 @@ def test_market_data_crud_defaults_validation_and_resolver(tmp_path) -> None:
         candidate.service_id != str(yahoo.id) or candidate.reason_code == "OPERATOR_VETO"
         for candidate in head.rejected_providers
     )
+
+
+def test_market_data_catalog_persists_provider_credentials_in_encrypted_store(tmp_path) -> None:
+    credentials = RecordingCredentialStore()
+    catalog = MarketDataServiceCatalog(
+        store_path=tmp_path / "catalog.json",
+        validator=FakeMarketDataValidator(),
+        credential_store=credentials,
+    )
+
+    svc = catalog.create_service(
+        MarketDataServiceWrite(name="Alpaca Main", provider="alpaca", api_key="abcdef", api_secret="abcdefgh")
+    )
+
+    assert catalog.get_credentials(svc.id) == ("abcdef", "abcdefgh")
+    assert credentials.credentials[svc.id] == ("abcdef", "abcdefgh")
+    assert "abcdefgh" not in (tmp_path / "catalog.json").read_text(encoding="utf-8")
+
+    catalog.update_service(
+        svc.id,
+        MarketDataServiceWrite(name="Alpaca Main", provider="alpaca", api_key="new-key", api_secret="new-secret"),
+    )
+    assert catalog.get_credentials(svc.id) == ("new-key", "new-secret")
+
+    catalog.delete_service(svc.id)
+    assert credentials.deleted == [svc.id]
+
+
+def test_delete_market_data_service_removes_record(tmp_path) -> None:
+    catalog = MarketDataServiceCatalog(store_path=tmp_path / "del.json", validator=FakeMarketDataValidator())
+    svc = catalog.create_service(MarketDataServiceWrite(name="ToRemove", provider="yahoo"))
+    catalog.delete_service(svc.id)
+    with pytest.raises(MarketDataCatalogError):
+        catalog.get_service(svc.id)
 
 
 def test_invalid_market_data_service_cannot_be_default(tmp_path) -> None:
@@ -216,6 +265,37 @@ def test_find_default_for_returns_tagged_service_and_skips_disabled(tmp_path) ->
 
     catalog.disable_service(a.id)
     assert catalog.find_default_for(ServicePurpose.BATCH_HISTORICAL) is None
+
+
+def test_enable_service_restores_validated_service_without_legacy_default_flag(tmp_path) -> None:
+    catalog = MarketDataServiceCatalog(store_path=tmp_path / "catalog.json", validator=FakeMarketDataValidator())
+    yahoo = catalog.create_service(MarketDataServiceWrite(name="Yahoo Historical", provider="yahoo"))
+    yahoo = catalog.validate_service(yahoo.id)
+    catalog.set_default(yahoo.id)
+    catalog.set_default_for(yahoo.id, (ServicePurpose.BATCH_HISTORICAL,))
+
+    disabled = catalog.disable_service(yahoo.id)
+    assert disabled.status == ServiceStatus.DISABLED
+    assert disabled.is_default is False
+    assert disabled.default_for == (ServicePurpose.BATCH_HISTORICAL,)
+    assert disabled.disabled_at is not None
+
+    enabled = catalog.enable_service(yahoo.id)
+    assert enabled.status == ServiceStatus.VALID
+    assert enabled.disabled_at is None
+    assert enabled.is_default is False
+    assert enabled.default_for == (ServicePurpose.BATCH_HISTORICAL,)
+
+
+def test_enable_service_returns_unvalidated_service_to_draft(tmp_path) -> None:
+    catalog = MarketDataServiceCatalog(store_path=tmp_path / "catalog.json", validator=FakeMarketDataValidator())
+    service = catalog.create_service(MarketDataServiceWrite(name="Future Provider", provider="future"))
+
+    catalog.disable_service(service.id)
+    enabled = catalog.enable_service(service.id)
+
+    assert enabled.status == ServiceStatus.DRAFT
+    assert enabled.disabled_at is None
 
 
 def test_clear_default_for_removes_only_specified_purpose(tmp_path) -> None:

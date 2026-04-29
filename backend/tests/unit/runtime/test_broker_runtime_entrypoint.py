@@ -4,7 +4,7 @@ from pathlib import Path
 
 import backend.app.brokers.alpaca as alpaca_module
 import backend.app.market_data.alpaca as market_data_alpaca_module
-from backend.app.runtime import broker_runtime_entrypoint
+from backend.app.runtime import account_trading_entrypoint
 
 
 class _FakeTradingClient:
@@ -59,7 +59,7 @@ def _seed_account_and_credentials(tmp_path: Path, sqlite_path: Path, *, monkeypa
 
     The entrypoint resolves credentials from the encrypted store (no env
     fallback). Tests must populate both the SQLite runtime store and the
-    encrypted credential store at the runtime dir before run_broker_runtime.
+    encrypted credential store at the runtime dir before run_account_trading.
     """
     import base64
     from datetime import datetime, timezone
@@ -101,7 +101,7 @@ def _seed_account_and_credentials(tmp_path: Path, sqlite_path: Path, *, monkeypa
     return account_id
 
 
-def test_run_broker_runtime_with_no_active_deployments_returns_idle_supervisor(
+def test_run_account_trading_with_no_active_deployments_returns_idle_supervisor(
     tmp_path: Path, monkeypatch
 ) -> None:
     monkeypatch.setattr(alpaca_module, "TradingClient", _FakeTradingClient)
@@ -109,7 +109,7 @@ def test_run_broker_runtime_with_no_active_deployments_returns_idle_supervisor(
 
     sqlite_path = tmp_path / "empty.sqlite"
     _seed_account_and_credentials(tmp_path, sqlite_path, monkeypatch=monkeypatch)
-    supervisor, hub = broker_runtime_entrypoint.run_broker_runtime(
+    supervisor, hub = account_trading_entrypoint.run_account_trading(
         sqlite_path=sqlite_path,
         market_data_hub=_fake_market_data_hub(),
         block_until_signal=False,
@@ -123,7 +123,7 @@ def test_run_broker_runtime_with_no_active_deployments_returns_idle_supervisor(
         hub.stop()
 
 
-def test_run_broker_runtime_loads_explicit_deployments(tmp_path: Path, monkeypatch) -> None:
+def test_run_account_trading_loads_explicit_deployments(tmp_path: Path, monkeypatch) -> None:
     from datetime import datetime, timezone
     from uuid import UUID, uuid4
 
@@ -147,7 +147,7 @@ def test_run_broker_runtime_loads_explicit_deployments(tmp_path: Path, monkeypat
     )
     from backend.app.domain.risk_profile import PositionSizingMethod
     from backend.app.domain.strategy import SignalRule
-    from backend.app.features import ResolvedProgramComponents
+    from backend.app.features import ResolvedDeploymentComponents
     from backend.app.persistence import SQLiteRuntimeStore
     from backend.app.runtime import (
         BrokerRuntimeDeployment,
@@ -173,7 +173,7 @@ def test_run_broker_runtime_loads_explicit_deployments(tmp_path: Path, monkeypat
     risk_id = uuid4()
     execution_id = uuid4()
     universe_id = uuid4()
-    components = ResolvedProgramComponents(
+    components = ResolvedDeploymentComponents(
         program=ProgramVersion(
             id=uuid4(),
             program_id=uuid4(),
@@ -235,12 +235,17 @@ def test_run_broker_runtime_loads_explicit_deployments(tmp_path: Path, monkeypat
         ),
     )
     deployment = BrokerRuntimeDeployment(
-        deployment=DeploymentContext(deployment_id=deployment_id, program=components.program, mode=TradingMode.BROKER_PAPER.value),
+        deployment=DeploymentContext(
+            deployment_id=deployment_id,
+            strategy_version_id=components.strategy.id,
+            strategy_version=components.strategy.version,
+            mode=TradingMode.BROKER_PAPER.value,
+        ),
         components=components,
         account_id=account_id,
     )
 
-    supervisor, hub = broker_runtime_entrypoint.run_broker_runtime(
+    supervisor, hub = account_trading_entrypoint.run_account_trading(
         sqlite_path=sqlite_path,
         deployments=(deployment,),
         market_data_hub=_fake_market_data_hub(),
@@ -253,3 +258,29 @@ def test_run_broker_runtime_loads_explicit_deployments(tmp_path: Path, monkeypat
     finally:
         supervisor.stop()
         hub.stop()
+
+
+def test_parse_args_resolves_sqlite_like_get_runtime_db_path_when_omitted(tmp_path, monkeypatch) -> None:
+    from backend.app.config.runtime_paths import (
+        LEGACY_SQLITE_PATH_ENV,
+        OPERATIONS_RUNTIME_DB_PATH_ENV,
+        get_runtime_db_path,
+    )
+
+    configured = tmp_path / "configured.db"
+    monkeypatch.setenv(OPERATIONS_RUNTIME_DB_PATH_ENV, str(configured))
+    monkeypatch.delenv(LEGACY_SQLITE_PATH_ENV, raising=False)
+
+    args = account_trading_entrypoint._parse_args([])
+    resolved = args.sqlite_path if args.sqlite_path is not None else str(get_runtime_db_path())
+    assert resolved == str(configured)
+
+
+def test_parse_args_explicit_sqlite_path_overrides_env(tmp_path, monkeypatch) -> None:
+    from backend.app.config.runtime_paths import OPERATIONS_RUNTIME_DB_PATH_ENV, get_runtime_db_path
+
+    monkeypatch.setenv(OPERATIONS_RUNTIME_DB_PATH_ENV, str(tmp_path / "env.db"))
+    explicit = tmp_path / "cli.db"
+    args = account_trading_entrypoint._parse_args(["--sqlite-path", str(explicit)])
+    resolved = args.sqlite_path if args.sqlite_path is not None else str(get_runtime_db_path())
+    assert resolved == str(explicit)

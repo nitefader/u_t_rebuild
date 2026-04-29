@@ -1,0 +1,75 @@
+/*
+ * Ultimate Trader theme tokens.
+ * Color values are RGB triplets (no rgb() wrapper) so Tailwind opacity
+ * modifiers (text-fg/60, bg-ok/20, etc.) work via the <alpha-value>
+ * placeholder configured in tailwind.config.ts.
+ */
+
+:root,
+[data-theme="dark"] {
+  /* Surfaces */
+  --ut-bg: 11 13 16;            /* #0b0d10 — page background */
+  --ut-bg-subtle: 16 19 23;     /* #101317 */
+  --ut-bg-raised: 22 26 31;     /* #161a1f — cards */
+  --ut-bg-inset: 8 10 13;       /* #080a0d — inputs, table rows */
+
+  /* Text */
+  --ut-fg: 232 236 240;         /* #e8ecf0 */
+  --ut-fg-muted: 167 176 184;   /* #a7b0b8 */
+  --ut-fg-subtle: 116 125 134;  /* #747d86 */
+
+  /* Borders */
+  --ut-border: 36 42 49;        /* #242a31 */
+  --ut-border-strong: 55 64 73; /* #374049 */
+
+  /* Semantic */
+  --ut-ok: 56 196 130;          /* green */
+  --ut-ok-subtle: 28 60 45;
+  --ut-danger: 232 86 86;       /* red */
+  --ut-danger-subtle: 70 28 30;
+  --ut-warn: 230 173 80;        /* amber */
+  --ut-warn-subtle: 70 49 22;
+  --ut-info: 95 178 232;        /* cyan */
+  --ut-info-subtle: 22 50 70;
+  --ut-ai: 162 130 230;         /* purple — AI advisory only */
+  --ut-ai-subtle: 50 38 80;
+
+  --ut-accent: 95 178 232;      /* default platform accent = info */
+}
+
+[data-theme="light"] {
+  --ut-bg: 247 248 250;
+  --ut-bg-subtle: 240 242 245;
+  --ut-bg-raised: 255 255 255;
+  --ut-bg-inset: 250 251 253;
+
+  --ut-fg: 23 28 33;
+  --ut-fg-muted: 92 102 112;
+  --ut-fg-subtle: 142 152 162;
+
+  --ut-border: 218 225 232;
+  --ut-border-strong: 187 196 205;
+
+  --ut-ok: 26 146 88;
+  --ut-ok-subtle: 222 242 232;
+  --ut-danger: 196 50 50;
+  --ut-danger-subtle: 250 222 222;
+  --ut-warn: 178 122 22;
+  --ut-warn-subtle: 250 235 205;
+  --ut-info: 36 132 196;
+  --ut-info-subtle: 220 235 248;
+  --ut-ai: 122 88 196;
+  --ut-ai-subtle: 232 222 250;
+
+  --ut-accent: 36 132 196;
+}
+
+/* Honor reduced-motion: turn off pulsing animations entirely. */
+@media (prefers-reduced-motion: reduce) {
+  .animate-ut-pulse,
+  .animate-ut-flash,
+  .animate-ut-slide-in-right,
+  .animate-ut-slide-out-right {
+    animation: none !important;
+  }
+}

@@ -7,13 +7,19 @@ from backend.app.api.routes import operations
 from backend.app.control_plane import ControlPlaneState
 from backend.app.operations import (
     AccountOperations,
+    AccountSignalPlanEvaluationListResponse,
     DeploymentOperations,
     FlattenRequestResponse,
     InternalOrderLedgerSummary,
     OrderDetail,
     RuntimeOverview,
 )
-from backend.tests.unit.operations.test_operations_center_service import PROGRAM_ID, _order
+from backend.app.domain import (
+    AccountEvaluationStatus,
+    AccountParticipationDecision,
+    AccountSignalPlanEvaluation,
+)
+from backend.tests.unit.operations.test_operations_center_service import STRATEGY_VERSION_ID, _backtest_evidence, _order
 from backend.app.runtime import RuntimeStatus
 
 
@@ -43,8 +49,20 @@ class RecordingOperationsService:
             internal_order=order,
             broker_account_id=ACCOUNT_ID,
             deployment_id=DEPLOYMENT_ID,
-            program_id=PROGRAM_ID,
+            strategy_version_id=STRATEGY_VERSION_ID,
         )
+        self.evaluations = (
+            AccountSignalPlanEvaluation(
+                evaluation_id=UUID("22222222-3333-4444-5555-666666666666"),
+                account_id=ACCOUNT_ID,
+                signal_plan_id=UUID("33333333-4444-5555-6666-777777777777"),
+                deployment_id=DEPLOYMENT_ID,
+                strategy_id=UUID("44444444-5555-6666-7777-888888888888"),
+                status=AccountEvaluationStatus.ACCEPTED,
+                participation_decision=AccountParticipationDecision.PARTICIPATE,
+            ),
+        )
+        self.research_evidence = (_backtest_evidence(),)
 
     def get_runtime_overview(self) -> RuntimeOverview:
         self.calls.append(("get_runtime_overview", "global"))
@@ -61,6 +79,39 @@ class RecordingOperationsService:
     def get_order_detail(self, order_id: UUID) -> OrderDetail:
         self.calls.append(("get_order_detail", order_id))
         return self.order_detail
+
+    def get_order_detail_by_broker_order_id(self, broker_order_id: str) -> OrderDetail:
+        self.calls.append(("get_order_detail_by_broker_order_id", broker_order_id))
+        return self.order_detail
+
+    def list_account_signal_plan_evaluations(
+        self,
+        *,
+        account_id: UUID | None = None,
+        deployment_id: UUID | None = None,
+        signal_plan_id: UUID | None = None,
+        limit: int = 100,
+    ) -> tuple[AccountSignalPlanEvaluation, ...]:
+        self.calls.append(("list_account_signal_plan_evaluations", account_id or "all"))
+        self.calls.append(("deployment_id", deployment_id or "all"))
+        self.calls.append(("signal_plan_id", signal_plan_id or "all"))
+        self.calls.append(("limit", str(limit)))
+        return self.evaluations
+
+    def list_research_evidence(
+        self,
+        *,
+        strategy_id: UUID | None = None,
+        strategy_version_id: UUID | None = None,
+        evidence_type: str | None = None,
+    ) -> tuple[object, ...]:
+        self.calls.append(("list_research_evidence", evidence_type or "all"))
+        _ = strategy_id, strategy_version_id
+        return self.research_evidence
+
+    def get_research_evidence(self, evidence_id: UUID) -> object:
+        self.calls.append(("get_research_evidence", evidence_id))
+        return self.research_evidence[0]
 
     def pause_deployment(self, deployment_id: UUID, reason: str) -> None:
         self.calls.append(("pause_deployment", deployment_id))
@@ -118,6 +169,10 @@ def test_routes_are_registered_with_explicit_response_models() -> None:
     assert registered[("GET", f"/api/v1/operations/accounts/{{account_id}}")] is AccountOperations
     assert registered[("GET", f"/api/v1/operations/deployments/{{deployment_id}}")] is DeploymentOperations
     assert registered[("GET", f"/api/v1/operations/orders/{{order_id}}")] is OrderDetail
+    assert registered[("GET", "/api/v1/operations/broker-orders/{broker_order_id}")] is OrderDetail
+    assert registered[("GET", "/api/v1/operations/evaluations")] is AccountSignalPlanEvaluationListResponse
+    assert registered[("GET", "/api/v1/operations/research-evidence")] is operations.ResearchEvidenceListResponse
+    assert registered[("GET", "/api/v1/operations/research-evidence/{evidence_id}")] is operations.ResearchEvidenceResponse
     assert registered[("POST", f"/api/v1/operations/deployments/{{deployment_id}}/pause")] is operations.ControlCommandResponse
     assert registered[("POST", f"/api/v1/operations/deployments/{{deployment_id}}/resume")] is operations.ControlCommandResponse
     assert registered[("POST", f"/api/v1/operations/accounts/{{account_id}}/pause")] is operations.ControlCommandResponse
@@ -163,6 +218,56 @@ def test_order_detail_route_returns_order_detail_without_auth_dependency_in_pape
 
     assert response == service.order_detail
     assert service.calls == [("get_order_detail", order_id)]
+
+
+def test_broker_order_detail_route_returns_order_detail_without_direct_broker_call() -> None:
+    service = RecordingOperationsService()
+
+    response = operations.get_order_detail_by_broker_order_id("broker-1", service=service)
+
+    assert response == service.order_detail
+    assert service.calls == [("get_order_detail_by_broker_order_id", "broker-1")]
+
+
+def test_account_signal_plan_evaluations_route_returns_read_model_with_filters() -> None:
+    service = RecordingOperationsService()
+    signal_plan_id = service.evaluations[0].signal_plan_id
+
+    response = operations.list_account_signal_plan_evaluations(
+        account_id=ACCOUNT_ID,
+        deployment_id=DEPLOYMENT_ID,
+        signal_plan_id=signal_plan_id,
+        limit=25,
+        service=service,
+    )
+
+    assert response.evaluations == service.evaluations
+    assert service.calls == [
+        ("list_account_signal_plan_evaluations", ACCOUNT_ID),
+        ("deployment_id", DEPLOYMENT_ID),
+        ("signal_plan_id", signal_plan_id),
+        ("limit", "25"),
+    ]
+
+
+def test_research_evidence_routes_return_list_and_detail_without_trading_authority() -> None:
+    service = RecordingOperationsService()
+    evidence = service.research_evidence[0]
+
+    list_response = operations.list_research_evidence(
+        strategy_id=evidence.strategy_id,
+        strategy_version_id=evidence.strategy_version_id,
+        evidence_type="backtest_run",
+        service=service,
+    )
+    detail_response = operations.get_research_evidence(evidence.run_id, service=service)
+
+    assert list_response.evidence == service.research_evidence
+    assert detail_response == evidence
+    assert service.calls == [
+        ("list_research_evidence", "backtest_run"),
+        ("get_research_evidence", evidence.run_id),
+    ]
 
 
 def test_pause_resume_deployment_delegates_through_service() -> None:

@@ -484,6 +484,66 @@ def test_list_accounts_marks_needs_credentials_when_store_has_no_entry(tmp_path:
     assert accounts[0].needs_credentials is True
 
 
+def test_list_accounts_projects_current_broker_sync_and_snapshot(tmp_path: Path) -> None:
+    service, store = _make_service(tmp_path)
+    account = BrokerAccount(
+        id=UUID("11111111-2222-3333-4444-555555555555"),
+        display_name="acct",
+        provider="alpaca",
+        mode=TradingMode.BROKER_PAPER,
+        credentials_ref="alpaca-paper:test",
+        validation_status=BrokerAccountValidationStatus.VALID,
+        broker_sync_freshness=BrokerSyncState(
+            account_id=UUID("11111111-2222-3333-4444-555555555555"),
+            last_sync_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+            is_stale=True,
+            stale_reason="old_embedded_state",
+        ),
+    )
+    store.save_broker_account(account)
+    service._credential_store.put(account.id, api_key="K", api_secret="S")
+
+    fresh_state = BrokerSyncState(
+        account_id=account.id,
+        last_sync_at=datetime(2026, 1, 2, tzinfo=timezone.utc),
+        last_successful_sync_at=datetime(2026, 1, 2, tzinfo=timezone.utc),
+        is_stale=False,
+    )
+    store.save_broker_sync_freshness(fresh_state)
+    store.save_broker_account_snapshot(
+        BrokerAccountSnapshot(
+            account_id=account.id,
+            timestamp=datetime(2026, 1, 2, tzinfo=timezone.utc),
+            provider="alpaca",
+            mode=TradingMode.BROKER_PAPER,
+            equity=12345.67,
+            cash=10000.0,
+            buying_power=20000.0,
+        )
+    )
+
+    listed = service.list_broker_accounts()
+
+    assert listed[0].needs_credentials is False
+    assert listed[0].broker_sync_freshness == fresh_state
+    assert listed[0].last_account_snapshot is not None
+    assert listed[0].last_account_snapshot.equity == 12345.67
+
+
+def test_update_account_details_renames_display_name(tmp_path: Path) -> None:
+    service, _store = _make_service(tmp_path)
+    result = service.create_account(
+        display_name="Alpha",
+        provider="alpaca",
+        mode=TradingMode.BROKER_PAPER,
+        api_key="K",
+        api_secret="S",
+    )
+    account_id = result.account.id
+    updated = service.update_account_details(account_id=account_id, display_name="  Beta  ")
+    assert updated.display_name == "Beta"
+
+
 def test_no_operations_demo_seed_paths_remain() -> None:
     root = Path(__file__).resolve().parents[3] / "app"
     sources = "\n".join(path.read_text(encoding="utf-8") for path in root.rglob("*.py") if "__pycache__" not in path.parts)

@@ -34,7 +34,7 @@ from backend.app.domain import (
 )
 from backend.app.domain.risk_profile import PositionSizingMethod
 from backend.app.domain.strategy import SignalRule
-from backend.app.features import BatchFeatureEngine, NormalizedBar, ResolvedProgramComponents
+from backend.app.features import IncrementalFeatureEngine, NormalizedBar, ResolvedDeploymentComponents
 from backend.app.governor import BrokerSyncFreshness as GovernorBrokerSyncFreshness
 from backend.app.governor import GovernorPolicy, PortfolioGovernor
 from backend.app.operations import OperationsCenterService
@@ -117,7 +117,7 @@ class MockAlpacaClient:
         return list(self.positions_payload)
 
 
-def _components() -> ResolvedProgramComponents:
+def _components() -> ResolvedDeploymentComponents:
     strategy_id = uuid4()
     controls_id = uuid4()
     risk_id = uuid4()
@@ -184,7 +184,7 @@ def _components() -> ResolvedProgramComponents:
         execution_style_version_id=execution_id,
         universe_snapshot_id=universe_id,
     )
-    return ResolvedProgramComponents(
+    return ResolvedDeploymentComponents(
         program=program,
         strategy=strategy,
         strategy_controls=controls,
@@ -194,8 +194,12 @@ def _components() -> ResolvedProgramComponents:
     )
 
 
-def _deployment(components: ResolvedProgramComponents) -> DeploymentContext:
-    return DeploymentContext(deployment_id=DEPLOYMENT_ID, program=components.program)
+def _deployment(components: ResolvedDeploymentComponents) -> DeploymentContext:
+    return DeploymentContext(
+        deployment_id=DEPLOYMENT_ID,
+        strategy_version_id=components.strategy.id,
+        strategy_version=components.strategy.version,
+    )
 
 
 def _bar(*, index: int = 0, open_: float = 99, close: float = 100) -> NormalizedBar:
@@ -332,11 +336,12 @@ def test_end_to_end_market_order_paper_flow(tmp_path, monkeypatch) -> None:
     _seed_broker_truth(context["store"], context["adapter"], context["broker_sync"], order)
     overview = _operations_service(context, result.events, result.governor_decisions).get_runtime_overview()
 
-    batch_snapshot = BatchFeatureEngine().compute(context["pipeline"].feature_plan, [_bar()]).frame_for("SPY", "5m").snapshots[0]
+    batch_snapshot = IncrementalFeatureEngine().compute(context["pipeline"].feature_plan, [_bar()]).frame_for("SPY", "5m").snapshots[0]
     assert batch_snapshot.value_for(next(key for key in batch_snapshot.values if "price.close" in key)) == 100
     assert len(result.candidate_intents) == 1
     assert any(event.event_type == PipelineEventType.CANDIDATE_TRADE_INTENT for event in result.events)
-    assert result.execution_intents[0].qty == 10
+    assert result.account_evaluations[0].risk_resolver_result is not None
+    assert result.account_evaluations[0].risk_resolver_result.resolved_quantity == 10
     assert result.governor_decisions[0].approved is True
     assert len(result.orders) == 1
     assert context["client"].submitted_client_order_ids == [order.client_order_id]

@@ -1,0 +1,49 @@
+@import "./theme.css";
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    @apply bg-bg text-fg font-sans antialiased;
+    font-feature-settings: "ss01", "cv11";
+    -webkit-font-smoothing: antialiased;
+  }
+
+  ::selection {
+    @apply bg-accent/30 text-fg;
+  }
+
+  /* Default focus ring — visible, not flashy. */
+  :focus-visible {
+    outline: 2px solid rgb(var(--ut-accent));
+    outline-offset: 2px;
+    border-radius: 4px;
+  }
+
+  /* Numeric data should use tabular figures for clean alignment. */
+  .tabular {
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* Dense table base. */
+  table.ut-table {
+    @apply w-full text-sm tabular;
+  }
+  table.ut-table thead th {
+    @apply px-3 py-2 text-left font-medium text-fg-muted border-b border-border;
+  }
+  table.ut-table tbody td {
+    @apply px-3 py-2 border-b border-border/60;
+  }
+  table.ut-table tbody tr:hover {
+    @apply bg-bg-subtle;
+  }
+}

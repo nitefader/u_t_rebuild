@@ -19,7 +19,7 @@ class GovernorMode(StrEnum):
 class SimulationSession(DomainSchema):
     id: UUID
     mode: TradingMode
-    program_version_id: UUID
+    strategy_version_id: UUID
     feature_plan_id: UUID | None = None
     symbol_count: int = Field(ge=1)
     start: datetime
@@ -37,6 +37,9 @@ class SimulationSession(DomainSchema):
     @classmethod
     def reject_real_broker_fields(cls, data: object) -> object:
         if isinstance(data, dict):
+            migrated = dict(data)
+            if "program_version_id" in migrated and "strategy_version_id" not in migrated:
+                migrated["strategy_version_id"] = migrated.pop("program_version_id")
             forbidden = {
                 "broker_account_id",
                 "alpaca_order_id",
@@ -44,9 +47,10 @@ class SimulationSession(DomainSchema):
                 "real_order_id",
                 "deployment_id",
             }
-            present = forbidden.intersection(data)
+            present = forbidden.intersection(migrated)
             if present:
                 raise ValueError(f"simulation session cannot contain real broker fields: {sorted(present)}")
+            return migrated
         return data
 
     @model_validator(mode="after")

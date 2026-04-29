@@ -1,0 +1,1804 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Ultimate Trading OS — Full UI Mockup</title>
+<style>
+  :root {
+    --bg: #0b0f17;
+    --bg-elev: #121826;
+    --bg-card: #161e2e;
+    --bg-row: #1a2335;
+    --border: #243049;
+    --text: #d8e0f0;
+    --text-dim: #8a96ad;
+    --text-faint: #5b667d;
+    --accent: #4f8cff;
+    --accent-soft: rgba(79,140,255,0.15);
+    --green: #2ecc71;
+    --green-soft: rgba(46,204,113,0.15);
+    --yellow: #f6c344;
+    --yellow-soft: rgba(246,195,68,0.15);
+    --orange: #f08a3c;
+    --orange-soft: rgba(240,138,60,0.18);
+    --red: #ff4d5e;
+    --red-soft: rgba(255,77,94,0.18);
+    --purple: #a76bff;
+    --purple-soft: rgba(167,107,255,0.15);
+  }
+  * { box-sizing: border-box; }
+  html, body { margin:0; padding:0; height:100%; background:var(--bg); color:var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    font-size:13px; line-height:1.45; }
+  a { color:var(--accent); text-decoration:none; }
+  button { font-family: inherit; cursor:pointer; }
+
+  /* Layout shell */
+  .app { display:grid; grid-template-columns: 240px 1fr; grid-template-rows: 52px 1fr 28px; height:100vh;
+    grid-template-areas: "sidebar header" "sidebar main" "sidebar footer"; }
+  header.topbar { grid-area: header; background:var(--bg-elev); border-bottom:1px solid var(--border);
+    display:flex; align-items:center; padding:0 16px; gap:14px; }
+  aside.sidebar { grid-area: sidebar; background:#0a0e16; border-right:1px solid var(--border); overflow-y:auto; }
+  main.content { grid-area: main; overflow-y:auto; padding:18px 22px 32px; }
+  footer.statusbar { grid-area: footer; background:var(--bg-elev); border-top:1px solid var(--border);
+    display:flex; align-items:center; padding:0 14px; gap:14px; font-size:11px; color:var(--text-dim); }
+
+  /* Top bar */
+  .brand { font-weight:700; font-size:13px; letter-spacing:0.6px; color:var(--text); margin-right:18px; }
+  .brand .dot { display:inline-block; width:8px; height:8px; border-radius:50%; background:var(--accent); margin-right:8px; vertical-align:middle; }
+  .mode-pill { padding:4px 10px; border-radius:999px; font-size:11px; font-weight:600; letter-spacing:0.6px; text-transform:uppercase; }
+  .mode-paper { background:var(--accent-soft); color:var(--accent); border:1px solid var(--accent); }
+  .mode-live { background:var(--red-soft); color:var(--red); border:1px solid var(--red); }
+  .mode-backtest { background:var(--purple-soft); color:var(--purple); border:1px solid var(--purple); }
+  .mode-sim { background:var(--yellow-soft); color:var(--yellow); border:1px solid var(--yellow); }
+  .topbar-spacer { flex:1; }
+  .status-chip { display:flex; align-items:center; gap:6px; padding:5px 10px; border-radius:6px;
+    font-size:11.5px; background:var(--bg-card); border:1px solid var(--border); }
+  .status-chip .indicator { width:8px; height:8px; border-radius:50%; }
+  .ind-green { background:var(--green); box-shadow:0 0 6px var(--green); }
+  .ind-yellow { background:var(--yellow); box-shadow:0 0 6px var(--yellow); }
+  .ind-red { background:var(--red); box-shadow:0 0 6px var(--red); }
+  .ind-orange { background:var(--orange); box-shadow:0 0 6px var(--orange); }
+  .kill-btn { background:var(--red); color:white; border:none; padding:7px 14px; border-radius:6px;
+    font-weight:700; font-size:11px; letter-spacing:0.5px; text-transform:uppercase; }
+  .kill-btn:hover { background:#ff3344; }
+
+  /* Sidebar */
+  .nav-group { padding:14px 12px 6px; font-size:10px; text-transform:uppercase; letter-spacing:1px;
+    color:var(--text-faint); }
+  .nav-item { display:flex; align-items:center; gap:10px; padding:8px 14px; color:var(--text-dim);
+    cursor:pointer; border-left:3px solid transparent; user-select:none; }
+  .nav-item:hover { background:#0f1422; color:var(--text); }
+  .nav-item.active { background:#101828; color:var(--text); border-left-color:var(--accent); }
+  .nav-item .nav-icon { width:14px; text-align:center; opacity:0.85; }
+  .nav-item .nav-badge { margin-left:auto; font-size:10px; padding:1px 6px; border-radius:8px;
+    background:var(--bg-card); color:var(--text-dim); border:1px solid var(--border); }
+  .nav-item.active .nav-badge { background:var(--accent-soft); color:var(--accent); border-color:var(--accent); }
+
+  /* Main content */
+  .page { display:none; }
+  .page.active { display:block; }
+  h1 { font-size:18px; margin:0 0 4px; font-weight:600; }
+  h2 { font-size:14px; margin:18px 0 10px; font-weight:600; color:var(--text); letter-spacing:0.3px; }
+  h3 { font-size:12px; margin:8px 0 6px; font-weight:600; color:var(--text-dim); text-transform:uppercase; letter-spacing:0.6px; }
+  .page-sub { color:var(--text-dim); margin:0 0 16px; }
+
+  /* Cards & grids */
+  .card { background:var(--bg-card); border:1px solid var(--border); border-radius:8px; padding:14px 16px; }
+  .card.tight { padding:12px; }
+  .grid { display:grid; gap:14px; }
+  .grid-2 { grid-template-columns: repeat(2, minmax(0,1fr)); }
+  .grid-3 { grid-template-columns: repeat(3, minmax(0,1fr)); }
+  .grid-4 { grid-template-columns: repeat(4, minmax(0,1fr)); }
+  .grid-5 { grid-template-columns: repeat(5, minmax(0,1fr)); }
+  .stat-label { color:var(--text-dim); font-size:10.5px; text-transform:uppercase; letter-spacing:0.6px; }
+  .stat-value { font-size:22px; font-weight:600; margin-top:4px; letter-spacing:-0.3px; }
+  .stat-sub { color:var(--text-dim); font-size:11px; margin-top:2px; }
+  .stat-up { color:var(--green); }
+  .stat-down { color:var(--red); }
+
+  /* Tables */
+  table { width:100%; border-collapse:collapse; font-size:12px; }
+  th { text-align:left; padding:8px 10px; color:var(--text-dim); font-weight:500; font-size:10.5px;
+    text-transform:uppercase; letter-spacing:0.6px; border-bottom:1px solid var(--border); background:#0f1422; }
+  td { padding:9px 10px; border-bottom:1px solid var(--border); }
+  tr:hover td { background:var(--bg-row); }
+  tr:last-child td { border-bottom:none; }
+  td.mono, th.mono { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size:11.5px; }
+
+  /* Badges & chips */
+  .badge { display:inline-block; padding:2px 8px; border-radius:4px; font-size:10.5px; font-weight:600;
+    letter-spacing:0.4px; text-transform:uppercase; border:1px solid transparent; }
+  .badge.green { background:var(--green-soft); color:var(--green); border-color:var(--green); }
+  .badge.yellow { background:var(--yellow-soft); color:var(--yellow); border-color:var(--yellow); }
+  .badge.red { background:var(--red-soft); color:var(--red); border-color:var(--red); }
+  .badge.orange { background:var(--orange-soft); color:var(--orange); border-color:var(--orange); }
+  .badge.blue { background:var(--accent-soft); color:var(--accent); border-color:var(--accent); }
+  .badge.purple { background:var(--purple-soft); color:var(--purple); border-color:var(--purple); }
+  .badge.gray { background:var(--bg-row); color:var(--text-dim); border-color:var(--border); }
+
+  /* Buttons */
+  .btn { background:var(--bg-card); color:var(--text); border:1px solid var(--border); padding:6px 12px;
+    border-radius:5px; font-size:12px; }
+  .btn:hover { background:var(--bg-row); border-color:#33415e; }
+  .btn.primary { background:var(--accent); border-color:var(--accent); color:white; }
+  .btn.primary:hover { background:#3a78f0; }
+  .btn.danger { background:var(--red-soft); color:var(--red); border-color:var(--red); }
+  .btn.danger:hover { background:var(--red); color:white; }
+  .btn.ghost { background:transparent; }
+  .btn.sm { padding:4px 9px; font-size:11px; }
+  .btn-row { display:flex; gap:8px; flex-wrap:wrap; }
+
+  /* Forms */
+  label { display:block; font-size:11px; color:var(--text-dim); margin-bottom:4px; text-transform:uppercase; letter-spacing:0.4px; }
+  input[type=text], input[type=number], input[type=password], select, textarea {
+    width:100%; background:#0d1322; color:var(--text); border:1px solid var(--border); border-radius:5px;
+    padding:7px 9px; font-size:12px; font-family:inherit; }
+  input:focus, select:focus, textarea:focus { outline:none; border-color:var(--accent); }
+  .form-row { display:grid; gap:12px; margin-bottom:12px; }
+  .form-row.cols-2 { grid-template-columns: 1fr 1fr; }
+  .form-row.cols-3 { grid-template-columns: 1fr 1fr 1fr; }
+
+  /* Tabs (within a page) */
+  .tabs { display:flex; gap:2px; border-bottom:1px solid var(--border); margin-bottom:14px; }
+  .tab { padding:8px 14px; color:var(--text-dim); cursor:pointer; border-bottom:2px solid transparent;
+    font-size:12px; }
+  .tab.active { color:var(--text); border-bottom-color:var(--accent); }
+  .tab:hover { color:var(--text); }
+
+  /* Status banner */
+  .banner { padding:10px 14px; border-radius:6px; margin-bottom:14px; display:flex; gap:10px; align-items:center; }
+  .banner.warn { background:var(--orange-soft); border:1px solid var(--orange); color:#ffd9be; }
+  .banner.danger { background:var(--red-soft); border:1px solid var(--red); color:#ffcdd2; }
+  .banner.info { background:var(--accent-soft); border:1px solid var(--accent); color:#cfe0ff; }
+
+  /* SVG sparkline */
+  .spark { stroke:var(--accent); fill:none; stroke-width:1.5; }
+  .equity-curve { stroke:var(--green); fill:none; stroke-width:1.5; }
+  .grid-svg { stroke:#1d2741; stroke-width:0.5; }
+
+  /* Modal */
+  .modal-mask { position:fixed; inset:0; background:rgba(5,8,15,0.7); display:none; align-items:center; justify-content:center; z-index:1000; }
+  .modal-mask.show { display:flex; }
+  .modal { background:var(--bg-card); border:1px solid var(--border); border-radius:10px; padding:20px 22px;
+    width:520px; max-width:90vw; box-shadow:0 25px 60px rgba(0,0,0,0.6); }
+  .modal h3 { font-size:14px; color:var(--text); margin:0 0 8px; text-transform:none; letter-spacing:0; }
+  .modal .modal-body { color:var(--text-dim); margin-bottom:16px; line-height:1.55; }
+  .modal .modal-actions { display:flex; gap:8px; justify-content:flex-end; }
+
+  /* Toast */
+  .toasts { position:fixed; top:60px; right:18px; display:flex; flex-direction:column; gap:8px; z-index:900; max-width:340px; }
+  .toast { background:var(--bg-card); border:1px solid var(--border); border-left:3px solid var(--accent);
+    border-radius:6px; padding:10px 12px; font-size:12px; box-shadow:0 8px 24px rgba(0,0,0,0.4); }
+  .toast.green { border-left-color:var(--green); }
+  .toast.red { border-left-color:var(--red); }
+  .toast.yellow { border-left-color:var(--yellow); }
+  .toast .t-title { font-weight:600; margin-bottom:2px; }
+  .toast .t-sub { color:var(--text-dim); font-size:11px; }
+
+  /* Journey explorer */
+  .journey-domain { margin-bottom:12px; }
+  .journey-domain summary { cursor:pointer; padding:10px 14px; background:var(--bg-card); border:1px solid var(--border);
+    border-radius:6px; font-weight:600; font-size:12px; }
+  .journey-domain summary:hover { background:var(--bg-row); }
+  .journey-list { padding:8px 0 4px; }
+  .journey-item { display:flex; align-items:center; gap:10px; padding:6px 14px; border-bottom:1px solid var(--border); font-size:12px; }
+  .journey-item:last-child { border-bottom:none; }
+  .journey-item .j-num { color:var(--text-faint); width:34px; font-family:ui-monospace,monospace; font-size:11px; }
+  .journey-item .j-title { flex:1; }
+  .journey-item .j-pri { font-size:10px; padding:1px 6px; border-radius:3px; font-weight:600; }
+  .pri-p0 { background:var(--red-soft); color:var(--red); }
+  .pri-p1 { background:var(--yellow-soft); color:var(--yellow); }
+  .pri-p2 { background:var(--accent-soft); color:var(--accent); }
+
+  /* Feature catalog */
+  .feature-cat { margin-bottom:14px; }
+  .feature-cat-title { font-size:11px; text-transform:uppercase; letter-spacing:0.7px; color:var(--text-dim); margin-bottom:6px; }
+  .feature-tag { display:inline-flex; gap:6px; align-items:center; background:#0f1525; border:1px solid var(--border);
+    padding:4px 10px; border-radius:18px; margin:2px 4px 2px 0; font-size:11.5px; font-family:ui-monospace,monospace; }
+  .feature-tag .tf { color:var(--text-faint); font-size:10px; }
+
+  /* Diff view */
+  .diff-add { background:rgba(46,204,113,0.08); color:#9eebbc; }
+  .diff-rem { background:rgba(255,77,94,0.08); color:#ffb1b6; }
+  pre.diff { background:#0a0f1c; padding:12px 14px; border-radius:6px; border:1px solid var(--border);
+    font-family:ui-monospace,monospace; font-size:11.5px; line-height:1.55; overflow-x:auto; }
+
+  /* Slice progress */
+  .slice { display:flex; align-items:center; gap:12px; padding:9px 12px; border:1px solid var(--border);
+    border-radius:6px; margin-bottom:6px; }
+  .slice-num { font-family:ui-monospace,monospace; color:var(--text-faint); font-size:11px; width:60px; }
+  .slice-title { flex:1; font-size:12px; }
+  .slice-bar { width:140px; height:5px; background:#0a0f1c; border-radius:3px; overflow:hidden; }
+  .slice-bar > span { display:block; height:100%; background:var(--accent); }
+  .slice.done .slice-bar > span { background:var(--green); }
+
+  /* footer status bar */
+  .fs-divider { width:1px; height:14px; background:var(--border); }
+
+  /* Misc */
+  .muted { color:var(--text-dim); }
+  .nowrap { white-space:nowrap; }
+  .right { text-align:right; }
+  .small { font-size:11px; }
+  .pct-up { color:var(--green); }
+  .pct-down { color:var(--red); }
+  .kbd { background:#0a0f1c; border:1px solid var(--border); border-radius:3px; padding:1px 5px;
+    font-family:ui-monospace,monospace; font-size:10.5px; color:var(--text-dim); }
+
+  .help-tip { color:var(--text-faint); font-size:11px; margin-top:4px; }
+
+  /* Chart container */
+  .chart-shell { background:#0a0f1c; border:1px solid var(--border); border-radius:6px; padding:8px; }
+
+</style>
+</head>
+<body>
+
+<div class="app">
+
+  <!-- ===================== TOP BAR ===================== -->
+  <header class="topbar">
+    <div class="brand"><span class="dot"></span>ULTIMATE TRADING OS</div>
+    <span class="mode-pill mode-paper" id="mode-pill">PAPER</span>
+    <span class="muted small">Account: <strong style="color:var(--text)">Alpaca-Paper-01</strong></span>
+    <div class="topbar-spacer"></div>
+
+    <div class="status-chip" title="System recovery state">
+      <span class="indicator ind-green"></span>System OK
+    </div>
+    <div class="status-chip" title="Last broker sync">
+      <span class="indicator ind-green"></span>Broker sync 3s ago
+    </div>
+    <div class="status-chip" title="Governor status">
+      <span class="indicator ind-green"></span>Governor active
+    </div>
+    <div class="status-chip" id="kill-chip" title="Global kill switch">
+      <span class="indicator ind-green"></span>Kill: none
+    </div>
+    <button class="kill-btn" onclick="openKillModal()">⛔ STOP ALL OPENS</button>
+  </header>
+
+  <!-- ===================== SIDEBAR ===================== -->
+  <aside class="sidebar">
+    <div class="nav-group">Workspace</div>
+    <div class="nav-item active" data-page="dashboard"><span class="nav-icon">▦</span>Dashboard</div>
+
+    <div class="nav-group">Design Time</div>
+    <div class="nav-item" data-page="watchlists"><span class="nav-icon">☰</span>Watchlists<span class="nav-badge">12</span></div>
+    <div class="nav-item" data-page="strategies"><span class="nav-icon">∿</span>Strategies<span class="nav-badge">7</span></div>
+    <div class="nav-item" data-page="controls"><span class="nav-icon">⏱</span>Strategy Controls<span class="nav-badge">5</span></div>
+    <div class="nav-item" data-page="risk"><span class="nav-icon">⚖</span>Risk Profiles<span class="nav-badge">4</span></div>
+    <div class="nav-item" data-page="execution"><span class="nav-icon">⛓</span>Execution Styles<span class="nav-badge">6</span></div>
+    <div class="nav-item" data-page="programs"><span class="nav-icon">▢</span>Programs<span class="nav-badge">3</span></div>
+
+    <div class="nav-group">Validation</div>
+    <div class="nav-item" data-page="backtest"><span class="nav-icon">⟳</span>Backtest</div>
+    <div class="nav-item" data-page="optimization"><span class="nav-icon">≣</span>Optimization</div>
+    <div class="nav-item" data-page="simulation"><span class="nav-icon">▶</span>Simulation</div>
+    <div class="nav-item" data-page="chartlab"><span class="nav-icon">📈</span>Chart Lab</div>
+
+    <div class="nav-group">Runtime</div>
+    <div class="nav-item" data-page="governor"><span class="nav-icon">◎</span>Portfolio Governor</div>
+    <div class="nav-item" data-page="livemonitor"><span class="nav-icon">●</span>Live Monitor</div>
+    <div class="nav-item" data-page="operations"><span class="nav-icon">⚙</span>Operations Center<span class="nav-badge">2</span></div>
+
+    <div class="nav-group">System</div>
+    <div class="nav-item" data-page="brokers"><span class="nav-icon">🏦</span>Broker Accounts</div>
+    <div class="nav-item" data-page="services"><span class="nav-icon">⇆</span>Services</div>
+    <div class="nav-item" data-page="features"><span class="nav-icon">𝑓</span>Feature Catalog</div>
+    <div class="nav-item" data-page="logs"><span class="nav-icon">📋</span>Logs &amp; Alerts</div>
+    <div class="nav-item" data-page="journeys"><span class="nav-icon">⊞</span>Journey Hub<span class="nav-badge">150</span></div>
+    <div class="nav-item" data-page="settings"><span class="nav-icon">⚒</span>Settings</div>
+  </aside>
+
+  <!-- ===================== MAIN ===================== -->
+  <main class="content">
+
+    <!-- ============================ DASHBOARD ============================ -->
+    <section class="page active" id="page-dashboard">
+      <h1>Dashboard</h1>
+      <p class="page-sub">Above-the-fold view of system health, equity, exposure, and active deployments.</p>
+
+      <div class="grid grid-4">
+        <div class="card">
+          <div class="stat-label">Total Equity</div>
+          <div class="stat-value">$104,328.47</div>
+          <div class="stat-sub stat-up">▲ +$1,284.20 today (+1.24%)</div>
+        </div>
+        <div class="card">
+          <div class="stat-label">Buying Power</div>
+          <div class="stat-value">$208,656.94</div>
+          <div class="stat-sub muted">2× margin · day-trade BP $204,221</div>
+        </div>
+        <div class="card">
+          <div class="stat-label">Gross Exposure</div>
+          <div class="stat-value">38.4%</div>
+          <div class="stat-sub muted">Net long · 6 of 12 max positions</div>
+        </div>
+        <div class="card">
+          <div class="stat-label">Open Risk</div>
+          <div class="stat-value">1.82%</div>
+          <div class="stat-sub muted">Of equity · stops armed on 6/6</div>
+        </div>
+      </div>
+
+      <div class="grid grid-2" style="margin-top:14px;">
+        <div class="card">
+          <h2 style="margin-top:0;">Equity Curve · Last 30 trading days</h2>
+          <div class="chart-shell">
+            <svg viewBox="0 0 600 180" style="width:100%; height:180px;">
+              <line x1="0" y1="45" x2="600" y2="45" class="grid-svg"/>
+              <line x1="0" y1="90" x2="600" y2="90" class="grid-svg"/>
+              <line x1="0" y1="135" x2="600" y2="135" class="grid-svg"/>
+              <polyline class="equity-curve"
+                points="0,140 25,138 50,135 75,128 100,134 125,120 150,118 175,108 200,114 225,100 250,96 275,104 300,90 325,86 350,82 375,90 400,76 425,68 450,72 475,60 500,55 525,62 550,48 575,42 600,36"/>
+            </svg>
+          </div>
+          <div class="muted small" style="margin-top:6px;">+4.32% MTD · Sharpe 1.84 · Max DD -1.9%</div>
+        </div>
+
+        <div class="card">
+          <h2 style="margin-top:0;">Active Deployments</h2>
+          <table>
+            <thead><tr><th>Program</th><th>Account</th><th>Status</th><th class="right">P&amp;L Today</th></tr></thead>
+            <tbody>
+              <tr><td>Momentum Breakout v3</td><td>Alpaca-Paper-01</td><td><span class="badge green">Running</span></td><td class="right pct-up">+$612.40</td></tr>
+              <tr><td>Mean Reversion ETF</td><td>Alpaca-Paper-01</td><td><span class="badge green">Running</span></td><td class="right pct-up">+$248.60</td></tr>
+              <tr><td>Gap &amp; Go Small Caps</td><td>Alpaca-Paper-02</td><td><span class="badge yellow">Paused</span></td><td class="right">$0.00</td></tr>
+              <tr><td>VWAP Reversion 5m</td><td>Alpaca-Paper-01</td><td><span class="badge green">Running</span></td><td class="right pct-up">+$423.20</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="grid grid-3" style="margin-top:14px;">
+        <div class="card">
+          <h3>Today's Signals</h3>
+          <div class="stat-value">23</div>
+          <div class="muted small">14 approved · 6 blocked · 3 cooldown</div>
+        </div>
+        <div class="card">
+          <h3>Trades Today</h3>
+          <div class="stat-value">11</div>
+          <div class="muted small">8 winners · 3 losers · win rate 73%</div>
+        </div>
+        <div class="card">
+          <h3>Feature Engine</h3>
+          <div class="stat-value">7 / 9 <span class="muted small">slices</span></div>
+          <div class="muted small">Slice 8 in progress · 2 blockers</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================ WATCHLISTS ============================ -->
+    <section class="page" id="page-watchlists">
+      <h1>Watchlists</h1>
+      <p class="page-sub">Symbol universes with promotion / suspension lifecycle.</p>
+
+      <div class="btn-row" style="margin-bottom:12px;">
+        <button class="btn primary">+ New Watchlist</button>
+        <button class="btn">Refresh All</button>
+        <button class="btn ghost">Import CSV</button>
+      </div>
+
+      <div class="grid grid-3">
+        <div class="card">
+          <h3 style="margin-top:0;">Liquid Large Caps</h3>
+          <div class="muted small">42 active · 3 candidate · 1 suspended</div>
+          <div class="stat-sub" style="margin-top:8px;">Last refresh: 2m ago</div>
+          <div class="btn-row" style="margin-top:10px;"><button class="btn sm">Open</button><button class="btn sm">Refresh</button></div>
+        </div>
+        <div class="card">
+          <h3 style="margin-top:0;">High-Volume ETFs</h3>
+          <div class="muted small">18 active · 0 candidate · 0 suspended</div>
+          <div class="stat-sub" style="margin-top:8px;">Last refresh: 14m ago</div>
+          <div class="btn-row" style="margin-top:10px;"><button class="btn sm">Open</button><button class="btn sm">Refresh</button></div>
+        </div>
+        <div class="card">
+          <h3 style="margin-top:0;">Earnings Movers</h3>
+          <div class="muted small">7 active · 12 candidate · 4 suspended</div>
+          <div class="stat-sub" style="margin-top:8px;"><span class="badge orange">Stale</span> 3h 14m ago</div>
+          <div class="btn-row" style="margin-top:10px;"><button class="btn sm">Open</button><button class="btn sm primary">Refresh</button></div>
+        </div>
+      </div>
+
+      <h2>Liquid Large Caps · Members</h2>
+      <div class="card tight">
+        <table>
+          <thead><tr><th>Symbol</th><th>State</th><th>Since</th><th>Dwell</th><th>Reason</th><th class="right">Actions</th></tr></thead>
+          <tbody>
+            <tr><td class="mono">AAPL</td><td><span class="badge green">Active</span></td><td class="muted">2026-03-12</td><td>43d</td><td class="muted">manual_add</td><td class="right"><button class="btn sm">Suspend</button></td></tr>
+            <tr><td class="mono">MSFT</td><td><span class="badge green">Active</span></td><td class="muted">2026-03-12</td><td>43d</td><td class="muted">manual_add</td><td class="right"><button class="btn sm">Suspend</button></td></tr>
+            <tr><td class="mono">NVDA</td><td><span class="badge green">Active</span></td><td class="muted">2026-03-12</td><td>43d</td><td class="muted">manual_add</td><td class="right"><button class="btn sm">Suspend</button></td></tr>
+            <tr><td class="mono">TSLA</td><td><span class="badge yellow">Pending Removal</span></td><td class="muted">2026-04-22</td><td>2d</td><td class="muted">low_avg_volume</td><td class="right"><button class="btn sm">Restore</button></td></tr>
+            <tr><td class="mono">NFLX</td><td><span class="badge blue">Candidate</span></td><td class="muted">2026-04-23</td><td>1d</td><td class="muted">cooldown</td><td class="right"><button class="btn sm primary">Promote</button></td></tr>
+            <tr><td class="mono">META</td><td><span class="badge red">Suspended</span></td><td class="muted">2026-04-18</td><td>6d</td><td class="muted">earnings_blackout</td><td class="right"><button class="btn sm">Restore</button></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ============================ STRATEGIES ============================ -->
+    <section class="page" id="page-strategies">
+      <h1>Strategies</h1>
+      <p class="page-sub">Signal logic only — no controls, risk, or execution semantics here.</p>
+
+      <div class="tabs">
+        <div class="tab active">Library</div>
+        <div class="tab">Editor</div>
+        <div class="tab">Version Diff</div>
+      </div>
+
+      <div class="btn-row" style="margin-bottom:12px;">
+        <button class="btn primary">+ New Strategy</button>
+        <button class="btn">Import</button>
+      </div>
+
+      <div class="grid grid-2">
+        <div class="card">
+          <div style="display:flex; justify-content:space-between; align-items:start;">
+            <div>
+              <h3 style="margin:0; font-size:13px; color:var(--text); text-transform:none; letter-spacing:0;">Momentum Breakout</h3>
+              <div class="muted small">v3.2 · 4 versions · last edit 2d ago</div>
+            </div>
+            <span class="badge green">Validated</span>
+          </div>
+          <div class="muted small" style="margin-top:10px;">
+            <strong style="color:var(--text)">Entry:</strong> close &gt; ema_20 AND rsi_14 &gt; 55 AND volume &gt; volume_sma_20 × 1.5<br>
+            <strong style="color:var(--text)">Stop:</strong> entry − 1.5 × atr_14<br>
+            <strong style="color:var(--text)">Target:</strong> entry + 3.0 × atr_14
+          </div>
+          <div class="btn-row" style="margin-top:10px;"><button class="btn sm">Edit</button><button class="btn sm">Diff</button><button class="btn sm">Export</button></div>
+        </div>
+
+        <div class="card">
+          <div style="display:flex; justify-content:space-between; align-items:start;">
+            <div>
+              <h3 style="margin:0; font-size:13px; color:var(--text); text-transform:none; letter-spacing:0;">Mean Reversion ETF</h3>
+              <div class="muted small">v1.4 · 2 versions · last edit 5d ago</div>
+            </div>
+            <span class="badge green">Validated</span>
+          </div>
+          <div class="muted small" style="margin-top:10px;">
+            <strong style="color:var(--text)">Entry:</strong> close &lt; bb_lower AND rsi_14 &lt; 30<br>
+            <strong style="color:var(--text)">Stop:</strong> entry − 2.0 × atr_14<br>
+            <strong style="color:var(--text)">Target:</strong> bb_mid (mid-band touch)
+          </div>
+          <div class="btn-row" style="margin-top:10px;"><button class="btn sm">Edit</button><button class="btn sm">Diff</button><button class="btn sm">Export</button></div>
+        </div>
+
+        <div class="card">
+          <div style="display:flex; justify-content:space-between; align-items:start;">
+            <div>
+              <h3 style="margin:0; font-size:13px; color:var(--text); text-transform:none; letter-spacing:0;">VWAP Reversion 5m</h3>
+              <div class="muted small">v0.9 · 1 version · last edit 1d ago</div>
+            </div>
+            <span class="badge yellow">Draft</span>
+          </div>
+          <div class="muted small" style="margin-top:10px;">
+            <strong style="color:var(--text)">Entry:</strong> price deviates &gt; 1.5σ from vwap_session<br>
+            <strong style="color:var(--text)">Stop:</strong> 0.8 × atr_14<br>
+            <strong style="color:var(--text)">Target:</strong> vwap_session
+          </div>
+          <div class="btn-row" style="margin-top:10px;"><button class="btn sm">Edit</button><button class="btn sm">Diff</button><button class="btn sm">Export</button></div>
+        </div>
+
+        <div class="card">
+          <div style="display:flex; justify-content:space-between; align-items:start;">
+            <div>
+              <h3 style="margin:0; font-size:13px; color:var(--text); text-transform:none; letter-spacing:0;">Gap &amp; Go Small Caps</h3>
+              <div class="muted small">v2.1 · 3 versions · last edit 12d ago</div>
+            </div>
+            <span class="badge red">Schema Error</span>
+          </div>
+          <div class="muted small" style="margin-top:10px;">
+            <strong style="color:var(--text)">Entry:</strong> open_gap_pct &gt; 4 AND opening_range_high broken<br>
+            <strong class="pct-down">Validation:</strong> stop candidate references unapproved feature `gap_fill_pct`
+          </div>
+          <div class="btn-row" style="margin-top:10px;"><button class="btn sm">Edit</button><button class="btn sm danger">Fix</button></div>
+        </div>
+      </div>
+
+      <h2>Version Diff · Momentum Breakout v3.1 → v3.2</h2>
+      <pre class="diff">  entry:
+-   condition: close &gt; ema_20 AND rsi_14 &gt; 50
++   condition: close &gt; ema_20 AND rsi_14 &gt; 55 AND volume &gt; volume_sma_20 × 1.5
+  stop_candidate:
+    type: atr
+-   multiplier: 2.0
++   multiplier: 1.5
+  target_candidate:
+    type: atr
+    multiplier: 3.0</pre>
+    </section>
+
+    <!-- ============================ STRATEGY CONTROLS ============================ -->
+    <section class="page" id="page-controls">
+      <h1>Strategy Controls</h1>
+      <p class="page-sub">When a strategy signal is permitted to act — sessions, cooldowns, blackouts, regime filters.</p>
+
+      <div class="grid grid-2">
+        <div class="card">
+          <h3 style="margin-top:0;">Day-Trade Standard</h3>
+          <div class="muted small">5 trades/session · 10m cooldown · 09:35–15:55 ET</div>
+          <table style="margin-top:10px;">
+            <tr><td class="muted">Session windows</td><td>09:35–11:30, 13:30–15:55 ET</td></tr>
+            <tr><td class="muted">Cooldown</td><td>10 minutes after exit</td></tr>
+            <tr><td class="muted">Max trades / session</td><td>5</td></tr>
+            <tr><td class="muted">Earnings blackout</td><td><span class="badge green">On</span> ±2 days</td></tr>
+            <tr><td class="muted">Regime filter</td><td>SPY ATR-14 &lt; 1.8%</td></tr>
+            <tr><td class="muted">Half-day handling</td><td>Auto early close (13:00 ET)</td></tr>
+          </table>
+        </div>
+
+        <div class="card">
+          <h3 style="margin-top:0;">Swing Standard</h3>
+          <div class="muted small">3 trades/day · 1-bar cooldown (1h) · regular session</div>
+          <table style="margin-top:10px;">
+            <tr><td class="muted">Session windows</td><td>09:30–16:00 ET</td></tr>
+            <tr><td class="muted">Cooldown</td><td>1 bar (1h)</td></tr>
+            <tr><td class="muted">Max trades / session</td><td>3</td></tr>
+            <tr><td class="muted">Earnings blackout</td><td><span class="badge green">On</span> ±1 day</td></tr>
+            <tr><td class="muted">Regime filter</td><td>None</td></tr>
+            <tr><td class="muted">Holiday handling</td><td>Skip half days</td></tr>
+          </table>
+        </div>
+      </div>
+
+      <h2>Editor — Day-Trade Standard</h2>
+      <div class="card">
+        <div class="form-row cols-3">
+          <div><label>Timeframe Mode</label><select><option>Day Trade</option><option>Swing</option><option>Position</option></select></div>
+          <div><label>Max Trades / Session</label><input type="number" value="5"></div>
+          <div><label>Cooldown (min)</label><input type="number" value="10"></div>
+        </div>
+        <div class="form-row cols-2">
+          <div><label>Session Window 1</label><input type="text" value="09:35-11:30 America/New_York"></div>
+          <div><label>Session Window 2</label><input type="text" value="13:30-15:55 America/New_York"></div>
+        </div>
+        <div class="form-row cols-3">
+          <div><label>Earnings blackout (days)</label><input type="number" value="2"></div>
+          <div><label>Regime filter</label><input type="text" value="SPY atr_14 &lt; 1.8%"></div>
+          <div><label>Holiday calendar</label><select><option>NYSE_FULL</option><option>NYSE_NO_HALF_DAYS</option></select></div>
+        </div>
+        <div class="btn-row"><button class="btn primary">Save</button><button class="btn">Test Overlap</button><button class="btn ghost">Clone for Swing Mode</button></div>
+        <div class="help-tip">Tip: cooldown is enforced after every position close, including stops and partial exits.</div>
+      </div>
+    </section>
+
+    <!-- ============================ RISK PROFILES ============================ -->
+    <section class="page" id="page-risk">
+      <h1>Risk Profiles</h1>
+      <p class="page-sub">Position sizing and account-level loss / drawdown limits. Owns the fallback stop policy.</p>
+
+      <div class="grid grid-3">
+        <div class="card">
+          <h3 style="margin-top:0;">Conservative</h3>
+          <div class="muted small">Linked to: 2 programs · 1 account</div>
+          <table style="margin-top:8px;">
+            <tr><td class="muted">Risk / trade</td><td>0.5%</td></tr>
+            <tr><td class="muted">Max positions</td><td>6</td></tr>
+            <tr><td class="muted">Max gross exposure</td><td>40%</td></tr>
+            <tr><td class="muted">Max daily loss</td><td>1.5%</td></tr>
+            <tr><td class="muted">Max drawdown</td><td>4%</td></tr>
+            <tr><td class="muted">Fallback stop</td><td>2.5 × atr_14</td></tr>
+          </table>
+        </div>
+        <div class="card">
+          <h3 style="margin-top:0;">Aggressive</h3>
+          <div class="muted small">Linked to: 1 program · 1 account</div>
+          <table style="margin-top:8px;">
+            <tr><td class="muted">Risk / trade</td><td>1.5%</td></tr>
+            <tr><td class="muted">Max positions</td><td>12</td></tr>
+            <tr><td class="muted">Max gross exposure</td><td>120%</td></tr>
+            <tr><td class="muted">Max daily loss</td><td>3.0% <span class="badge red">Triggered today</span></td></tr>
+            <tr><td class="muted">Max drawdown</td><td>8%</td></tr>
+            <tr><td class="muted">Fallback stop</td><td>1.5 × atr_14</td></tr>
+          </table>
+        </div>
+        <div class="card">
+          <h3 style="margin-top:0;">Earnings Plays</h3>
+          <div class="muted small">Linked to: 0 programs (template)</div>
+          <table style="margin-top:8px;">
+            <tr><td class="muted">Risk / trade</td><td>0.25%</td></tr>
+            <tr><td class="muted">Max positions</td><td>3</td></tr>
+            <tr><td class="muted">Max gross exposure</td><td>15%</td></tr>
+            <tr><td class="muted">Max daily loss</td><td>1.0%</td></tr>
+            <tr><td class="muted">Max drawdown</td><td>3%</td></tr>
+            <tr><td class="muted">Fallback stop</td><td>1.0 × atr_14</td></tr>
+          </table>
+        </div>
+      </div>
+
+      <div class="banner warn" style="margin-top:14px;">
+        <strong>Daily-loss lockout active</strong> on profile <em>Aggressive</em> — new opens blocked until 00:00 ET. Existing positions are still managed.
+      </div>
+    </section>
+
+    <!-- ============================ EXECUTION STYLES ============================ -->
+    <section class="page" id="page-execution">
+      <h1>Execution Styles</h1>
+      <p class="page-sub">How an order is expressed: bracket, trailing, TIF, scale-out, cancel rules.</p>
+
+      <div class="grid grid-3">
+        <div class="card">
+          <h3 style="margin-top:0;">Native Bracket</h3>
+          <table>
+            <tr><td class="muted">Entry</td><td>Limit @ signal price</td></tr>
+            <tr><td class="muted">Stop leg</td><td>Native bracket stop</td></tr>
+            <tr><td class="muted">Target leg</td><td>Native bracket limit</td></tr>
+            <tr><td class="muted">TIF</td><td>DAY</td></tr>
+            <tr><td class="muted">Cancel after</td><td>10 bars unfilled</td></tr>
+          </table>
+        </div>
+        <div class="card">
+          <h3 style="margin-top:0;">Trailing Stop</h3>
+          <table>
+            <tr><td class="muted">Entry</td><td>Market on signal</td></tr>
+            <tr><td class="muted">Stop</td><td>Trailing 1.5 × atr_14</td></tr>
+            <tr><td class="muted">Target</td><td>None — trail to exit</td></tr>
+            <tr><td class="muted">TIF</td><td>GTC</td></tr>
+            <tr><td class="muted">Cancel after</td><td>—</td></tr>
+          </table>
+        </div>
+        <div class="card">
+          <h3 style="margin-top:0;">Scale-Out 3-Tier</h3>
+          <table>
+            <tr><td class="muted">Entry</td><td>Stop-Limit on breakout</td></tr>
+            <tr><td class="muted">Stop</td><td>Static, 1.0 × atr_14</td></tr>
+            <tr><td class="muted">Targets</td><td>33% @ 1R · 33% @ 2R · 34% @ 3R</td></tr>
+            <tr><td class="muted">TIF</td><td>DAY</td></tr>
+            <tr><td class="muted">Bracket native</td><td>Simulated (not native)</td></tr>
+          </table>
+        </div>
+      </div>
+
+      <div class="banner info" style="margin-top:14px;">
+        Scale-out tier percentages must sum to 100%. Simulated brackets cancel together when an entry is closed manually.
+      </div>
+    </section>
+
+    <!-- ============================ PROGRAMS ============================ -->
+    <section class="page" id="page-programs">
+      <h1>Programs</h1>
+      <p class="page-sub">A frozen package of Strategy + Controls + Risk + Execution + Watchlist. The only deployable unit.</p>
+
+      <div class="btn-row" style="margin-bottom:12px;">
+        <button class="btn primary">+ New Program</button>
+      </div>
+
+      <div class="card">
+        <table>
+          <thead><tr><th>Name</th><th>Strategy</th><th>Controls</th><th>Risk</th><th>Execution</th><th>Watchlist</th><th>Status</th><th class="right">Actions</th></tr></thead>
+          <tbody>
+            <tr>
+              <td><strong>Momentum Breakout v3</strong></td>
+              <td>Momentum Breakout v3.2</td><td>Day-Trade Standard</td><td>Conservative</td><td>Native Bracket</td><td>Liquid Large Caps</td>
+              <td><span class="badge green">Deployed</span></td>
+              <td class="right"><button class="btn sm">Open</button></td>
+            </tr>
+            <tr>
+              <td><strong>Mean Reversion ETF</strong></td>
+              <td>Mean Reversion ETF v1.4</td><td>Swing Standard</td><td>Conservative</td><td>Trailing Stop</td><td>High-Volume ETFs</td>
+              <td><span class="badge green">Deployed</span></td>
+              <td class="right"><button class="btn sm">Open</button></td>
+            </tr>
+            <tr>
+              <td><strong>Gap &amp; Go Small Caps</strong></td>
+              <td>Gap &amp; Go v2.1</td><td>Day-Trade Standard</td><td>Aggressive</td><td>Scale-Out 3-Tier</td><td>Earnings Movers</td>
+              <td><span class="badge yellow">Frozen — paper review</span></td>
+              <td class="right"><button class="btn sm">Open</button></td>
+            </tr>
+            <tr>
+              <td><strong>VWAP Reversion 5m</strong></td>
+              <td>VWAP Reversion 5m v0.9</td><td>Day-Trade Standard</td><td>Conservative</td><td>Trailing Stop</td><td>Liquid Large Caps</td>
+              <td><span class="badge gray">Draft</span></td>
+              <td class="right"><button class="btn sm">Open</button></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h2>Composer — Momentum Breakout v3</h2>
+      <div class="card">
+        <div class="form-row cols-3">
+          <div><label>Strategy</label><select><option>Momentum Breakout v3.2 ✓</option></select></div>
+          <div><label>Strategy Controls</label><select><option>Day-Trade Standard</option></select></div>
+          <div><label>Risk Profile</label><select><option>Conservative</option></select></div>
+        </div>
+        <div class="form-row cols-2">
+          <div><label>Execution Style</label><select><option>Native Bracket</option></select></div>
+          <div><label>Watchlist(s)</label><select multiple size="2"><option selected>Liquid Large Caps</option><option>High-Volume ETFs</option></select></div>
+        </div>
+        <div class="btn-row">
+          <button class="btn primary">Freeze for Paper</button>
+          <button class="btn">Save Draft</button>
+          <button class="btn ghost">Promote Paper → Live…</button>
+          <button class="btn danger">Deprecate</button>
+        </div>
+        <div class="help-tip">Once frozen, component bindings are immutable. Promotion to live requires walk-forward + paper soak evidence.</div>
+      </div>
+
+      <h2>Allocations</h2>
+      <div class="card tight">
+        <table>
+          <thead><tr><th>Account</th><th>Mode</th><th>Status</th><th>Started</th><th class="right">Actions</th></tr></thead>
+          <tbody>
+            <tr><td>Alpaca-Paper-01</td><td><span class="badge blue">Paper</span></td><td><span class="badge green">Running</span></td><td class="muted">2026-04-22 09:30 ET</td>
+              <td class="right"><button class="btn sm">Pause</button> <button class="btn sm danger">Stop</button></td></tr>
+            <tr><td>Alpaca-Live-Main</td><td><span class="badge red">Live</span></td><td><span class="badge gray">Eligible</span></td><td class="muted">—</td>
+              <td class="right"><button class="btn sm primary">Promote…</button></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ============================ BACKTEST ============================ -->
+    <section class="page" id="page-backtest">
+      <h1>Backtest</h1>
+      <p class="page-sub">Historical validation with walk-forward, CPCV, and overfit detection.</p>
+
+      <div class="card">
+        <h2 style="margin-top:0;">New Run</h2>
+        <div class="form-row cols-4">
+          <div><label>Program</label><select><option>Momentum Breakout v3</option></select></div>
+          <div><label>Date Range</label><input type="text" value="2023-01-01 → 2026-04-01"></div>
+          <div><label>Data Provider</label><select><option>Auto (recommended)</option><option>Alpaca</option><option>yFinance</option></select></div>
+          <div><label>Mode</label><select><option>Walk-Forward</option><option>Single Pass</option><option>CPCV</option></select></div>
+        </div>
+        <div class="btn-row"><button class="btn primary">Launch Backtest</button><button class="btn">Recommend Provider</button></div>
+        <div class="help-tip">Auto provider chose <strong>Alpaca</strong> for 1m/5m bars (yFinance only supports daily for this date range).</div>
+      </div>
+
+      <h2>Recent Runs</h2>
+      <div class="card tight">
+        <table>
+          <thead><tr><th>#</th><th>Program</th><th>Range</th><th>Sharpe</th><th>Max DD</th><th>Trades</th><th>Win%</th><th>PF</th><th>Cost Sens.</th><th>Status</th></tr></thead>
+          <tbody>
+            <tr><td class="mono">#0142</td><td>Momentum Breakout v3</td><td class="muted">2023→2026</td><td>1.84</td><td>-8.2%</td><td>847</td><td>56%</td><td>1.92</td><td><span class="badge green">Robust</span></td><td><span class="badge green">Complete</span></td></tr>
+            <tr><td class="mono">#0141</td><td>Mean Reversion ETF</td><td class="muted">2023→2026</td><td>1.34</td><td>-6.4%</td><td>312</td><td>62%</td><td>1.71</td><td><span class="badge yellow">Sensitive</span></td><td><span class="badge green">Complete</span></td></tr>
+            <tr><td class="mono">#0140</td><td>VWAP Reversion 5m</td><td class="muted">2024→2026</td><td>2.12</td><td>-3.8%</td><td>1,402</td><td>54%</td><td>1.66</td><td><span class="badge red">Fragile</span></td><td><span class="badge orange">Overfit warning</span></td></tr>
+            <tr><td class="mono">#0139</td><td>Gap &amp; Go v2.1</td><td class="muted">2023→2026</td><td>—</td><td>—</td><td>—</td><td>—</td><td>—</td><td>—</td><td><span class="badge red">Failed</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h2>Run #0142 — Detail</h2>
+      <div class="grid grid-2">
+        <div class="card">
+          <h3 style="margin-top:0;">Equity Curve</h3>
+          <div class="chart-shell">
+            <svg viewBox="0 0 600 180" style="width:100%; height:180px;">
+              <line x1="0" y1="60" x2="600" y2="60" class="grid-svg"/>
+              <line x1="0" y1="120" x2="600" y2="120" class="grid-svg"/>
+              <polyline class="equity-curve" points="0,150 50,148 100,140 150,135 200,128 250,116 300,118 350,98 400,86 450,72 500,55 550,42 600,28"/>
+            </svg>
+          </div>
+          <div class="muted small" style="margin-top:6px;">+82.4% over 3y · CAGR 22.1% · OOS Sharpe 1.62</div>
+        </div>
+        <div class="card">
+          <h3 style="margin-top:0;">Monthly Heatmap</h3>
+          <div style="display:grid; grid-template-columns:repeat(12,1fr); gap:3px;">
+            <!-- 36 cells -->
+            <div style="background:rgba(46,204,113,0.6); padding:8px 0; text-align:center; font-size:10px;">+3.1</div>
+            <div style="background:rgba(46,204,113,0.4); padding:8px 0; text-align:center; font-size:10px;">+1.8</div>
+            <div style="background:rgba(255,77,94,0.4); padding:8px 0; text-align:center; font-size:10px;">-0.9</div>
+            <div style="background:rgba(46,204,113,0.7); padding:8px 0; text-align:center; font-size:10px;">+4.2</div>
+            <div style="background:rgba(46,204,113,0.3); padding:8px 0; text-align:center; font-size:10px;">+0.6</div>
+            <div style="background:rgba(46,204,113,0.5); padding:8px 0; text-align:center; font-size:10px;">+2.4</div>
+            <div style="background:rgba(255,77,94,0.5); padding:8px 0; text-align:center; font-size:10px;">-1.6</div>
+            <div style="background:rgba(46,204,113,0.6); padding:8px 0; text-align:center; font-size:10px;">+3.0</div>
+            <div style="background:rgba(46,204,113,0.4); padding:8px 0; text-align:center; font-size:10px;">+1.4</div>
+            <div style="background:rgba(46,204,113,0.7); padding:8px 0; text-align:center; font-size:10px;">+4.8</div>
+            <div style="background:rgba(255,77,94,0.6); padding:8px 0; text-align:center; font-size:10px;">-2.2</div>
+            <div style="background:rgba(46,204,113,0.5); padding:8px 0; text-align:center; font-size:10px;">+2.1</div>
+            <div style="background:rgba(46,204,113,0.4); padding:8px 0; text-align:center; font-size:10px;">+1.2</div>
+            <div style="background:rgba(46,204,113,0.6); padding:8px 0; text-align:center; font-size:10px;">+2.9</div>
+            <div style="background:rgba(46,204,113,0.5); padding:8px 0; text-align:center; font-size:10px;">+2.0</div>
+            <div style="background:rgba(255,77,94,0.4); padding:8px 0; text-align:center; font-size:10px;">-0.8</div>
+            <div style="background:rgba(46,204,113,0.3); padding:8px 0; text-align:center; font-size:10px;">+0.5</div>
+            <div style="background:rgba(46,204,113,0.7); padding:8px 0; text-align:center; font-size:10px;">+3.7</div>
+            <div style="background:rgba(46,204,113,0.6); padding:8px 0; text-align:center; font-size:10px;">+3.1</div>
+            <div style="background:rgba(46,204,113,0.5); padding:8px 0; text-align:center; font-size:10px;">+2.4</div>
+            <div style="background:rgba(255,77,94,0.7); padding:8px 0; text-align:center; font-size:10px;">-3.4</div>
+            <div style="background:rgba(46,204,113,0.4); padding:8px 0; text-align:center; font-size:10px;">+1.7</div>
+            <div style="background:rgba(46,204,113,0.5); padding:8px 0; text-align:center; font-size:10px;">+2.3</div>
+            <div style="background:rgba(46,204,113,0.6); padding:8px 0; text-align:center; font-size:10px;">+3.0</div>
+            <div style="background:rgba(46,204,113,0.7); padding:8px 0; text-align:center; font-size:10px;">+4.1</div>
+            <div style="background:rgba(46,204,113,0.5); padding:8px 0; text-align:center; font-size:10px;">+2.2</div>
+            <div style="background:rgba(46,204,113,0.4); padding:8px 0; text-align:center; font-size:10px;">+1.5</div>
+            <div style="background:rgba(255,77,94,0.5); padding:8px 0; text-align:center; font-size:10px;">-1.9</div>
+            <div style="background:rgba(46,204,113,0.6); padding:8px 0; text-align:center; font-size:10px;">+3.2</div>
+            <div style="background:rgba(46,204,113,0.7); padding:8px 0; text-align:center; font-size:10px;">+4.5</div>
+            <div style="background:rgba(46,204,113,0.4); padding:8px 0; text-align:center; font-size:10px;">+1.3</div>
+            <div style="background:rgba(46,204,113,0.5); padding:8px 0; text-align:center; font-size:10px;">+2.5</div>
+            <div style="background:rgba(46,204,113,0.6); padding:8px 0; text-align:center; font-size:10px;">+3.4</div>
+            <div style="background:rgba(255,77,94,0.4); padding:8px 0; text-align:center; font-size:10px;">-1.0</div>
+            <div style="background:rgba(46,204,113,0.5); padding:8px 0; text-align:center; font-size:10px;">+2.0</div>
+            <div style="background:rgba(46,204,113,0.7); padding:8px 0; text-align:center; font-size:10px;">+4.0</div>
+          </div>
+          <div class="muted small" style="margin-top:6px;">Jan 2023 → Dec 2025 · monthly returns %</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================ OPTIMIZATION ============================ -->
+    <section class="page" id="page-optimization">
+      <h1>Optimization</h1>
+      <p class="page-sub">Parameter sweeps with walk-forward IS / OOS reporting and overfit detection.</p>
+
+      <div class="card">
+        <div class="form-row cols-4">
+          <div><label>Strategy</label><select><option>Momentum Breakout v3.2</option></select></div>
+          <div><label>Sweep Method</label><select><option>Grid</option><option>Latin Hypercube</option><option>Bayesian</option></select></div>
+          <div><label>Walk-Forward Folds</label><input type="number" value="6"></div>
+          <div><label>Run CPCV</label><select><option>No</option><option>Yes</option></select></div>
+        </div>
+        <div class="btn-row"><button class="btn primary">Launch Sweep</button></div>
+      </div>
+
+      <h2>Top Candidates · Sweep #018</h2>
+      <div class="card tight">
+        <table>
+          <thead><tr><th>Rank</th><th>RSI thr</th><th>ATR mult</th><th>EMA len</th><th>IS Sharpe</th><th>OOS Sharpe</th><th>OOS DD</th><th>Decay</th><th>Promote</th></tr></thead>
+          <tbody>
+            <tr><td>1</td><td>55</td><td>1.5</td><td>20</td><td>2.14</td><td>1.62</td><td>-9.2%</td><td><span class="badge green">Mild</span></td><td><button class="btn sm primary">→ Paper</button></td></tr>
+            <tr><td>2</td><td>52</td><td>1.6</td><td>20</td><td>2.08</td><td>1.48</td><td>-10.1%</td><td><span class="badge green">Mild</span></td><td><button class="btn sm">→ Paper</button></td></tr>
+            <tr><td>3</td><td>58</td><td>1.4</td><td>15</td><td>2.42</td><td>1.18</td><td>-12.4%</td><td><span class="badge orange">Moderate</span></td><td><button class="btn sm">→ Paper</button></td></tr>
+            <tr><td>4</td><td>60</td><td>1.2</td><td>10</td><td>2.91</td><td>0.84</td><td>-18.7%</td><td><span class="badge red">Severe</span></td><td><button class="btn sm" disabled>Blocked</button></td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="banner warn" style="margin-top:14px;">
+        Rank 4 shows severe IS→OOS decay (Δ Sharpe −2.07). Promotion blocked until decay ≤ 1.0 or CPCV passes.
+      </div>
+    </section>
+
+    <!-- ============================ SIMULATION ============================ -->
+    <section class="page" id="page-simulation">
+      <h1>Simulation</h1>
+      <p class="page-sub">Bar-by-bar replay with trade markers, partial fills, and websocket fallback.</p>
+
+      <div class="card">
+        <div class="form-row cols-4">
+          <div><label>Symbol</label><input type="text" value="AAPL"></div>
+          <div><label>Timeframe</label><select><option>5m</option><option>1h</option><option>1d</option></select></div>
+          <div><label>Date</label><input type="text" value="2026-04-15"></div>
+          <div><label>Program</label><select><option>Momentum Breakout v3</option></select></div>
+        </div>
+        <div class="btn-row">
+          <button class="btn primary">▶ Play</button>
+          <button class="btn">⏸ Pause</button>
+          <button class="btn">⏭ Step Bar</button>
+          <button class="btn">↺ Reset</button>
+          <span class="muted small" style="margin-left:auto; align-self:center;">Speed: 2× · Bar 47/78</span>
+        </div>
+      </div>
+
+      <div class="grid grid-3" style="margin-top:14px;">
+        <div class="card" style="grid-column: span 2;">
+          <h3 style="margin-top:0;">AAPL · 5m · 2026-04-15</h3>
+          <div class="chart-shell">
+            <svg viewBox="0 0 600 220" style="width:100%; height:220px;">
+              <line x1="0" y1="55" x2="600" y2="55" class="grid-svg"/>
+              <line x1="0" y1="110" x2="600" y2="110" class="grid-svg"/>
+              <line x1="0" y1="165" x2="600" y2="165" class="grid-svg"/>
+              <!-- candles -->
+              <g stroke-width="1">
+                <line x1="20" y1="100" x2="20" y2="140" stroke="#2ecc71"/>
+                <rect x="16" y="110" width="8" height="20" fill="#2ecc71"/>
+                <line x1="40" y1="98" x2="40" y2="135" stroke="#ff4d5e"/>
+                <rect x="36" y="105" width="8" height="22" fill="#ff4d5e"/>
+                <line x1="60" y1="92" x2="60" y2="130" stroke="#2ecc71"/>
+                <rect x="56" y="100" width="8" height="22" fill="#2ecc71"/>
+                <line x1="80" y1="86" x2="80" y2="118" stroke="#2ecc71"/>
+                <rect x="76" y="92" width="8" height="20" fill="#2ecc71"/>
+                <line x1="100" y1="80" x2="100" y2="112" stroke="#2ecc71"/>
+                <rect x="96" y="86" width="8" height="20" fill="#2ecc71"/>
+                <line x1="120" y1="82" x2="120" y2="105" stroke="#ff4d5e"/>
+                <rect x="116" y="86" width="8" height="14" fill="#ff4d5e"/>
+                <line x1="140" y1="76" x2="140" y2="98" stroke="#2ecc71"/>
+                <rect x="136" y="80" width="8" height="14" fill="#2ecc71"/>
+                <line x1="160" y1="68" x2="160" y2="92" stroke="#2ecc71"/>
+                <rect x="156" y="74" width="8" height="14" fill="#2ecc71"/>
+                <line x1="180" y1="66" x2="180" y2="86" stroke="#2ecc71"/>
+                <rect x="176" y="70" width="8" height="12" fill="#2ecc71"/>
+                <line x1="200" y1="60" x2="200" y2="82" stroke="#2ecc71"/>
+                <rect x="196" y="66" width="8" height="12" fill="#2ecc71"/>
+                <line x1="220" y1="55" x2="220" y2="78" stroke="#2ecc71"/>
+                <rect x="216" y="62" width="8" height="12" fill="#2ecc71"/>
+                <line x1="240" y1="52" x2="240" y2="74" stroke="#ff4d5e"/>
+                <rect x="236" y="58" width="8" height="12" fill="#ff4d5e"/>
+                <line x1="260" y1="48" x2="260" y2="70" stroke="#2ecc71"/>
+                <rect x="256" y="54" width="8" height="12" fill="#2ecc71"/>
+              </g>
+              <!-- VWAP overlay -->
+              <polyline points="20,128 40,124 60,118 80,108 100,100 120,98 140,90 160,84 180,80 200,76 220,72 240,68 260,64" stroke="#a76bff" fill="none" stroke-width="1.2" stroke-dasharray="3,3"/>
+              <!-- entry marker -->
+              <polygon points="160,72 167,82 153,82" fill="#4f8cff"/>
+              <text x="170" y="80" fill="#4f8cff" font-size="10">ENTRY @ 168.42</text>
+              <!-- target marker -->
+              <line x1="20" y1="60" x2="600" y2="60" stroke="#2ecc71" stroke-dasharray="3,3" stroke-width="0.8"/>
+              <text x="540" y="58" fill="#2ecc71" font-size="9">TARGET</text>
+              <line x1="20" y1="92" x2="600" y2="92" stroke="#ff4d5e" stroke-dasharray="3,3" stroke-width="0.8"/>
+              <text x="546" y="90" fill="#ff4d5e" font-size="9">STOP</text>
+            </svg>
+          </div>
+        </div>
+        <div class="card">
+          <h3 style="margin-top:0;">Session Metrics</h3>
+          <table>
+            <tr><td class="muted">Equity</td><td>$100,612.40</td></tr>
+            <tr><td class="muted">Open positions</td><td>1</td></tr>
+            <tr><td class="muted">Unrealized P&amp;L</td><td class="pct-up">+$184.20</td></tr>
+            <tr><td class="muted">Realized P&amp;L</td><td class="pct-up">+$428.20</td></tr>
+            <tr><td class="muted">Trades</td><td>3</td></tr>
+            <tr><td class="muted">Stream</td><td><span class="badge green">Live</span></td></tr>
+            <tr><td class="muted">Last bar</td><td class="muted">10:47 ET</td></tr>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================ CHART LAB ============================ -->
+    <section class="page" id="page-chartlab">
+      <h1>Chart Lab</h1>
+      <p class="page-sub">Visual indicator inspection. Computes from the same Feature Engine cache as the runtime.</p>
+
+      <div class="card">
+        <div class="form-row cols-4">
+          <div><label>Symbol</label><input type="text" value="NVDA"></div>
+          <div><label>Timeframe</label><select><option>1m</option><option selected>5m</option><option>1h</option><option>1d</option><option>1w</option></select></div>
+          <div><label>Provider</label><select><option>Auto (Alpaca chosen)</option><option>Alpaca</option><option>yFinance</option></select></div>
+          <div><label>Lookback</label><select><option>50 bars</option><option selected>200 bars</option><option>500 bars</option></select></div>
+        </div>
+        <div class="btn-row">
+          <span class="muted small" style="align-self:center;">Indicators:</span>
+          <label style="display:inline; font-size:11px;"><input type="checkbox" checked> EMA-20</label>
+          <label style="display:inline; font-size:11px;"><input type="checkbox" checked> EMA-50</label>
+          <label style="display:inline; font-size:11px;"><input type="checkbox"> SMA-200</label>
+          <label style="display:inline; font-size:11px;"><input type="checkbox" checked> VWAP</label>
+          <label style="display:inline; font-size:11px;"><input type="checkbox" checked> RSI-14</label>
+          <label style="display:inline; font-size:11px;"><input type="checkbox"> ATR-14</label>
+          <label style="display:inline; font-size:11px;"><input type="checkbox"> Bollinger</label>
+          <label style="display:inline; font-size:11px;"><input type="checkbox"> Donchian</label>
+          <label style="display:inline; font-size:11px;"><input type="checkbox"> MACD</label>
+        </div>
+      </div>
+
+      <div class="card" style="margin-top:14px;">
+        <h3 style="margin-top:0;">NVDA · 5m · 200 bars</h3>
+        <div class="chart-shell">
+          <svg viewBox="0 0 700 280" style="width:100%; height:280px;">
+            <line x1="0" y1="60" x2="700" y2="60" class="grid-svg"/>
+            <line x1="0" y1="120" x2="700" y2="120" class="grid-svg"/>
+            <line x1="0" y1="180" x2="700" y2="180" class="grid-svg"/>
+            <line x1="0" y1="220" x2="700" y2="220" stroke="#243049" stroke-width="1"/>
+            <!-- price area -->
+            <polyline points="0,160 30,155 60,148 90,158 120,140 150,130 180,138 210,118 240,108 270,116 300,98 330,88 360,96 390,80 420,72 450,82 480,68 510,58 540,72 570,62 600,54 630,66 660,52 700,46" stroke="#d8e0f0" fill="none" stroke-width="1.2"/>
+            <!-- EMA-20 -->
+            <polyline points="0,158 50,152 100,142 150,134 200,124 250,114 300,104 350,94 400,82 450,76 500,66 550,62 600,58 650,52 700,48" stroke="#4f8cff" fill="none" stroke-width="1"/>
+            <!-- VWAP -->
+            <polyline points="0,164 50,156 100,150 150,144 200,134 250,128 300,116 350,108 400,98 450,90 500,80 550,74 600,68 650,60 700,54" stroke="#a76bff" fill="none" stroke-width="1" stroke-dasharray="4,3"/>
+            <!-- RSI subplot -->
+            <text x="6" y="240" fill="#8a96ad" font-size="9">RSI 14</text>
+            <line x1="0" y1="260" x2="700" y2="260" stroke="#1d2741"/>
+            <polyline points="0,265 70,255 140,260 210,245 280,238 350,232 420,225 490,232 560,228 630,224 700,232" stroke="#f6c344" fill="none" stroke-width="1"/>
+            <line x1="0" y1="244" x2="700" y2="244" stroke="#243049" stroke-width="0.5" stroke-dasharray="2,2"/>
+          </svg>
+        </div>
+        <div class="muted small" style="margin-top:6px;">
+          Provider chosen: <strong style="color:var(--text)">Alpaca</strong> (5m bars unavailable on yFinance for &gt;7d lookback) · Cache hit 184 / 200 bars · last update 14s ago
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================ PORTFOLIO GOVERNOR ============================ -->
+    <section class="page" id="page-governor">
+      <h1>Portfolio Governor</h1>
+      <p class="page-sub">Account-scope conflict resolution and final exposure approval. Last gate before broker submission.</p>
+
+      <div class="grid grid-4">
+        <div class="card"><div class="stat-label">Status</div><div class="stat-value" style="font-size:14px;"><span class="badge green">Active</span></div><div class="stat-sub muted">All programs approved</div></div>
+        <div class="card"><div class="stat-label">Open Risk</div><div class="stat-value">1.82%</div><div class="stat-sub muted">cap 4.0%</div></div>
+        <div class="card"><div class="stat-label">Symbol Concentration</div><div class="stat-value">22.4%</div><div class="stat-sub muted">max (NVDA) · cap 30%</div></div>
+        <div class="card"><div class="stat-label">Daily Loss Buffer</div><div class="stat-value pct-up">+0.84%</div><div class="stat-sub muted">cap -1.5%</div></div>
+      </div>
+
+      <h2>Active Programs in Account</h2>
+      <div class="card tight">
+        <table>
+          <thead><tr><th>Program</th><th>Strategy</th><th>Open Pos.</th><th>Open Risk</th><th>Today P&amp;L</th><th>Status</th><th class="right">Action</th></tr></thead>
+          <tbody>
+            <tr><td>Momentum Breakout v3</td><td>Momentum v3.2</td><td>3</td><td>0.82%</td><td class="pct-up">+$612.40</td><td><span class="badge green">Approved</span></td><td class="right"><button class="btn sm">Pause</button></td></tr>
+            <tr><td>Mean Reversion ETF</td><td>Mean Rev. v1.4</td><td>2</td><td>0.42%</td><td class="pct-up">+$248.60</td><td><span class="badge green">Approved</span></td><td class="right"><button class="btn sm">Pause</button></td></tr>
+            <tr><td>VWAP Reversion 5m</td><td>VWAP Rev. v0.9</td><td>1</td><td>0.58%</td><td class="pct-up">+$423.20</td><td><span class="badge green">Approved</span></td><td class="right"><button class="btn sm">Pause</button></td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h2>Governor Event Log</h2>
+      <div class="card tight">
+        <table>
+          <thead><tr><th>Time</th><th>Event</th><th>Program</th><th>Symbol</th><th>Reason</th></tr></thead>
+          <tbody>
+            <tr><td class="mono muted">15:42:18</td><td><span class="badge green">approved</span></td><td>Momentum v3</td><td class="mono">AAPL</td><td class="muted">within all caps</td></tr>
+            <tr><td class="mono muted">15:38:02</td><td><span class="badge red">rejected</span></td><td>Mean Rev. ETF</td><td class="mono">SPY</td><td class="muted">portfolio_symbol_concentration_pct &gt; 30 (cap)</td></tr>
+            <tr><td class="mono muted">15:31:51</td><td><span class="badge yellow">deferred</span></td><td>VWAP Rev.</td><td class="mono">NVDA</td><td class="muted">overlaps Momentum v3 open · partial sizing</td></tr>
+            <tr><td class="mono muted">14:55:03</td><td><span class="badge green">approved</span></td><td>Momentum v3</td><td class="mono">META</td><td class="muted">within all caps</td></tr>
+            <tr><td class="mono muted">14:21:40</td><td><span class="badge red">rejected</span></td><td>Gap &amp; Go</td><td class="mono">XYZ</td><td class="muted">unknown_symbol — not in approved watchlist</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ============================ LIVE MONITOR ============================ -->
+    <section class="page" id="page-livemonitor">
+      <h1>Live Monitor</h1>
+      <p class="page-sub">Real-time positions and orders. Websocket primary · polling fallback shown explicitly when active.</p>
+
+      <div class="grid grid-4">
+        <div class="card"><div class="stat-label">Equity</div><div class="stat-value">$104,328.47</div></div>
+        <div class="card"><div class="stat-label">Cash</div><div class="stat-value">$64,201.14</div></div>
+        <div class="card"><div class="stat-label">Gross Exposure</div><div class="stat-value">38.4%</div></div>
+        <div class="card"><div class="stat-label">Open P&amp;L</div><div class="stat-value pct-up">+$1,284.20</div></div>
+      </div>
+
+      <h2>Open Positions <span class="muted small" style="font-weight:normal;">· stream <span class="badge green">live</span> · last tick 1s ago</span></h2>
+      <div class="card tight">
+        <table>
+          <thead><tr><th>Symbol</th><th>Side</th><th class="right">Qty</th><th class="right">Avg Entry</th><th class="right">Last</th><th class="right">Unrealized</th><th>Stop</th><th>Target</th><th class="right">Action</th></tr></thead>
+          <tbody>
+            <tr><td class="mono">AAPL</td><td><span class="badge green">LONG</span></td><td class="right">100</td><td class="right">182.40</td><td class="right">184.20</td><td class="right pct-up">+$180.00</td><td class="muted">180.10 (sl)</td><td class="muted">187.40 (tp)</td><td class="right"><button class="btn sm">Close</button></td></tr>
+            <tr><td class="mono">MSFT</td><td><span class="badge green">LONG</span></td><td class="right">50</td><td class="right">412.85</td><td class="right">416.10</td><td class="right pct-up">+$162.50</td><td class="muted">408.40 (sl)</td><td class="muted">421.20 (tp)</td><td class="right"><button class="btn sm">Close</button></td></tr>
+            <tr><td class="mono">NVDA</td><td><span class="badge green">LONG</span></td><td class="right">25</td><td class="right">948.20</td><td class="right">962.40</td><td class="right pct-up">+$355.00</td><td class="muted">932.00 (sl)</td><td class="muted">980.50 (tp)</td><td class="right"><button class="btn sm">Close</button></td></tr>
+            <tr><td class="mono">META</td><td><span class="badge red">SHORT</span></td><td class="right">30</td><td class="right">486.40</td><td class="right">488.20</td><td class="right pct-down">-$54.00</td><td class="muted">492.30 (sl)</td><td class="muted">478.00 (tp)</td><td class="right"><button class="btn sm">Close</button></td></tr>
+            <tr><td class="mono">SPY</td><td><span class="badge green">LONG</span></td><td class="right">200</td><td class="right">514.20</td><td class="right">516.90</td><td class="right pct-up">+$540.00</td><td class="muted">512.10 (sl)</td><td class="muted">520.40 (tp)</td><td class="right"><button class="btn sm">Close</button></td></tr>
+            <tr><td class="mono">QQQ</td><td><span class="badge green">LONG</span></td><td class="right">50</td><td class="right">442.10</td><td class="right">443.20</td><td class="right pct-up">+$55.00</td><td class="muted">439.00 (sl)</td><td class="muted">448.00 (tp)</td><td class="right"><button class="btn sm">Close</button></td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="btn-row" style="margin-top:10px;"><button class="btn danger">Close All Positions</button><button class="btn">Refresh Broker Sync</button></div>
+
+      <h2>Open Orders</h2>
+      <div class="card tight">
+        <table>
+          <thead><tr><th>Time</th><th>Symbol</th><th>Side</th><th>Type</th><th>Qty</th><th>Price</th><th>Intent</th><th>Status</th></tr></thead>
+          <tbody>
+            <tr><td class="mono muted">15:42:18</td><td class="mono">AAPL</td><td>SELL</td><td>STOP</td><td>100</td><td>180.10</td><td><span class="badge red">sl</span></td><td><span class="badge yellow">held</span></td></tr>
+            <tr><td class="mono muted">15:42:18</td><td class="mono">AAPL</td><td>SELL</td><td>LIMIT</td><td>100</td><td>187.40</td><td><span class="badge green">tp</span></td><td><span class="badge yellow">held</span></td></tr>
+            <tr><td class="mono muted">15:38:02</td><td class="mono">TSLA</td><td>BUY</td><td>STOP-LIMIT</td><td>40</td><td>178.50</td><td><span class="badge blue">open</span></td><td><span class="badge green">working</span></td></tr>
+            <tr><td class="mono muted">15:21:06</td><td class="mono">META</td><td>BUY</td><td>STOP</td><td>30</td><td>492.30</td><td><span class="badge red">sl</span></td><td><span class="badge yellow">held</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ============================ OPERATIONS CENTER ============================ -->
+    <section class="page" id="page-operations">
+      <h1>Operations Center</h1>
+      <p class="page-sub">Deployment runtime, kill-switch event history, and operator-grade safety controls.</p>
+
+      <div class="grid grid-3">
+        <div class="card"><div class="stat-label">Active Deployments</div><div class="stat-value">3</div><div class="stat-sub muted">1 paused · 0 blocked</div></div>
+        <div class="card"><div class="stat-label">Today's Cancellation Sweeps</div><div class="stat-value">2</div><div class="stat-sub muted">14 canceled · 6 protective preserved</div></div>
+        <div class="card"><div class="stat-label">Kill State Audit</div><div class="stat-value" style="font-size:14px;"><span class="badge green">Survives restart</span></div><div class="stat-sub muted">last verified 18:55 today</div></div>
+      </div>
+
+      <h2>Deployments</h2>
+      <div class="card tight">
+        <table>
+          <thead><tr><th>Program</th><th>Account</th><th>Status</th><th>Started</th><th>Last Signal</th><th class="right">Actions</th></tr></thead>
+          <tbody>
+            <tr><td>Momentum Breakout v3</td><td>Alpaca-Paper-01</td><td><span class="badge green">Running</span></td><td class="muted">Apr 22 09:30 ET</td><td class="muted">2m ago</td>
+              <td class="right"><button class="btn sm">Pause</button> <button class="btn sm danger">Stop</button></td></tr>
+            <tr><td>Mean Reversion ETF</td><td>Alpaca-Paper-01</td><td><span class="badge green">Running</span></td><td class="muted">Apr 22 09:30 ET</td><td class="muted">8m ago</td>
+              <td class="right"><button class="btn sm">Pause</button> <button class="btn sm danger">Stop</button></td></tr>
+            <tr><td>Gap &amp; Go Small Caps</td><td>Alpaca-Paper-02</td><td><span class="badge yellow">Paused</span></td><td class="muted">Apr 23 09:30 ET</td><td class="muted">1h 22m ago</td>
+              <td class="right"><button class="btn sm primary">Resume</button> <button class="btn sm danger">Stop</button></td></tr>
+            <tr><td>VWAP Reversion 5m</td><td>Alpaca-Paper-01</td><td><span class="badge green">Running</span></td><td class="muted">Apr 24 09:30 ET</td><td class="muted">just now</td>
+              <td class="right"><button class="btn sm">Pause</button> <button class="btn sm danger">Stop</button></td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h2>Kill Switch &amp; Cancellation Event Log</h2>
+      <div class="card tight">
+        <table>
+          <thead><tr><th>Time</th><th>Action</th><th>Scope</th><th>Initiated By</th><th>Canceled</th><th>Protected</th><th>Unknown</th><th>Result</th></tr></thead>
+          <tbody>
+            <tr><td class="mono muted">2026-04-24 15:11:02</td><td><span class="badge yellow">deployment_pause</span></td><td>Gap &amp; Go (paper-02)</td><td>operator</td><td>4</td><td>2</td><td>0</td><td><span class="badge green">success</span></td></tr>
+            <tr><td class="mono muted">2026-04-24 11:02:33</td><td><span class="badge orange">account_pause</span></td><td>Alpaca-Paper-02</td><td>operator</td><td>2</td><td>4</td><td>0</td><td><span class="badge green">success</span></td></tr>
+            <tr><td class="mono muted">2026-04-23 16:00:00</td><td><span class="badge red">global_kill</span></td><td>global</td><td>scheduler</td><td>8</td><td>0</td><td>0</td><td><span class="badge green">success</span></td></tr>
+            <tr><td class="mono muted">2026-04-23 15:58:14</td><td><span class="badge purple">flatten</span></td><td>Alpaca-Paper-02</td><td>operator</td><td>4</td><td>0</td><td>1</td><td><span class="badge orange">unknown_orders_flagged</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="banner danger" style="margin-top:14px; display:none;" id="kill-banner">
+        <strong>GLOBAL STOP ACTIVE</strong> — new opens are blocked across all accounts. Existing positions remain managed. Protective exits (sl, tp, close, scale) preserved.
+      </div>
+    </section>
+
+    <!-- ============================ BROKER ACCOUNTS ============================ -->
+    <section class="page" id="page-brokers">
+      <h1>Broker Accounts</h1>
+      <p class="page-sub">Credentials, balances, restrictions. Paper / Live mode is always shown explicitly.</p>
+
+      <div class="btn-row" style="margin-bottom:12px;">
+        <button class="btn primary">+ Add Account</button>
+      </div>
+
+      <div class="grid grid-2">
+        <div class="card">
+          <div style="display:flex; justify-content:space-between;">
+            <div>
+              <h3 style="margin:0; font-size:13px; text-transform:none; letter-spacing:0; color:var(--text);">Alpaca-Paper-01</h3>
+              <div class="muted small">Alpaca · paper · created 2026-03-04</div>
+            </div>
+            <span class="mode-pill mode-paper">PAPER</span>
+          </div>
+          <div class="grid grid-2" style="margin-top:12px; gap:8px;">
+            <div><div class="stat-label">Equity</div><div class="stat-value" style="font-size:18px;">$104,328.47</div></div>
+            <div><div class="stat-label">Buying Power</div><div class="stat-value" style="font-size:18px;">$208,656.94</div></div>
+            <div><div class="stat-label">Day-Trade BP</div><div class="stat-value" style="font-size:18px;">$204,221.10</div></div>
+            <div><div class="stat-label">PDT</div><div class="stat-value" style="font-size:18px;">No</div></div>
+          </div>
+          <div class="muted small" style="margin-top:8px;">Last sync: 3s ago · status <span class="badge green">healthy</span></div>
+          <div class="btn-row" style="margin-top:10px;">
+            <button class="btn sm">Open</button>
+            <button class="btn sm">Refresh</button>
+            <button class="btn sm danger">Halt</button>
+            <button class="btn sm danger">Flatten</button>
+            <button class="btn sm danger">Emergency Exit</button>
+          </div>
+        </div>
+
+        <div class="card">
+          <div style="display:flex; justify-content:space-between;">
+            <div>
+              <h3 style="margin:0; font-size:13px; text-transform:none; letter-spacing:0; color:var(--text);">Alpaca-Paper-02</h3>
+              <div class="muted small">Alpaca · paper · created 2026-03-19</div>
+            </div>
+            <span class="mode-pill mode-paper">PAPER</span>
+          </div>
+          <div class="grid grid-2" style="margin-top:12px; gap:8px;">
+            <div><div class="stat-label">Equity</div><div class="stat-value" style="font-size:18px;">$48,920.10</div></div>
+            <div><div class="stat-label">Buying Power</div><div class="stat-value" style="font-size:18px;">$97,840.20</div></div>
+            <div><div class="stat-label">Day-Trade BP</div><div class="stat-value" style="font-size:18px;">$92,140.00</div></div>
+            <div><div class="stat-label">PDT</div><div class="stat-value" style="font-size:18px;">No</div></div>
+          </div>
+          <div class="muted small" style="margin-top:8px;"><span class="badge orange">Sync stale</span> last sync 4m 12s ago</div>
+          <div class="btn-row" style="margin-top:10px;">
+            <button class="btn sm">Open</button>
+            <button class="btn sm primary">Force Refresh</button>
+            <button class="btn sm danger">Halt</button>
+          </div>
+        </div>
+
+        <div class="card">
+          <div style="display:flex; justify-content:space-between;">
+            <div>
+              <h3 style="margin:0; font-size:13px; text-transform:none; letter-spacing:0; color:var(--text);">Alpaca-Live-Main</h3>
+              <div class="muted small">Alpaca · live · created 2026-04-01</div>
+            </div>
+            <span class="mode-pill mode-live">LIVE</span>
+          </div>
+          <div class="grid grid-2" style="margin-top:12px; gap:8px;">
+            <div><div class="stat-label">Equity</div><div class="stat-value" style="font-size:18px;">$25,400.00</div></div>
+            <div><div class="stat-label">Buying Power</div><div class="stat-value" style="font-size:18px;">$50,800.00</div></div>
+            <div><div class="stat-label">Day-Trade BP</div><div class="stat-value" style="font-size:18px;">$48,200.00</div></div>
+            <div><div class="stat-label">PDT</div><div class="stat-value" style="font-size:18px;"><span class="badge yellow">Yes</span></div></div>
+          </div>
+          <div class="muted small" style="margin-top:8px;">Last sync: 1s ago · status <span class="badge green">healthy</span> · 0 active deployments</div>
+          <div class="btn-row" style="margin-top:10px;">
+            <button class="btn sm">Open</button>
+            <button class="btn sm">Refresh</button>
+            <button class="btn sm danger">Halt</button>
+            <button class="btn sm danger">Flatten</button>
+            <button class="btn sm danger">Emergency Exit</button>
+          </div>
+        </div>
+
+        <div class="card" style="border-style:dashed;">
+          <h3 style="margin-top:0;">Add new Alpaca account</h3>
+          <div class="form-row cols-2">
+            <div><label>Account name</label><input type="text" placeholder="e.g. Alpaca-Live-2"></div>
+            <div><label>Mode</label><select><option>Paper</option><option>Live</option></select></div>
+          </div>
+          <div class="form-row cols-2">
+            <div><label>API Key</label><input type="text" placeholder="PKxxxx (write-once)"></div>
+            <div><label>Secret</label><input type="password" placeholder="••••••••"></div>
+          </div>
+          <div class="btn-row"><button class="btn primary">Validate &amp; Add</button></div>
+          <div class="help-tip">Credentials stored encrypted. Validation hits the broker; results shown before saving.</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================ SERVICES ============================ -->
+    <section class="page" id="page-services">
+      <h1>Services</h1>
+      <p class="page-sub">Market Data and AI providers. Capabilities and defaults are inspectable per provider.</p>
+
+      <div class="tabs">
+        <div class="tab active">Market Data</div>
+        <div class="tab">AI Services</div>
+      </div>
+
+      <div class="card tight">
+        <table>
+          <thead><tr><th>Provider</th><th>Mode</th><th>Capabilities</th><th>Default</th><th>Validated</th><th class="right">Actions</th></tr></thead>
+          <tbody>
+            <tr>
+              <td><strong>Alpaca</strong></td><td><span class="badge blue">paper</span></td>
+              <td><span class="feature-tag">historical-bars</span><span class="feature-tag">stream-trades</span><span class="feature-tag">stream-bars</span><span class="feature-tag">news</span></td>
+              <td><span class="badge green">YES</span></td>
+              <td class="muted">3s ago · OK</td>
+              <td class="right"><button class="btn sm">Edit</button></td>
+            </tr>
+            <tr>
+              <td><strong>Alpaca</strong></td><td><span class="badge red">live</span></td>
+              <td><span class="feature-tag">historical-bars</span><span class="feature-tag">stream-trades</span><span class="feature-tag">stream-bars</span><span class="feature-tag">news</span></td>
+              <td>—</td>
+              <td class="muted">1s ago · OK</td>
+              <td class="right"><button class="btn sm">Edit</button> <button class="btn sm">Set Default</button></td>
+            </tr>
+            <tr>
+              <td><strong>yFinance</strong></td><td><span class="badge gray">historical-only</span></td>
+              <td><span class="feature-tag">historical-bars (1d+)</span></td>
+              <td>—</td>
+              <td class="muted">2h ago · OK</td>
+              <td class="right"><button class="btn sm">Edit</button></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="banner info" style="margin-top:14px;">
+        <strong>Auto-provider</strong> picks based on capability. yFinance can't stream, so Auto chose <strong>Alpaca paper</strong> for the 5m chart.
+      </div>
+
+      <h2>AI Services</h2>
+      <div class="card tight">
+        <table>
+          <thead><tr><th>Provider</th><th>Model</th><th>Capabilities</th><th>Default</th><th class="right">Actions</th></tr></thead>
+          <tbody>
+            <tr><td>Anthropic</td><td>claude-opus-4-7</td><td><span class="feature-tag">strategy-suggest</span><span class="feature-tag">condition-builder</span></td><td><span class="badge green">YES</span></td><td class="right"><button class="btn sm">Edit</button></td></tr>
+            <tr><td>OpenAI</td><td>gpt-4o-mini</td><td><span class="feature-tag">summaries</span></td><td>—</td><td class="right"><button class="btn sm">Edit</button></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ============================ FEATURE CATALOG ============================ -->
+    <section class="page" id="page-features">
+      <h1>Feature Catalog</h1>
+      <p class="page-sub">The vocabulary every Strategy may consume. Every feature lists timeframe, scope, and warm-up.</p>
+
+      <div class="card">
+        <div class="feature-cat">
+          <div class="feature-cat-title">Core Technicals</div>
+          <span class="feature-tag">ema_20 <span class="tf">[5m,1h,1d]</span></span>
+          <span class="feature-tag">ema_50 <span class="tf">[5m,1h,1d]</span></span>
+          <span class="feature-tag">sma_10 <span class="tf">[1d]</span></span>
+          <span class="feature-tag">sma_200 <span class="tf">[1d,1w]</span></span>
+          <span class="feature-tag">rsi_14 <span class="tf">[5m,1h,1d]</span></span>
+          <span class="feature-tag">atr_14 <span class="tf">[5m,1h,1d]</span></span>
+          <span class="feature-tag">macd <span class="tf">[1h,1d]</span></span>
+          <span class="feature-tag">macd_signal</span>
+          <span class="feature-tag">macd_hist</span>
+        </div>
+        <div class="feature-cat">
+          <div class="feature-cat-title">Momentum / Oscillators</div>
+          <span class="feature-tag">stoch_k</span>
+          <span class="feature-tag">stoch_d</span>
+          <span class="feature-tag">adx</span>
+          <span class="feature-tag">plus_di</span>
+          <span class="feature-tag">minus_di</span>
+          <span class="feature-tag">ibs</span>
+          <span class="feature-tag">zscore_10</span>
+          <span class="feature-tag">zscore_20</span>
+        </div>
+        <div class="feature-cat">
+          <div class="feature-cat-title">Volume / Price Context</div>
+          <span class="feature-tag">vwap_session</span>
+          <span class="feature-tag">vwap_anchored</span>
+          <span class="feature-tag">volume_sma_20</span>
+          <span class="feature-tag">open_gap_pct</span>
+          <span class="feature-tag">relative_volume</span>
+        </div>
+        <div class="feature-cat">
+          <div class="feature-cat-title">Bands &amp; Channels</div>
+          <span class="feature-tag">bb_upper</span>
+          <span class="feature-tag">bb_mid</span>
+          <span class="feature-tag">bb_lower</span>
+          <span class="feature-tag">dc_upper</span>
+          <span class="feature-tag">dc_lower</span>
+          <span class="feature-tag">pp / r1 / r2 / r3</span>
+          <span class="feature-tag">s1 / s2 / s3</span>
+        </div>
+        <div class="feature-cat">
+          <div class="feature-cat-title">Session / Calendar</div>
+          <span class="feature-tag">opening_range_high</span>
+          <span class="feature-tag">opening_range_low</span>
+          <span class="feature-tag">prev_day_high</span>
+          <span class="feature-tag">prev_day_low</span>
+          <span class="feature-tag">prev_day_close</span>
+          <span class="feature-tag">prev_week_high</span>
+          <span class="feature-tag">prev_week_low</span>
+          <span class="feature-tag">session_state <span class="tf">[premarket/regular/ah/closed]</span></span>
+        </div>
+        <div class="feature-cat">
+          <div class="feature-cat-title">Derived Context</div>
+          <span class="feature-tag">swing_high</span>
+          <span class="feature-tag">swing_low</span>
+          <span class="feature-tag">high_N</span>
+          <span class="feature-tag">low_N</span>
+          <span class="feature-tag">atr_avg_N</span>
+          <span class="feature-tag">rolling_volatility <span class="tf">planned</span></span>
+        </div>
+        <div class="feature-cat">
+          <div class="feature-cat-title">Portfolio / Governor</div>
+          <span class="feature-tag">portfolio_gross_exposure_pct</span>
+          <span class="feature-tag">portfolio_open_risk_pct</span>
+          <span class="feature-tag">portfolio_symbol_concentration_pct</span>
+          <span class="feature-tag">portfolio_pause_active</span>
+          <span class="feature-tag">portfolio_global_kill_active</span>
+          <span class="feature-tag">portfolio_broker_sync_stale</span>
+        </div>
+      </div>
+
+      <h2>Feature Engine Build Progress</h2>
+      <div class="card">
+        <div class="slice done"><span class="slice-num">SLICE 0</span><span class="slice-title">Vocabulary &amp; contract lock</span><div class="slice-bar"><span style="width:100%;"></span></div><span class="badge green">Done</span></div>
+        <div class="slice done"><span class="slice-num">SLICE 1</span><span class="slice-title">Build plan &amp; UI progress</span><div class="slice-bar"><span style="width:100%;"></span></div><span class="badge green">Done</span></div>
+        <div class="slice done"><span class="slice-num">SLICE 2</span><span class="slice-title">Registry &amp; planner refactor</span><div class="slice-bar"><span style="width:100%;"></span></div><span class="badge green">Done</span></div>
+        <div class="slice done"><span class="slice-num">SLICE 3</span><span class="slice-title">Feature registry &amp; canonical keys</span><div class="slice-bar"><span style="width:100%;"></span></div><span class="badge green">Done</span></div>
+        <div class="slice done"><span class="slice-num">SLICE 4</span><span class="slice-title">Session / calendar / safe symbol set</span><div class="slice-bar"><span style="width:100%;"></span></div><span class="badge green">Done</span></div>
+        <div class="slice done"><span class="slice-num">SLICE 5</span><span class="slice-title">Feature cache &amp; incremental runtime</span><div class="slice-bar"><span style="width:100%;"></span></div><span class="badge green">Done</span></div>
+        <div class="slice done"><span class="slice-num">SLICE 6</span><span class="slice-title">Multi-timeframe alignment layer</span><div class="slice-bar"><span style="width:100%;"></span></div><span class="badge green">Done</span></div>
+        <div class="slice done"><span class="slice-num">SLICE 7</span><span class="slice-title">Portfolio Governor feature layer</span><div class="slice-bar"><span style="width:100%;"></span></div><span class="badge green">Done</span></div>
+        <div class="slice"><span class="slice-num">SLICE 8</span><span class="slice-title">AI &amp; builder auto-sync</span><div class="slice-bar"><span style="width:35%;"></span></div><span class="badge yellow">In progress</span></div>
+        <div class="slice"><span class="slice-num">SLICE 9</span><span class="slice-title">Explainability &amp; operator diagnostics</span><div class="slice-bar"><span style="width:5%;"></span></div><span class="badge gray">Queued</span></div>
+      </div>
+    </section>
+
+    <!-- ============================ LOGS & ALERTS ============================ -->
+    <section class="page" id="page-logs">
+      <h1>Logs &amp; Alerts</h1>
+      <p class="page-sub">Risk events, signal stream, fills, and feature engine diagnostics.</p>
+
+      <div class="tabs">
+        <div class="tab active">Risk &amp; Control</div>
+        <div class="tab">Signal Stream</div>
+        <div class="tab">Broker Fills</div>
+        <div class="tab">Feature Engine</div>
+      </div>
+
+      <div class="card tight">
+        <table>
+          <thead><tr><th>Time</th><th>Severity</th><th>Event</th><th>Scope</th><th>Detail</th></tr></thead>
+          <tbody>
+            <tr><td class="mono muted">15:42:18</td><td><span class="badge green">info</span></td><td>portfolio_governor_approved</td><td>AAPL</td><td class="muted">within all caps</td></tr>
+            <tr><td class="mono muted">15:38:02</td><td><span class="badge yellow">warn</span></td><td>portfolio_governor_rejected</td><td>SPY</td><td class="muted">portfolio_symbol_concentration_pct &gt; 30 cap</td></tr>
+            <tr><td class="mono muted">15:11:02</td><td><span class="badge orange">warn</span></td><td>deployment_paused</td><td>Gap &amp; Go (paper-02)</td><td class="muted">operator action · 4 canceled · 2 protected</td></tr>
+            <tr><td class="mono muted">14:58:40</td><td><span class="badge red">error</span></td><td>broker_sync_stale</td><td>Alpaca-Paper-02</td><td class="muted">last sync &gt; 4m</td></tr>
+            <tr><td class="mono muted">14:21:40</td><td><span class="badge yellow">warn</span></td><td>risk_profile_blocked</td><td>Aggressive</td><td class="muted">daily-loss lockout reached -3.0%</td></tr>
+            <tr><td class="mono muted">14:21:40</td><td><span class="badge red">error</span></td><td>strategy_controls_blocked</td><td>Day-Trade Standard</td><td class="muted">earnings_blackout for AAPL on 2026-05-02</td></tr>
+            <tr><td class="mono muted">11:02:33</td><td><span class="badge orange">warn</span></td><td>account_paused</td><td>Alpaca-Paper-02</td><td class="muted">operator action · 2 canceled · 4 protected</td></tr>
+            <tr><td class="mono muted">09:30:01</td><td><span class="badge green">info</span></td><td>deployment_started</td><td>Momentum v3</td><td class="muted">recovered_ready · 0 reconciliation issues</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ============================ JOURNEY HUB ============================ -->
+    <section class="page" id="page-journeys">
+      <h1>Journey Validation Hub</h1>
+      <p class="page-sub">All 150 user journeys grouped by domain. Filter by status, priority, domain.</p>
+
+      <div class="btn-row" style="margin-bottom:12px;">
+        <input type="text" placeholder="Filter…" style="max-width:240px;">
+        <select style="max-width:170px;"><option>All priorities</option><option>P0 only</option><option>P1 only</option><option>P2 only</option></select>
+        <select style="max-width:170px;"><option>All statuses</option><option>✅ Done</option><option>🟡 In progress</option><option>⚪ Pending</option></select>
+      </div>
+
+      <details class="journey-domain" open>
+        <summary>Onboarding &amp; Setup · Journeys 1–10 <span class="muted small" style="float:right;">9 done · 1 pending</span></summary>
+        <div class="journey-list">
+          <div class="journey-item"><span class="j-num">001</span><span class="j-title">First-time platform setup</span><span class="j-pri pri-p0">P0</span><span class="badge green">Done</span></div>
+          <div class="journey-item"><span class="j-num">002</span><span class="j-title">Adding a live Alpaca account</span><span class="j-pri pri-p0">P0</span><span class="badge green">Done</span></div>
+          <div class="journey-item"><span class="j-num">003</span><span class="j-title">Connecting an AI service</span><span class="j-pri pri-p1">P1</span><span class="badge green">Done</span></div>
+          <div class="journey-item"><span class="j-num">004</span><span class="j-title">Configuring a second Alpaca data service</span><span class="j-pri pri-p1">P1</span><span class="badge green">Done</span></div>
+          <div class="journey-item"><span class="j-num">005</span><span class="j-title">Backing up the database</span><span class="j-pri pri-p0">P0</span><span class="badge green">Done</span></div>
+          <div class="journey-item"><span class="j-num">006</span><span class="j-title">Restoring from a backup</span><span class="j-pri pri-p0">P0</span><span class="badge yellow">Partial</span></div>
+          <div class="journey-item"><span class="j-num">007</span><span class="j-title">Reviewing system health via logs and alerts</span><span class="j-pri pri-p1">P1</span><span class="badge green">Done</span></div>
+          <div class="journey-item"><span class="j-num">008</span><span class="j-title">Setting up event calendar awareness</span><span class="j-pri pri-p2">P2</span><span class="badge green">Done</span></div>
+          <div class="journey-item"><span class="j-num">009</span><span class="j-title">Verifying menu names &amp; help on first login</span><span class="j-pri pri-p2">P2</span><span class="badge green">Done</span></div>
+          <div class="journey-item"><span class="j-num">010</span><span class="j-title">Verifying above-the-fold first impression</span><span class="j-pri pri-p0">P0</span><span class="badge green">Done</span></div>
+        </div>
+      </details>
+
+      <details class="journey-domain">
+        <summary>Watchlist &amp; Universe · Journeys 11–20</summary>
+        <div class="journey-list">
+          <div class="journey-item"><span class="j-num">011</span><span class="j-title">Creating a manual watchlist</span><span class="j-pri pri-p0">P0</span><span class="badge green">Done</span></div>
+          <div class="journey-item"><span class="j-num">012</span><span class="j-title">Refreshing watchlist membership</span><span class="j-pri pri-p1">P1</span><span class="badge green">Done</span></div>
+          <div class="journey-item"><span class="j-num">013</span><span class="j-title">Promoting candidate to active</span><span class="j-pri pri-p1">P1</span><span class="badge green">Done</span></div>
+          <div class="journey-item"><span class="j-num">014</span><span class="j-title">Suspending a symbol after a bad event</span><span class="j-pri pri-p1">P1</span><span class="badge green">Done</span></div>
+          <div class="journey-item"><span class="j-num">015</span><span class="j-title">Deleting a stale watchlist</span><span class="j-pri pri-p2">P2</span><span class="badge green">Done</span></div>
+          <div class="journey-item"><span class="j-num">016</span><span class="j-title">Combining watchlists into a tradable universe</span><span class="j-pri pri-p1">P1</span><span class="badge yellow">Partial</span></div>
+          <div class="journey-item"><span class="j-num">017</span><span class="j-title">Reviewing resolved watchlist states over time</span><span class="j-pri pri-p2">P2</span><span class="badge gray">Pending</span></div>
+          <div class="journey-item"><span class="j-num">018</span><span class="j-title">Verifying watchlist dropdown usability</span><span class="j-pri pri-p2">P2</span><span class="badge green">Done</span></div>
+          <div class="journey-item"><span class="j-num">019</span><span class="j-title">Handling empty watchlist results</span><span class="j-pri pri-p1">P1</span><span class="badge green">Done</span></div>
+          <div class="journey-item"><span class="j-num">020</span><span class="j-title">Validating live-feed universe refresh timing</span><span class="j-pri pri-p1">P1</span><span class="badge green">Done</span></div>
+        </div>
+      </details>
+
+      <details class="journey-domain">
+        <summary>Strategy Authoring · Journeys 21–30</summary>
+        <div class="journey-list">
+          <div class="journey-item"><span class="j-num">021</span><span class="j-title">Building a momentum breakout strategy</span><span class="j-pri pri-p0">P0</span><span class="badge green">Done</span></div>
+          <div class="journey-item"><span class="j-num">022</span><span class="j-title">Building a mean reversion strategy</span><span class="j-pri pri-p1">P1</span><span class="badge green">Done</span></div>
+          <div class="journey-item"><span class="j-num">023</span><span class="j-title">Using the condition builder for complex logic</span><span class="j-pri pri-p1">P1</span><span class="badge yellow">Partial</span></div>
+          <div class="journey-item"><span class="j-num">024</span><span class="j-title">Setting ATR-based stop candidates</span><span class="j-pri pri-p0">P0</span><span class="badge green">Done</span></div>
+          <div class="journey-item"><span class="j-num">025</span><span class="j-title">Defining target candidates and staged exits</span><span class="j-pri pri-p1">P1</span><span class="badge green">Done</span></div>
+          <div class="journey-item"><span class="j-num">026</span><span class="j-title">Creating a new strategy version</span><span class="j-pri pri-p1">P1</span><span class="badge green">Done</span></div>
+          <div class="journey-item"><span class="j-num">027</span><span class="j-title">Comparing two strategy versions</span><span class="j-pri pri-p2">P2</span><span class="badge green">Done</span></div>
+          <div class="journey-item"><span class="j-num">028</span><span class="j-title">Exporting a strategy</span><span class="j-pri pri-p2">P2</span><span class="badge green">Done</span></div>
+          <div class="journey-item"><span class="j-num">029</span><span class="j-title">Validating strategy schema boundaries</span><span class="j-pri pri-p0">P0</span><span class="badge green">Done</span></div>
+          <div class="journey-item"><span class="j-num">030</span><span class="j-title">Reviewing strategy readability above the fold</span><span class="j-pri pri-p2">P2</span><span class="badge green">Done</span></div>
+        </div>
+      </details>
+
+      <details class="journey-domain">
+        <summary>Strategy Controls · Journeys 31–40</summary>
+        <div class="journey-list">
+          <div class="journey-item"><span class="j-num">031</span><span class="j-title">Creating day-trading controls</span><span class="j-pri pri-p0">P0</span><span class="badge green">Done</span></div>
+          <div class="journey-item"><span class="j-num">032</span><span class="j-title">Configuring session windows</span><span class="j-pri pri-p0">P0</span><span class="badge green">Done</span></div>
+          <div class="journey-item"><span class="j-num">033</span><span class="j-title">Configuring cooldown logic</span><span class="j-pri pri-p1">P1</span><span class="badge green">Done</span></div>
+          <div class="journey-item"><span class="j-num">034</span><span class="j-title">Configuring max trades per session</span><span class="j-pri pri-p1">P1</span><span class="badge green">Done</span></div>
+          <div class="journey-item"><span class="j-num">035</span><span class="j-title">Setting earnings blackout</span><span class="j-pri pri-p1">P1</span><span class="badge green">Done</span></div>
+          <div class="journey-item"><span class="j-num">036</span><span class="j-title">Configuring regime filters</span><span class="j-pri pri-p2">P2</span><span class="badge yellow">Partial</span></div>
+          <div class="journey-item"><span class="j-num">037</span><span class="j-title">Handling market-open and near-close restrictions</span><span class="j-pri pri-p1">P1</span><span class="badge green">Done</span></div>
+          <div class="journey-item"><span class="j-num">038</span><span class="j-title">Validating holiday and market-hours behavior</span><span class="j-pri pri-p1">P1</span><span class="badge green">Done</span></div>
+          <div class="journey-item"><span class="j-num">039</span><span class="j-title">Reviewing controls help text and dropdowns</span><span class="j-pri pri-p2">P2</span><span class="badge green">Done</span></div>
+          <div class="journey-item"><span class="j-num">040</span><span class="j-title">Cloning controls for another duration mode</span><span class="j-pri pri-p2">P2</span><span class="badge green">Done</span></div>
+        </div>
+      </details>
+
+      <details class="journey-domain">
+        <summary>Risk Profiles · Journeys 41–50</summary>
+        <div class="journey-list">
+          <div class="journey-item"><span class="j-num">041</span><span class="j-title">Creating a conservative risk profile</span><span class="j-pri pri-p0">P0</span><span class="badge green">Done</span></div>
+          <div class="journey-item"><span class="j-num">042</span><span class="j-title">Creating an aggressive sub-account profile</span><span class="j-pri pri-p1">P1</span><span class="badge green">Done</span></div>
+          <div class="journey-item"><span class="j-num">043</span><span class="j-title">Cloning and adjusting a risk profile</span><span class="j-pri pri-p2">P2</span><span class="badge green">Done</span></div>
+          <div class="journey-item"><span class="j-num">044</span><span class="j-title">Reviewing linked programs and accounts</span><span class="j-pri pri-p1">P1</span><span class="badge green">Done</span></div>
+          <div class="journey-item"><span class="j-num">045</span><span class="j-title">Generating a risk profile from a backtest</span><span class="j-pri pri-p2">P2</span><span class="badge gray">Pending</span></div>
+          <div class="journey-item"><span class="j-num">046</span><span class="j-title">Validating max daily loss behavior</span><span class="j-pri pri-p0">P0</span><span class="badge green">Done</span></div>
+          <div class="journey-item"><span class="j-num">047</span><span class="j-title">Validating drawdown lockout behavior</span><span class="j-pri pri-p0">P0</span><span class="badge green">Done</span></div>
+          <div class="journey-item"><span class="j-num">048</span><span class="j-title">Verifying fallback stop policy ownership</span><span class="j-pri pri-p1">P1</span><span class="badge green">Done</span></div>
+          <div class="journey-item"><span class="j-num">049</span><span class="j-title">Reviewing above-the-fold risk numbers</span><span class="j-pri pri-p1">P1</span><span class="badge green">Done</span></div>
+          <div class="journey-item"><span class="j-num">050</span><span class="j-title">Verifying risk-profile dropdown and help text</span><span class="j-pri pri-p2">P2</span><span class="badge green">Done</span></div>
+        </div>
+      </details>
+
+      <details class="journey-domain">
+        <summary>Execution Styles · Journeys 51–60</summary>
+        <div class="journey-list">
+          <div class="journey-item"><span class="j-num">051</span><span class="j-title">Creating a bracket execution style</span><span class="j-pri pri-p0">P0</span><span class="badge green">Done</span></div>
+          <div class="journey-item"><span class="j-num">052</span><span class="j-title">Creating a trailing-stop execution style</span><span class="j-pri pri-p1">P1</span><span class="badge green">Done</span></div>
+          <div class="journey-item"><span class="j-num">053</span><span class="j-title">Configuring time-in-force and cancel rules</span><span class="j-pri pri-p1">P1</span><span class="badge green">Done</span></div>
+          <div class="journey-item"><span class="j-num">054</span><span class="j-title">Configuring stop-limit breakout entry</span><span class="j-pri pri-p1">P1</span><span class="badge green">Done</span></div>
+          <div class="journey-item"><span class="j-num">055</span><span class="j-title">Configuring scale-out tiers</span><span class="j-pri pri-p1">P1</span><span class="badge green">Done</span></div>
+          <div class="journey-item"><span class="j-num">056</span><span class="j-title">Cloning an execution style</span><span class="j-pri pri-p2">P2</span><span class="badge green">Done</span></div>
+          <div class="journey-item"><span class="j-num">057</span><span class="j-title">Reviewing execution-style readability</span><span class="j-pri pri-p2">P2</span><span class="badge green">Done</span></div>
+          <div class="journey-item"><span class="j-num">058</span><span class="j-title">Validating partial-fill behavior assumptions</span><span class="j-pri pri-p0">P0</span><span class="badge yellow">Partial</span></div>
+          <div class="journey-item"><span class="j-num">059</span><span class="j-title">Verifying cancel-on-pause behavior ownership</span><span class="j-pri pri-p0">P0</span><span class="badge green">Done</span></div>
+          <div class="journey-item"><span class="j-num">060</span><span class="j-title">Verifying help text for order-expression choices</span><span class="j-pri pri-p2">P2</span><span class="badge green">Done</span></div>
+        </div>
+      </details>
+
+      <details class="journey-domain">
+        <summary>Program Composition · Journeys 61–70</summary>
+        <div class="journey-list">
+          <div class="journey-item"><span class="j-num">061</span><span class="j-title">Composing a complete program</span><span class="j-pri pri-p0">P0</span><span class="badge green">Done</span></div>
+          <div class="journey-item"><span class="j-num">062</span><span class="j-title">Editing program component bindings</span><span class="j-pri pri-p1">P1</span><span class="badge green">Done</span></div>
+          <div class="journey-item"><span class="j-num">063</span><span class="j-title">Freezing a program for paper deployment</span><span class="j-pri pri-p0">P0</span><span class="badge green">Done</span></div>
+          <div class="journey-item"><span class="j-num">064</span><span class="j-title">Allocating a program to a broker account</span><span class="j-pri pri-p0">P0</span><span class="badge green">Done</span></div>
+          <div class="journey-item"><span class="j-num">065</span><span class="j-title">Reviewing promotion eligibility</span><span class="j-pri pri-p0">P0</span><span class="badge green">Done</span></div>
+          <div class="journey-item"><span class="j-num">066</span><span class="j-title">Executing paper-to-live promotion</span><span class="j-pri pri-p0">P0</span><span class="badge green">Done</span></div>
+          <div class="journey-item"><span class="j-num">067</span><span class="j-title">Deprecating an old program</span><span class="j-pri pri-p2">P2</span><span class="badge green">Done</span></div>
+          <div class="journey-item"><span class="j-num">068</span><span class="j-title">Verifying program page above-the-fold clarity</span><span class="j-pri pri-p1">P1</span><span class="badge green">Done</span></div>
+          <div class="journey-item"><span class="j-num">069</span><span class="j-title">Verifying program start/stop safety controls</span><span class="j-pri pri-p0">P0</span><span class="badge green">Done</span></div>
+          <div class="journey-item"><span class="j-num">070</span><span class="j-title">Verifying component ownership boundaries in UX</span><span class="j-pri pri-p0">P0</span><span class="badge green">Done</span></div>
+        </div>
+      </details>
+
+      <details class="journey-domain">
+        <summary>Portfolio Governor · Journeys 71–80</summary>
+        <div class="journey-list">
+          <div class="journey-item"><span class="j-num">071</span><span class="j-title">Opening Portfolio Governor overview</span><span class="j-pri pri-p0">P0</span><span class="badge green">Done</span></div>
+          <div class="journey-item"><span class="j-num">072</span><span class="j-title">Hot-adding a program to a governed portfolio</span><span class="j-pri pri-p1">P1</span><span class="badge green">Done</span></div>
+          <div class="journey-item"><span class="j-num">073</span><span class="j-title">Reviewing portfolio overlap and collision risk</span><span class="j-pri pri-p1">P1</span><span class="badge green">Done</span></div>
+          <div class="journey-item"><span class="j-num">074</span><span class="j-title">Monitoring governor event log</span><span class="j-pri pri-p1">P1</span><span class="badge green">Done</span></div>
+          <div class="journey-item"><span class="j-num">075</span><span class="j-title">Pausing the governed portfolio in an emergency</span><span class="j-pri pri-p0">P0</span><span class="badge green">Done</span></div>
+          <div class="journey-item"><span class="j-num">076</span><span class="j-title">Resuming the governed portfolio</span><span class="j-pri pri-p0">P0</span><span class="badge green">Done</span></div>
+          <div class="journey-item"><span class="j-num">077</span><span class="j-title">Reviewing governor metrics by program</span><span class="j-pri pri-p1">P1</span><span class="badge green">Done</span></div>
+          <div class="journey-item"><span class="j-num">078</span><span class="j-title">Resolving daily-loss lockout</span><span class="j-pri pri-p0">P0</span><span class="badge green">Done</span></div>
+          <div class="journey-item"><span class="j-num">079</span><span class="j-title">Attaching a new risk profile to governed scope</span><span class="j-pri pri-p1">P1</span><span class="badge green">Done</span></div>
+          <div class="journey-item"><span class="j-num">080</span><span class="j-title">Checking correlation and concentration logic</span><span class="j-pri pri-p1">P1</span><span class="badge yellow">Partial</span></div>
+        </div>
+      </details>
+
+      <details class="journey-domain">
+        <summary>Broker Accounts &amp; Safety · Journeys 81–90</summary>
+        <div class="journey-list">
+          <div class="journey-item"><span class="j-num">081</span><span class="j-title">Reviewing broker account balances and status</span><span class="j-pri pri-p0">P0</span><span class="badge green">Done</span></div>
+          <div class="journey-item"><span class="j-num">082</span><span class="j-title">Refreshing broker account equity</span><span class="j-pri pri-p1">P1</span><span class="badge green">Done</span></div>
+          <div class="journey-item"><span class="j-num">083</span><span class="j-title">Halting a broker account</span><span class="j-pri pri-p0">P0</span><span class="badge green">Done</span></div>
+          <div class="journey-item"><span class="j-num">084</span><span class="j-title">Resuming a broker account</span><span class="j-pri pri-p0">P0</span><span class="badge green">Done</span></div>
+          <div class="journey-item"><span class="j-num">085</span><span class="j-title">Flattening a broker account</span><span class="j-pri pri-p0">P0</span><span class="badge green">Done</span></div>
+          <div class="journey-item"><span class="j-num">086</span><span class="j-title">Emergency exit on a broker account</span><span class="j-pri pri-p0">P0</span><span class="badge green">Done</span></div>
+          <div class="journey-item"><span class="j-num">087</span><span class="j-title">Reviewing open broker orders</span><span class="j-pri pri-p1">P1</span><span class="badge green">Done</span></div>
+          <div class="journey-item"><span class="j-num">088</span><span class="j-title">Reviewing PDT and broker restrictions</span><span class="j-pri pri-p1">P1</span><span class="badge green">Done</span></div>
+          <div class="journey-item"><span class="j-num">089</span><span class="j-title">Validating paper vs live wording</span><span class="j-pri pri-p0">P0</span><span class="badge green">Done</span></div>
+          <div class="journey-item"><span class="j-num">090</span><span class="j-title">Verifying account action tooltips and labels</span><span class="j-pri pri-p2">P2</span><span class="badge green">Done</span></div>
+        </div>
+      </details>
+
+      <details class="journey-domain">
+        <summary>Backtesting &amp; Validation · Journeys 91–100</summary>
+        <div class="journey-list">
+          <div class="journey-item"><span class="j-num">091</span><span class="j-title">Launching a basic backtest</span><span class="j-pri pri-p0">P0</span><span class="badge green">Done</span></div>
+          <div class="journey-item"><span class="j-num">092</span><span class="j-title">Backtesting with yFinance data</span><span class="j-pri pri-p1">P1</span><span class="badge green">Done</span></div>
+          <div class="journey-item"><span class="j-num">093</span><span class="j-title">Running walk-forward validation</span><span class="j-pri pri-p0">P0</span><span class="badge green">Done</span></div>
+          <div class="journey-item"><span class="j-num">094</span><span class="j-title">Reviewing a completed backtest in detail</span><span class="j-pri pri-p1">P1</span><span class="badge green">Done</span></div>
+          <div class="journey-item"><span class="j-num">095</span><span class="j-title">Reading monthly heatmap and diagnostics</span><span class="j-pri pri-p1">P1</span><span class="badge green">Done</span></div>
+          <div class="journey-item"><span class="j-num">096</span><span class="j-title">Deleting a failed backtest run</span><span class="j-pri pri-p2">P2</span><span class="badge green">Done</span></div>
+          <div class="journey-item"><span class="j-num">097</span><span class="j-title">Running CPCV validation</span><span class="j-pri pri-p1">P1</span><span class="badge yellow">Partial</span></div>
+          <div class="journey-item"><span class="j-num">098</span><span class="j-title">Requesting provider recommendation</span><span class="j-pri pri-p1">P1</span><span class="badge green">Done</span></div>
+          <div class="journey-item"><span class="j-num">099</span><span class="j-title">Reviewing partial result states during long runs</span><span class="j-pri pri-p1">P1</span><span class="badge green">Done</span></div>
+          <div class="journey-item"><span class="j-num">100</span><span class="j-title">Verifying no-lookahead and terminal-bar realism</span><span class="j-pri pri-p0">P0</span><span class="badge green">Done</span></div>
+        </div>
+      </details>
+
+      <details class="journey-domain">
+        <summary>Simulation &amp; Replay · Journeys 101–110</summary>
+        <div class="journey-list">
+          <div class="journey-item"><span class="j-num">101</span><span class="j-title">Creating a simulation session</span><span class="j-pri pri-p1">P1</span><span class="badge green">Done</span></div>
+          <div class="journey-item"><span class="j-num">102</span><span class="j-title">Stepping through trades manually</span><span class="j-pri pri-p1">P1</span><span class="badge green">Done</span></div>
+          <div class="journey-item"><span class="j-num">103</span><span class="j-title">Playing a simulation at speed</span><span class="j-pri pri-p2">P2</span><span class="badge green">Done</span></div>
+          <div class="journey-item"><span class="j-num">104</span><span class="j-title">Reviewing simulation metrics panel</span><span class="j-pri pri-p1">P1</span><span class="badge green">Done</span></div>
+          <div class="journey-item"><span class="j-num">105</span><span class="j-title">Reviewing candlestick trade markers</span><span class="j-pri pri-p1">P1</span><span class="badge green">Done</span></div>
+          <div class="journey-item"><span class="j-num">106</span><span class="j-title">Resetting local replay state safely</span><span class="j-pri pri-p1">P1</span><span class="badge green">Done</span></div>
+          <div class="journey-item"><span class="j-num">107</span><span class="j-title">Handling simulation websocket disconnect</span><span class="j-pri pri-p0">P0</span><span class="badge green">Done</span></div>
+          <div class="journey-item"><span class="j-num">108</span><span class="j-title">Running two simulation tabs safely</span><span class="j-pri pri-p2">P2</span><span class="badge yellow">Partial</span></div>
+          <div class="journey-item"><span class="j-num">109</span><span class="j-title">Reviewing partial-fill replay logic</span><span class="j-pri pri-p1">P1</span><span class="badge green">Done</span></div>
+          <div class="journey-item"><span class="j-num">110</span><span class="j-title">Using context help on simulation controls</span><span class="j-pri pri-p2">P2</span><span class="badge green">Done</span></div>
+        </div>
+      </details>
+
+      <details class="journey-domain">
+        <summary>Optimization &amp; Quant Review · Journeys 111–120</summary>
+        <div class="journey-list">
+          <div class="journey-item"><span class="j-num">111</span><span class="j-title">Running a parameter sweep</span><span class="j-pri pri-p0">P0</span><span class="badge green">Done</span></div>
+          <div class="journey-item"><span class="j-num">112</span><span class="j-title">Reviewing optimization results</span><span class="j-pri pri-p1">P1</span><span class="badge green">Done</span></div>
+          <div class="journey-item"><span class="j-num">113</span><span class="j-title">Analyzing walk-forward fold performance</span><span class="j-pri pri-p1">P1</span><span class="badge green">Done</span></div>
+          <div class="journey-item"><span class="j-num">114</span><span class="j-title">Detecting overfit strategies</span><span class="j-pri pri-p0">P0</span><span class="badge green">Done</span></div>
+          <div class="journey-item"><span class="j-num">115</span><span class="j-title">Comparing two optimization candidates</span><span class="j-pri pri-p1">P1</span><span class="badge green">Done</span></div>
+          <div class="journey-item"><span class="j-num">116</span><span class="j-title">Reviewing independence analysis</span><span class="j-pri pri-p2">P2</span><span class="badge yellow">Partial</span></div>
+          <div class="journey-item"><span class="j-num">117</span><span class="j-title">Reviewing cost sensitivity</span><span class="j-pri pri-p1">P1</span><span class="badge green">Done</span></div>
+          <div class="journey-item"><span class="j-num">118</span><span class="j-title">Reviewing Monte Carlo output</span><span class="j-pri pri-p2">P2</span><span class="badge gray">Pending</span></div>
+          <div class="journey-item"><span class="j-num">119</span><span class="j-title">Promoting best run to paper from optimization</span><span class="j-pri pri-p0">P0</span><span class="badge green">Done</span></div>
+          <div class="journey-item"><span class="j-num">120</span><span class="j-title">Reviewing quant charts above the fold</span><span class="j-pri pri-p2">P2</span><span class="badge green">Done</span></div>
+        </div>
+      </details>
+
+      <details class="journey-domain">
+        <summary>Deployments &amp; Live Monitoring · Journeys 121–130</summary>
+        <div class="journey-list">
+          <div class="journey-item"><span class="j-num">121</span><span class="j-title">Starting a paper deployment</span><span class="j-pri pri-p0">P0</span><span class="badge green">Done</span></div>
+          <div class="journey-item"><span class="j-num">122</span><span class="j-title">Pausing a deployment</span><span class="j-pri pri-p0">P0</span><span class="badge green">Done</span></div>
+          <div class="journey-item"><span class="j-num">123</span><span class="j-title">Stopping and archiving a deployment</span><span class="j-pri pri-p0">P0</span><span class="badge green">Done</span></div>
+          <div class="journey-item"><span class="j-num">124</span><span class="j-title">Reviewing deployment trades</span><span class="j-pri pri-p1">P1</span><span class="badge green">Done</span></div>
+          <div class="journey-item"><span class="j-num">125</span><span class="j-title">Monitoring real-time positions</span><span class="j-pri pri-p0">P0</span><span class="badge green">Done</span></div>
+          <div class="journey-item"><span class="j-num">126</span><span class="j-title">Manually closing one position</span><span class="j-pri pri-p0">P0</span><span class="badge green">Done</span></div>
+          <div class="journey-item"><span class="j-num">127</span><span class="j-title">Using Close All for account liquidation</span><span class="j-pri pri-p0">P0</span><span class="badge green">Done</span></div>
+          <div class="journey-item"><span class="j-num">128</span><span class="j-title">Reviewing open orders in live monitor</span><span class="j-pri pri-p1">P1</span><span class="badge green">Done</span></div>
+          <div class="journey-item"><span class="j-num">129</span><span class="j-title">Monitoring websocket freshness and fallback</span><span class="j-pri pri-p0">P0</span><span class="badge green">Done</span></div>
+          <div class="journey-item"><span class="j-num">130</span><span class="j-title">Reviewing monitor layout above the fold</span><span class="j-pri pri-p1">P1</span><span class="badge green">Done</span></div>
+        </div>
+      </details>
+
+      <details class="journey-domain">
+        <summary>Data, Chart Lab &amp; Realtime Feeds · Journeys 131–140</summary>
+        <div class="journey-list">
+          <div class="journey-item"><span class="j-num">131</span><span class="j-title">Fetching historical data for a new symbol</span><span class="j-pri pri-p1">P1</span><span class="badge green">Done</span></div>
+          <div class="journey-item"><span class="j-num">132</span><span class="j-title">Batch-fetching data for a sector</span><span class="j-pri pri-p2">P2</span><span class="badge green">Done</span></div>
+          <div class="journey-item"><span class="j-num">133</span><span class="j-title">Loading Alpaca keys from a broker account</span><span class="j-pri pri-p1">P1</span><span class="badge green">Done</span></div>
+          <div class="journey-item"><span class="j-num">134</span><span class="j-title">Exploring indicators in Chart Lab</span><span class="j-pri pri-p1">P1</span><span class="badge green">Done</span></div>
+          <div class="journey-item"><span class="j-num">135</span><span class="j-title">Visually validating a strategy signal</span><span class="j-pri pri-p1">P1</span><span class="badge green">Done</span></div>
+          <div class="journey-item"><span class="j-num">136</span><span class="j-title">Deleting stale cached data</span><span class="j-pri pri-p2">P2</span><span class="badge green">Done</span></div>
+          <div class="journey-item"><span class="j-num">137</span><span class="j-title">Reviewing symbol search UX</span><span class="j-pri pri-p2">P2</span><span class="badge green">Done</span></div>
+          <div class="journey-item"><span class="j-num">138</span><span class="j-title">Reviewing realtime symbol stream requirements</span><span class="j-pri pri-p1">P1</span><span class="badge yellow">Partial</span></div>
+          <div class="journey-item"><span class="j-num">139</span><span class="j-title">Reviewing news stream requirements</span><span class="j-pri pri-p2">P2</span><span class="badge gray">Pending</span></div>
+          <div class="journey-item"><span class="j-num">140</span><span class="j-title">Reviewing chart tooltips and readable text</span><span class="j-pri pri-p2">P2</span><span class="badge green">Done</span></div>
+        </div>
+      </details>
+
+      <details class="journey-domain">
+        <summary>Logs, Reporting &amp; Operator UX · Journeys 141–150</summary>
+        <div class="journey-list">
+          <div class="journey-item"><span class="j-num">141</span><span class="j-title">Reviewing kill-switch event history</span><span class="j-pri pri-p0">P0</span><span class="badge green">Done</span></div>
+          <div class="journey-item"><span class="j-num">142</span><span class="j-title">Refreshing the Journey Validation Hub</span><span class="j-pri pri-p2">P2</span><span class="badge green">Done</span></div>
+          <div class="journey-item"><span class="j-num">143</span><span class="j-title">Filtering journeys by domain, priority, status</span><span class="j-pri pri-p2">P2</span><span class="badge green">Done</span></div>
+          <div class="journey-item"><span class="j-num">144</span><span class="j-title">Reviewing required steps for a journey</span><span class="j-pri pri-p2">P2</span><span class="badge green">Done</span></div>
+          <div class="journey-item"><span class="j-num">145</span><span class="j-title">Reviewing edge-case checklist for partial fills</span><span class="j-pri pri-p1">P1</span><span class="badge green">Done</span></div>
+          <div class="journey-item"><span class="j-num">146</span><span class="j-title">Verifying above-the-fold expectations across pages</span><span class="j-pri pri-p1">P1</span><span class="badge green">Done</span></div>
+          <div class="journey-item"><span class="j-num">147</span><span class="j-title">Verifying menu names and tooltips across critical pages</span><span class="j-pri pri-p2">P2</span><span class="badge green">Done</span></div>
+          <div class="journey-item"><span class="j-num">148</span><span class="j-title">Reviewing dashboard performance summary</span><span class="j-pri pri-p1">P1</span><span class="badge green">Done</span></div>
+          <div class="journey-item"><span class="j-num">149</span><span class="j-title">Reviewing deployment, account, and portfolio wording</span><span class="j-pri pri-p2">P2</span><span class="badge green">Done</span></div>
+          <div class="journey-item"><span class="j-num">150</span><span class="j-title">Reviewing realtime logs, symbol streams and news in operator UX</span><span class="j-pri pri-p1">P1</span><span class="badge yellow">Partial</span></div>
+        </div>
+      </details>
+    </section>
+
+    <!-- ============================ SETTINGS ============================ -->
+    <section class="page" id="page-settings">
+      <h1>Settings</h1>
+      <p class="page-sub">System maintenance — backup / restore, calendar seed, runtime mode banner.</p>
+
+      <div class="grid grid-2">
+        <div class="card">
+          <h2 style="margin-top:0;">Backup &amp; Restore</h2>
+          <p class="muted small">Last backup: 2026-04-23 23:55 UTC · 14.2 MB</p>
+          <div class="btn-row">
+            <button class="btn primary">⤓ Create Backup</button>
+            <button class="btn">⤒ Restore from File…</button>
+          </div>
+          <div class="help-tip">Backup includes: programs, strategies, watchlists, controls, risk, execution, deployments, broker mappings, kill events. Excludes broker secrets.</div>
+        </div>
+
+        <div class="card">
+          <h2 style="margin-top:0;">Event Calendar</h2>
+          <p class="muted small">Currently loaded: NYSE_FULL · 252 trading days 2026 · next event 2026-05-26 (Memorial Day, closed)</p>
+          <div class="btn-row">
+            <button class="btn primary">Seed Sample Calendar</button>
+            <button class="btn">Edit Manually…</button>
+          </div>
+        </div>
+
+        <div class="card">
+          <h2 style="margin-top:0;">Runtime Mode</h2>
+          <div class="form-row cols-2">
+            <div><label>Default mode</label><select><option>Paper</option><option>Live</option></select></div>
+            <div><label>Banner color</label><select><option>Blue (paper)</option><option>Red (live)</option></select></div>
+          </div>
+          <div class="help-tip">Mode is shown on every page in the top bar. Live mode requires explicit confirmation per session.</div>
+        </div>
+
+        <div class="card">
+          <h2 style="margin-top:0;">Sync &amp; Health</h2>
+          <table>
+            <tr><td class="muted">Broker sync interval</td><td>30 seconds</td></tr>
+            <tr><td class="muted">Broker sync stale threshold</td><td>120 seconds</td></tr>
+            <tr><td class="muted">Recovery on startup</td><td><span class="badge green">Enabled</span></td></tr>
+            <tr><td class="muted">Audit log retention</td><td>365 days</td></tr>
+          </table>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- ===================== FOOTER ===================== -->
+  <footer class="statusbar">
+    <span><span class="status-chip" style="padding:2px 8px;"><span class="indicator ind-green"></span>WS live</span></span>
+    <div class="fs-divider"></div>
+    <span>API <span style="color:var(--text)">127.0.0.1:8000</span></span>
+    <div class="fs-divider"></div>
+    <span>DB <span style="color:var(--text)">data/runtime.db</span></span>
+    <div class="fs-divider"></div>
+    <span>Build <span style="color:var(--text)">2026-04-24 18:55</span></span>
+    <div style="flex:1;"></div>
+    <span>Account: <strong style="color:var(--text);">Alpaca-Paper-01</strong></span>
+    <div class="fs-divider"></div>
+    <span>Programs running: <strong style="color:var(--green);">3</strong></span>
+    <div class="fs-divider"></div>
+    <span>Open positions: <strong style="color:var(--text);">6</strong></span>
+    <div class="fs-divider"></div>
+    <span>Open risk: <strong style="color:var(--text);">1.82%</strong></span>
+  </footer>
+</div>
+
+<!-- ============================ MODAL ============================ -->
+<div class="modal-mask" id="kill-modal">
+  <div class="modal">
+    <h3>⛔ Stop All New Opens (Global)</h3>
+    <div class="modal-body">
+      This will <strong>halt new opens platform-wide</strong>. Existing positions remain managed.<br><br>
+      <strong>Will be canceled:</strong> open-intent orders not yet filled.<br>
+      <strong>Will be preserved:</strong> protective exits — <span class="badge red">sl</span> <span class="badge green">tp</span> <span class="badge purple">close</span> <span class="badge blue">scale</span><br><br>
+      <span class="muted small">Result will be shown after action. If kill-state cannot be confirmed, the action will report an error — never a silent success.</span>
+    </div>
+    <div class="modal-actions">
+      <button class="btn ghost" onclick="closeKillModal()">Cancel</button>
+      <button class="btn danger" onclick="confirmKill()">Confirm Global Kill</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============================ TOASTS ============================ -->
+<div class="toasts" id="toasts">
+  <div class="toast green">
+    <div class="t-title">Signal approved</div>
+    <div class="t-sub">Momentum Breakout v3 → AAPL · entry 184.20 · 100 sh</div>
+  </div>
+  <div class="toast yellow">
+    <div class="t-title">Signal blocked by Governor</div>
+    <div class="t-sub">Mean Reversion ETF → SPY · symbol concentration 30% cap reached</div>
+  </div>
+  <div class="toast">
+    <div class="t-title">Broker fill</div>
+    <div class="t-sub">NVDA bracket entered @ 948.20 · stop &amp; target legs held</div>
+  </div>
+</div>
+
+<script>
+  // Section navigation
+  document.querySelectorAll('.nav-item').forEach(item => {
+    item.addEventListener('click', () => {
+      document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+      document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+      item.classList.add('active');
+      const target = item.getAttribute('data-page');
+      const page = document.getElementById('page-' + target);
+      if (page) page.classList.add('active');
+      window.scrollTo({top:0});
+    });
+  });
+
+  // Tabs (within page)
+  document.querySelectorAll('.tabs').forEach(tabset => {
+    tabset.querySelectorAll('.tab').forEach(t => {
+      t.addEventListener('click', () => {
+        tabset.querySelectorAll('.tab').forEach(x => x.classList.remove('active'));
+        t.classList.add('active');
+      });
+    });
+  });
+
+  // Kill modal
+  function openKillModal() { document.getElementById('kill-modal').classList.add('show'); }
+  function closeKillModal() { document.getElementById('kill-modal').classList.remove('show'); }
+  function confirmKill() {
+    closeKillModal();
+    document.getElementById('kill-banner').style.display = 'flex';
+    const chip = document.getElementById('kill-chip');
+    chip.innerHTML = '<span class="indicator ind-red"></span>Kill: GLOBAL';
+    addToast('red', 'Global Kill executed', 'Canceled 8 · preserved 6 protective · 0 unknown · result audited');
+    // Auto-jump to operations
+    document.querySelector('.nav-item[data-page="operations"]').click();
+  }
+
+  function addToast(kind, title, sub) {
+    const div = document.createElement('div');
+    div.className = 'toast ' + (kind || '');
+    div.innerHTML = '<div class="t-title">' + title + '</div><div class="t-sub">' + sub + '</div>';
+    document.getElementById('toasts').prepend(div);
+    setTimeout(() => div.remove(), 9000);
+  }
+
+  // close modal on backdrop click
+  document.getElementById('kill-modal').addEventListener('click', e => {
+    if (e.target.id === 'kill-modal') closeKillModal();
+  });
+</script>
+
+</body>
+</html>

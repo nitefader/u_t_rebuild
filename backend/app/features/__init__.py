@@ -17,17 +17,23 @@ from .calendar import (
     half_day_session,
     regular_session,
 )
-from .batch import BatchFeatureEngine, BatchFeatureEngineError, UnsupportedBatchFeatureError
 from .frames import FeatureAvailability, FeatureFrame, FeatureFrameSet, FeatureSnapshot, FeatureValue, NormalizedBar
-from .incremental import FeatureCache, IncrementalFeatureEngine, IncrementalFeatureEngineError, IncrementalFeatureUpdate
+from .incremental import (
+    FeatureCache,
+    IncrementalFeatureEngine,
+    IncrementalFeatureEngineError,
+    IncrementalFeatureUpdate,
+    UnsupportedBatchFeatureError,
+)
 from .key import canonical_params_json, canonicalize_params, make_feature_key
 from .parser import FeatureParseError, parse_feature_expression, parse_params
 from .planner import (
     FeatureDataRequirement,
     FeaturePlan,
     FeaturePlanError,
-    ResolvedProgramComponents,
+    ResolvedDeploymentComponents,
     build_feature_plan,
+    build_strategy_only_feature_plan,
     collect_feature_refs,
 )
 from .registry import FEATURE_REGISTRY, FeatureRegistry, FeatureRegistryEntry, registry
@@ -56,8 +62,6 @@ __all__ = [
     "SessionWindow",
     "half_day_session",
     "regular_session",
-    "BatchFeatureEngine",
-    "BatchFeatureEngineError",
     "FeatureAvailability",
     "FeatureCache",
     "FeatureDataRequirement",
@@ -79,13 +83,14 @@ __all__ = [
     "IncrementalFeatureUpdate",
     "NormalizedBar",
     "PipelineResolver",
-    "ResolvedProgramComponents",
+    "ResolvedDeploymentComponents",
     "SubscriptionChange",
     "SubscriptionDelta",
     "SubscriptionEntry",
     "SubscriptionManager",
     "UnsupportedBatchFeatureError",
     "build_feature_plan",
+    "build_strategy_only_feature_plan",
     "canonical_params_json",
     "canonicalize_params",
     "collect_feature_refs",

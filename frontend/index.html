@@ -1,37 +1,15 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="dark">
   <head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Operations Center · Trading OS</title>
-    <link rel="stylesheet" href="./src/styles.css">
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="dark light" />
+    <meta name="theme-color" content="#0b0d10" />
+    <title>Ultimate Trader</title>
   </head>
   <body>
-    <nav class="top-nav" aria-label="Primary">
-      <a class="brand" href="./index.html">
-        <span class="brand__mark" aria-hidden="true">▣</span>
-        Trading OS
-      </a>
-      <div class="top-nav__links">
-        <a class="nav-link active" href="./index.html" aria-current="page">Operations</a>
-        <a class="nav-link" href="./chart_lab.html">Chart Lab</a>
-        <a class="nav-link" href="./brokers.html">Brokers</a>
-        <a class="nav-link" href="./providers.html">Providers</a>
-        <a class="nav-link" href="./settings.html">Settings</a>
-      </div>
-      <div class="top-nav__status" data-system-status></div>
-    </nav>
-    <main id="operations-center" aria-live="polite">
-      <section class="loading-shell">
-        <div class="loading-shell__spinner" aria-hidden="true"></div>
-        <div>
-          <h1>Operations Center</h1>
-          <p>Loading runtime state from the Operations API.</p>
-        </div>
-      </section>
-    </main>
-    <aside id="operations-streams" class="operations-streams-shell" aria-live="polite"></aside>
-    <aside id="operations-trade-stream" class="operations-trade-stream-shell" aria-live="polite"></aside>
-    <script type="module" src="./src/main.js"></script>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

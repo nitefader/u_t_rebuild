@@ -1,21 +1,23 @@
 ---
 name: Default architectural choices when unsure
-description: §16 of the roadmap doc gives binding tiebreakers — apply these without asking when designing a slice
+description: Active Ultimate Trader tiebreakers
 type: feedback
 ---
 
-When unsure between two designs, the roadmap §16 says pick:
+When unsure, choose:
 
-- shared pipeline over per-account stream
-- feature-driven over config-driven
-- fail-closed over silent success
-- reuse over duplication
-- deterministic over smart
-- explicit enum over free text
+- simple Account model over extra broker/account entity layers
+- Account metadata over separate paper/live product paths
+- shared Live Stock Market Data Stream over per-Account market data streams
+- one Account Trade Sync per Account over hidden/on-demand trade streams
+- visible failure over silent failure
+- visible evidence over silent success for mission-critical actions
+- feature-driven data demand over frontend/provider shortcuts
+- deterministic resolver logic over smart/implicit magic
+- explicit enum/status codes over free text
 - completed bars over forming bars
 - account-isolated risk over global risk
-- separate simulated truth over mixed ledgers
+- separate simulated truth over mixed real/sim ledgers
+- explanation context over hidden background decisions
 
-**Why:** the roadmap is explicit and binding. These also map directly onto §12 stop conditions — violating any of these typically trips a stop condition (e.g. duplicate streaming = stop condition 2; free-text rejection reasons = stop condition 7; mixed ledgers = stop conditions 4–5).
-
-**How to apply:** when scoping or coding, default to the listed choice without asking. Surface the call only if a constraint forces deviation.
+Surface deviations only when a hard constraint forces them.

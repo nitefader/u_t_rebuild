@@ -9,12 +9,14 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict
 
-from backend.app.domain import TradingMode
 from backend.app.market_data import (
+    DeleteMarketDataServiceRequest,
+    MarketDataAssetClass,
     MarketDataCatalogError,
     MarketDataPipeline,
     MarketDataPipelineList,
     MarketDataPipelineWrite,
+    MarketDataServiceDeletionResponse,
     MarketDataServiceList,
     MarketDataServiceRecord,
     MarketDataServiceWrite,
@@ -130,7 +132,54 @@ def set_default_for_service(
 
 @router.post("/services/{service_id}/disable", response_model=MarketDataServiceRecord)
 def disable_service(service_id: UUID, catalog: CatalogDependency) -> MarketDataServiceRecord:
+    """Soft-retire (archive): record stays on disk but is excluded from routing."""
     return catalog.disable_service(service_id)
+
+
+@router.post("/services/{service_id}/enable", response_model=MarketDataServiceRecord)
+def enable_service(service_id: UUID, catalog: CatalogDependency) -> MarketDataServiceRecord:
+    """Undo an operator disable without changing credentials or provider defaults."""
+    try:
+        return catalog.enable_service(service_id)
+    except MarketDataCatalogError as exc:
+        raise _operator_error(str(exc)) from exc
+
+
+@router.post("/services/{service_id}/delete", response_model=MarketDataServiceDeletionResponse)
+def delete_market_data_service(
+    service_id: UUID,
+    request: DeleteMarketDataServiceRequest,
+    catalog: CatalogDependency,
+    pipelines: PipelineDependency,
+) -> MarketDataServiceDeletionResponse:
+    """Hard-delete: remove catalog row after name confirmation.
+
+    Blocked while any pipeline still references this ``service_id``.
+    """
+    try:
+        existing = catalog.get_service(service_id)
+    except MarketDataCatalogError as exc:
+        raise _operator_error(str(exc)) from exc
+    if request.confirm_service_name.strip() != existing.name:
+        raise _operator_error("confirm_service_name did not match service name")
+    blockers: list[str] = []
+    for pl in pipelines.list_pipelines().pipelines:
+        if pl.service_id == service_id:
+            blockers.append(f"{pl.display_name} (pipeline {pl.id})")
+    if blockers:
+        raise HTTPException(
+            status_code=400,
+            detail="Cannot delete: pipelines still bind this service — disable or rebind them first: "
+            + "; ".join(blockers),
+        )
+    try:
+        catalog.delete_service(service_id)
+    except MarketDataCatalogError as exc:
+        raise _operator_error(str(exc)) from exc
+    return MarketDataServiceDeletionResponse(
+        service_id=service_id,
+        message="market data service removed from catalog",
+    )
 
 
 @router.post("/services/resolve", response_model=ResolverResult)
@@ -201,7 +250,7 @@ def update_pipeline(
 
     Identity changes are *not* available on this endpoint:
     - service rebind → ``POST /pipelines/{id}/attach-service``
-    - data_feed / trading_mode change → disable this pipeline and
+    - data_feed / asset_class change → disable this pipeline and
       create a new one (subscribers won't migrate silently).
     """
     try:
@@ -235,7 +284,7 @@ class CreatePipelineFromServiceRequest(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     service_id: UUID
-    trading_mode: TradingMode | None = None
+    asset_class: MarketDataAssetClass = MarketDataAssetClass.STOCK
     data_feed: str = "iex"
     display_name: str | None = None
 
@@ -258,7 +307,7 @@ def attach_service_to_pipeline(
     Per DE round-3 B6: pre-R2-A pipelines load with ``service_id=None``
     and the operator had no path forward except delete-and-recreate.
     This endpoint binds the pipeline to a registered Service; the
-    registry's ``(service_id, trading_mode, data_feed)`` invariant
+    registry's ``(service_id, asset_class, data_feed)`` invariant
     rejects bindings that would create a duplicate active stream.
     """
     try:
@@ -280,8 +329,8 @@ def create_pipeline_from_service(
     """Activate a Service as a streaming subscription (Pipeline).
 
     Replaces the implicit Pipeline creation that bootstrap-from-env used
-    to do. The operator picks feed + mode explicitly. The
-    ``(service_id, trading_mode, data_feed)`` invariant in the registry
+    to do. The operator picks feed + asset class explicitly. The
+    ``(service_id, asset_class, data_feed)`` invariant in the registry
     rejects creating a duplicate active pipeline for the same identity.
     """
     try:
@@ -294,8 +343,8 @@ def create_pipeline_from_service(
         display_name=display_name,
         provider=service.provider,
         service_id=request.service_id,
+        asset_class=request.asset_class,
         data_feed=request.data_feed,
-        trading_mode=request.trading_mode,
     )
     try:
         return pipelines.create_pipeline(write)

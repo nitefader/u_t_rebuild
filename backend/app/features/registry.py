@@ -23,6 +23,33 @@ def exact_length_warmup(params: dict[str, Any]) -> int:
     return int(params["length"])
 
 
+def macd_warmup(params: dict[str, Any]) -> int:
+    fast = int(params.get("fast_length", 12))
+    slow = int(params.get("slow_length", 26))
+    signal = int(params.get("signal_length", 9))
+    return max(fast, slow) * 3 + signal
+
+
+def supertrend_warmup(params: dict[str, Any]) -> int:
+    return int(params["length"]) * 3
+
+
+def swing_warmup(params: dict[str, Any]) -> int:
+    return int(params["lookback"]) * 2 + 1
+
+
+def support_resistance_warmup(params: dict[str, Any]) -> int:
+    return max(int(params.get("lookback", 50)), int(params.get("pivot_strength", 3)) * 2 + 1)
+
+
+def chikou_warmup(params: dict[str, Any]) -> int:
+    return int(params.get("displacement", 26))
+
+
+def ichimoku_double_warmup(params: dict[str, Any]) -> int:
+    return int(params["length"])
+
+
 @dataclass(frozen=True)
 class FeatureRegistryEntry:
     kind: str
@@ -163,6 +190,158 @@ TECHNICAL_FEATURES = {
         allowed_params={"length", "source"},
         default_params={"length": 20, "source": "low"},
         warmup=exact_length_warmup,
+    ),
+    "down_streak": _entry(
+        "down_streak",
+        FeatureNamespace.TECHNICAL,
+        FeatureScope.SYMBOL,
+        "close",
+        "Consecutive down-day count (resets to 0 when a bar closes >= prior close)",
+    ),
+    "ibs": _entry(
+        "ibs",
+        FeatureNamespace.TECHNICAL,
+        FeatureScope.SYMBOL,
+        "hlc",
+        "Internal Bar Strength: (close - low) / (high - low)",
+    ),
+    "roc": _entry(
+        "roc",
+        FeatureNamespace.TECHNICAL,
+        FeatureScope.SYMBOL,
+        "close",
+        "Rate of change: (close[t] - close[t-length]) / close[t-length]",
+        allowed_params={"length"},
+        default_params={"length": 10},
+        warmup=exact_length_warmup,
+    ),
+    "swing_high": _entry(
+        "swing_high",
+        FeatureNamespace.TECHNICAL,
+        FeatureScope.SYMBOL,
+        "high",
+        "Confirmed swing-high pivot value over +/- lookback bars (k-bar deferred)",
+        allowed_params={"lookback"},
+        default_params={"lookback": 5},
+        warmup=swing_warmup,
+    ),
+    "swing_low": _entry(
+        "swing_low",
+        FeatureNamespace.TECHNICAL,
+        FeatureScope.SYMBOL,
+        "low",
+        "Confirmed swing-low pivot value over +/- lookback bars (k-bar deferred)",
+        allowed_params={"lookback"},
+        default_params={"lookback": 5},
+        warmup=swing_warmup,
+    ),
+    "fvg_up": _entry(
+        "fvg_up",
+        FeatureNamespace.TECHNICAL,
+        FeatureScope.SYMBOL,
+        "hl",
+        "Fair-Value-Gap (up): low[t] - high[t-2] when low[t] > high[t-2]; 0 otherwise",
+        allowed_params={"min_size_pct"},
+        default_params={"min_size_pct": 0.0},
+    ),
+    "fvg_down": _entry(
+        "fvg_down",
+        FeatureNamespace.TECHNICAL,
+        FeatureScope.SYMBOL,
+        "hl",
+        "Fair-Value-Gap (down): low[t-2] - high[t] when low[t-2] > high[t]; 0 otherwise",
+        allowed_params={"min_size_pct"},
+        default_params={"min_size_pct": 0.0},
+    ),
+    "supertrend": _entry(
+        "supertrend",
+        FeatureNamespace.TECHNICAL,
+        FeatureScope.SYMBOL,
+        "hlc",
+        "Supertrend trend line (ATR-based recurrence)",
+        allowed_params={"length", "multiplier"},
+        default_params={"length": 10, "multiplier": 3.0},
+        warmup=supertrend_warmup,
+    ),
+    "tenkan_sen": _entry(
+        "tenkan_sen",
+        FeatureNamespace.TECHNICAL,
+        FeatureScope.SYMBOL,
+        "hl",
+        "Ichimoku Tenkan-sen (Conversion Line): (highest(high, length) + lowest(low, length)) / 2",
+        allowed_params={"length"},
+        default_params={"length": 9},
+        warmup=ichimoku_double_warmup,
+    ),
+    "kijun_sen": _entry(
+        "kijun_sen",
+        FeatureNamespace.TECHNICAL,
+        FeatureScope.SYMBOL,
+        "hl",
+        "Ichimoku Kijun-sen (Base Line): (highest(high, length) + lowest(low, length)) / 2",
+        allowed_params={"length"},
+        default_params={"length": 26},
+        warmup=ichimoku_double_warmup,
+    ),
+    "senkou_a": _entry(
+        "senkou_a",
+        FeatureNamespace.TECHNICAL,
+        FeatureScope.SYMBOL,
+        "hl",
+        "Ichimoku Senkou A cloud-edge basis (tenkan + kijun)/2 — NO forward displacement (deferred)",
+        allowed_params={"tenkan_length", "kijun_length"},
+        default_params={"tenkan_length": 9, "kijun_length": 26},
+        warmup=lambda p: max(int(p.get("tenkan_length", 9)), int(p.get("kijun_length", 26))),
+    ),
+    "senkou_b": _entry(
+        "senkou_b",
+        FeatureNamespace.TECHNICAL,
+        FeatureScope.SYMBOL,
+        "hl",
+        "Ichimoku Senkou B cloud-edge basis (highest+lowest over length)/2 — NO forward displacement (deferred)",
+        allowed_params={"length"},
+        default_params={"length": 52},
+        warmup=ichimoku_double_warmup,
+    ),
+    "chikou_span": _entry(
+        "chikou_span",
+        FeatureNamespace.TECHNICAL,
+        FeatureScope.SYMBOL,
+        "close",
+        "Ichimoku Chikou Span: close shifted backward N bars (so close[t-N] aligns to t)",
+        allowed_params={"displacement"},
+        default_params={"displacement": 26},
+        warmup=chikou_warmup,
+    ),
+    "macd": _entry(
+        "macd",
+        FeatureNamespace.TECHNICAL,
+        FeatureScope.SYMBOL,
+        "close",
+        "MACD: 'line'=EMA(fast)-EMA(slow); 'signal'=EMA(line, signal_length); 'histogram'=line-signal",
+        allowed_params={"fast_length", "slow_length", "signal_length", "output"},
+        default_params={"fast_length": 12, "slow_length": 26, "signal_length": 9, "output": "line"},
+        warmup=macd_warmup,
+    ),
+    "support": _entry(
+        "support",
+        FeatureNamespace.TECHNICAL,
+        FeatureScope.SYMBOL,
+        "low",
+        "Pivot-clustered support level (output_index=0 nearest below; higher index = further away)",
+        allowed_params={"lookback", "pivot_strength", "level_count", "cluster_pct", "output_index"},
+        default_params={"lookback": 50, "pivot_strength": 3, "level_count": 3, "cluster_pct": 0.25, "output_index": 0},
+        warmup=support_resistance_warmup,
+    ),
+    "resistance": _entry(
+        "resistance",
+        FeatureNamespace.TECHNICAL,
+        FeatureScope.SYMBOL,
+        "high",
+        "Pivot-clustered resistance level (output_index=0 nearest above; higher index = further away)",
+        allowed_params={"lookback", "pivot_strength", "level_count", "cluster_pct", "output_index"},
+        default_params={"lookback": 50, "pivot_strength": 3, "level_count": 3, "cluster_pct": 0.25, "output_index": 0},
+        warmup=support_resistance_warmup,
     ),
 }
 

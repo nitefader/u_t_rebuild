@@ -1,10 +1,10 @@
-"""Internal runtime decision loop contracts."""
+"""Internal runtime contracts.
 
-from .engine import ExecutionIntentBuilder, RuntimeEngine, RuntimeEventLog, RuntimeStateStore
+Runtime order authority lives in ``backend.app.pipeline.orchestrator``. The
+legacy pre-SignalPlan decision path is intentionally not exported.
+"""
 from .models import (
     DeploymentContext,
-    ExecutionIntent,
-    RuntimeDecisionBatch,
     RuntimeError,
     RuntimeEvent,
     RuntimeEventType,
@@ -16,7 +16,7 @@ from .recovery_orchestrator import RecoveryResult, RuntimeRecoveryOrchestrator
 
 def __getattr__(name: str):
     if name in {"BrokerRuntimeDeployment", "BrokerRuntimeLoopStatus", "BrokerRuntimeOrchestrator"}:
-        from .broker_runtime_orchestrator import BrokerRuntimeDeployment, BrokerRuntimeLoopStatus, BrokerRuntimeOrchestrator
+        from .account_trading_orchestrator import BrokerRuntimeDeployment, BrokerRuntimeLoopStatus, BrokerRuntimeOrchestrator
 
         return {
             "BrokerRuntimeDeployment": BrokerRuntimeDeployment,
@@ -24,7 +24,7 @@ def __getattr__(name: str):
             "BrokerRuntimeOrchestrator": BrokerRuntimeOrchestrator,
         }[name]
     if name in {"BrokerRuntimeSupervisor", "BrokerRuntimeSupervisorError"}:
-        from .broker_runtime_supervisor import BrokerRuntimeSupervisor, BrokerRuntimeSupervisorError
+        from .account_trading_supervisor import BrokerRuntimeSupervisor, BrokerRuntimeSupervisorError
 
         return {
             "BrokerRuntimeSupervisor": BrokerRuntimeSupervisor,
@@ -40,17 +40,11 @@ __all__ = [
     "BrokerRuntimeSupervisor",
     "BrokerRuntimeSupervisorError",
     "DeploymentContext",
-    "ExecutionIntent",
-    "ExecutionIntentBuilder",
     "RecoveryResult",
-    "RuntimeDecisionBatch",
-    "RuntimeEngine",
     "RuntimeError",
     "RuntimeEvent",
-    "RuntimeEventLog",
     "RuntimeEventType",
     "RuntimeState",
-    "RuntimeStateStore",
     "RuntimeStatus",
     "RuntimeRecoveryOrchestrator",
 ]

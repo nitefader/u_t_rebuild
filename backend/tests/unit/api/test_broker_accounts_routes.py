@@ -19,6 +19,7 @@ from backend.app.broker_accounts.models import (
     BrokerAccountCredentialValidationStatus,
     BrokerAccountDeletionResponse,
     BrokerAccountDeletionStatus,
+    UpdateBrokerAccountDetailsRequest,
 )
 from backend.app.broker_accounts.service import BrokerAccountCreationResult
 from backend.app.domain import TradingMode
@@ -68,11 +69,24 @@ class RecordingBrokerAccountService:
             message="deleted",
         )
 
+    def update_account_details(self, *, account_id: UUID, display_name: str) -> BrokerAccount:
+        self.calls.append(("details", account_id, display_name))
+        return BrokerAccount(
+            id=account_id,
+            display_name=display_name,
+            provider="alpaca",
+            mode=TradingMode.BROKER_PAPER,
+            external_account_id="ext-1",
+            credentials_ref="alpaca-broker_paper:ref",
+            validation_status=BrokerAccountValidationStatus.VALID,
+        )
+
 
 def test_broker_account_routes_registered_with_unified_paths() -> None:
     registered = {(route.method, route.path): route.response_model for route in broker_accounts.router.routes}
 
     assert registered[("POST", "/api/v1/broker-accounts")] is broker_accounts.BrokerAccountResponse
+    assert registered[("PATCH", "/api/v1/broker-accounts/{account_id}")] is broker_accounts.BrokerAccountResponse
     assert registered[("PUT", "/api/v1/broker-accounts/{account_id}/credentials")] is BrokerAccountCredentialUpdateResponse
     assert registered[("POST", "/api/v1/broker-accounts/{account_id}/delete")] is BrokerAccountDeletionResponse
     # Paper-specific URLs must not exist.
@@ -100,6 +114,33 @@ def test_create_route_delegates_with_provider_and_mode(mode: TradingMode) -> Non
     assert service.calls == [(f"acct-{mode.value}", "alpaca", mode, "key", "secret")]
 
 
+def test_create_route_wires_broker_sync_before_starting_trade_stream(monkeypatch) -> None:
+    calls: list[str] = []
+    service = RecordingBrokerAccountService()
+    request = broker_accounts.CreateBrokerAccountRequest(
+        display_name="acct",
+        provider="alpaca",
+        mode=TradingMode.BROKER_PAPER,
+        api_key="key",
+        api_secret="secret",
+    )
+
+    monkeypatch.setattr(
+        broker_accounts,
+        "_ensure_manual_trade_composition_for_account",
+        lambda service, account: calls.append("manual_sync"),
+    )
+    monkeypatch.setattr(
+        broker_accounts,
+        "_ensure_trade_stream_started",
+        lambda service, account, *, restart=False: calls.append("trade_stream"),
+    )
+
+    broker_accounts.create_broker_account(request, service=service)
+
+    assert calls == ["manual_sync", "trade_stream"]
+
+
 def test_create_request_rejects_unknown_fields() -> None:
     try:
         broker_accounts.CreateBrokerAccountRequest(
@@ -125,6 +166,17 @@ def test_replace_credentials_route_delegates_without_exposing_secret() -> None:
     assert response.validation_status == BrokerAccountCredentialValidationStatus.VALID
     assert service.calls[-1] == ("replace", ACCOUNT_ID, "new-key", "new-secret")
     assert "new-secret" not in response.model_dump_json()
+
+
+def test_update_details_route_delegates() -> None:
+    service = RecordingBrokerAccountService()
+    request = UpdateBrokerAccountDetailsRequest(display_name="Renamed")
+
+    response = broker_accounts.update_broker_account_details(ACCOUNT_ID, request, service=service)
+
+    assert response.account.display_name == "Renamed"
+    assert response.already_exists is False
+    assert service.calls[-1] == ("details", ACCOUNT_ID, "Renamed")
 
 
 def test_delete_account_route_delegates_with_explicit_confirmation() -> None:

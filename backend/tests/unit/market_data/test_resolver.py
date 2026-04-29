@@ -87,10 +87,10 @@ def test_auto_prefers_compatible_default_before_best_fit_scoring() -> None:
     assert head.reason == ResolverSelectionCode.SELECTED_DEFAULT_PREFERRED.value
 
 
-def test_broker_runtime_five_minute_intent_auto_selects_alpaca_for_streaming_realtime() -> None:
+def test_account_trading_five_minute_intent_auto_selects_alpaca_for_streaming_realtime() -> None:
     intent = DataIntent(
-        consumer=DataConsumer.BROKER_RUNTIME,
-        mode=DataIntentMode.LIVE_RUNTIME,
+        consumer=DataConsumer.ACCOUNT_TRADING,
+        mode=DataIntentMode.LIVE_TRADING,
         symbols=["SPY"],
         timeframe=Timeframe.M5,
         purpose=DataPurpose.RUNTIME_TRADING,
@@ -111,8 +111,8 @@ def test_broker_runtime_five_minute_intent_auto_selects_alpaca_for_streaming_rea
 
 def test_default_alpaca_is_selected_when_default_strategy_satisfies_intent() -> None:
     intent = DataIntent(
-        consumer=DataConsumer.BROKER_RUNTIME,
-        mode=DataIntentMode.LIVE_RUNTIME,
+        consumer=DataConsumer.ACCOUNT_TRADING,
+        mode=DataIntentMode.LIVE_TRADING,
         symbols=["SPY"],
         timeframe=Timeframe.M1,
         purpose=DataPurpose.RUNTIME_TRADING,
@@ -152,8 +152,8 @@ def test_invalid_default_service_is_rejected_in_default_strategy() -> None:
 
 def test_explicit_yahoo_selection_for_runtime_five_minute_is_rejected_without_streaming() -> None:
     intent = DataIntent(
-        consumer=DataConsumer.BROKER_RUNTIME,
-        mode=DataIntentMode.LIVE_RUNTIME,
+        consumer=DataConsumer.ACCOUNT_TRADING,
+        mode=DataIntentMode.LIVE_TRADING,
         symbols=["SPY"],
         timeframe=Timeframe.M5,
         purpose=DataPurpose.RUNTIME_TRADING,
@@ -187,8 +187,8 @@ def test_aggregate_decision_is_selected_only_when_all_rows_selected() -> None:
 
 def test_aggregate_decision_is_rejected_only_when_all_rows_rejected() -> None:
     intent = DataIntent(
-        consumer=DataConsumer.BROKER_RUNTIME,
-        mode=DataIntentMode.LIVE_RUNTIME,
+        consumer=DataConsumer.ACCOUNT_TRADING,
+        mode=DataIntentMode.LIVE_TRADING,
         symbols=["SPY", "AAPL"],
         timeframe=Timeframe.M5,
         purpose=DataPurpose.RUNTIME_TRADING,
@@ -287,8 +287,8 @@ def test_resolver_returns_pipeline_id_from_lookup_when_provided() -> None:
 def test_resolver_pipeline_lookup_called_with_selected_provider() -> None:
     """Different providers should yield different pipeline_id values."""
     intent = DataIntent(
-        consumer=DataConsumer.BROKER_RUNTIME,
-        mode=DataIntentMode.LIVE_RUNTIME,
+        consumer=DataConsumer.ACCOUNT_TRADING,
+        mode=DataIntentMode.LIVE_TRADING,
         symbols=["SPY"],
         timeframe=Timeframe.M5,
         purpose=DataPurpose.RUNTIME_TRADING,
@@ -313,8 +313,8 @@ def test_resolver_pipeline_lookup_called_with_selected_provider() -> None:
 
 def test_resolver_does_not_invoke_pipeline_lookup_for_rejected_rows() -> None:
     intent = DataIntent(
-        consumer=DataConsumer.BROKER_RUNTIME,
-        mode=DataIntentMode.LIVE_RUNTIME,
+        consumer=DataConsumer.ACCOUNT_TRADING,
+        mode=DataIntentMode.LIVE_TRADING,
         symbols=["SPY"],
         timeframe=Timeframe.M5,
         purpose=DataPurpose.RUNTIME_TRADING,
@@ -645,8 +645,8 @@ def test_per_symbol_rows_default_to_wildcard_when_intent_has_no_symbols() -> Non
 def test_resolver_rejects_only_via_frozen_enum_codes() -> None:
     """§12 stop condition 7: free-text rejection reasons are forbidden."""
     intent = DataIntent(
-        consumer=DataConsumer.BROKER_RUNTIME,
-        mode=DataIntentMode.LIVE_RUNTIME,
+        consumer=DataConsumer.ACCOUNT_TRADING,
+        mode=DataIntentMode.LIVE_TRADING,
         symbols=["SPY"],
         timeframe=Timeframe.M5,
         purpose=DataPurpose.RUNTIME_TRADING,
@@ -745,8 +745,8 @@ def test_auto_strategy_ignores_invalid_or_disabled_services() -> None:
 
 def test_no_compatible_service_returns_no_compatible_provider() -> None:
     intent = DataIntent(
-        consumer=DataConsumer.BROKER_RUNTIME,
-        mode=DataIntentMode.LIVE_RUNTIME,
+        consumer=DataConsumer.ACCOUNT_TRADING,
+        mode=DataIntentMode.LIVE_TRADING,
         symbols=["SPY"],
         timeframe=Timeframe.M5,
         purpose=DataPurpose.RUNTIME_TRADING,

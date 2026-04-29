@@ -98,7 +98,7 @@ def operations_trade_stream_health() -> OperationsTradeStreamHealthResponse:
     return OperationsTradeStreamHealthResponse(
         streaming_enabled=bool(account_ids),
         account_provider="broker_account",
-        websocket_path="/api/v1/operations/trade-stream?account_id=<broker_account_id>",
+        websocket_path="/api/v1/operations/trade-stream?account_id=<broker_account_id>&client_surface=operations|brokers",
         account_ids=account_ids,
         requires_account_id=True,
     )
@@ -128,6 +128,9 @@ async def operations_trade_stream(websocket: WebSocket) -> None:
         await websocket.close()
         return
 
+    surface_raw = (websocket.query_params.get("client_surface") or "").strip().lower()
+    client_surface = surface_raw if surface_raw in ("operations", "brokers") else None
+
     loop = asyncio.get_running_loop()
     ws_open = True
 
@@ -147,7 +150,7 @@ async def operations_trade_stream(websocket: WebSocket) -> None:
         elif isinstance(event, BrokerPositionSnapshot):
             emit({"type": "position_snapshot", "data": serialize_position_snapshot(event)})
 
-    sub_id = dispatcher.subscribe(on_event)
+    sub_id = dispatcher.subscribe(on_event, client_surface=client_surface)
     try:
         await websocket.send_text(
             json.dumps(

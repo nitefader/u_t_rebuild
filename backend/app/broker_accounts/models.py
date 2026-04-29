@@ -48,6 +48,8 @@ class BrokerAccount(BaseModel):
     provider: str = "alpaca"
     mode: TradingMode
     external_account_id: str | None = None
+    default_risk_plan_id: UUID | None = None
+    default_risk_plan_version_id: UUID | None = None
     credentials_ref: str
     needs_credentials: bool = False
     validation_status: BrokerAccountValidationStatus
@@ -86,6 +88,14 @@ class BrokerAccountListResponse(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     accounts: tuple[BrokerAccount, ...] = ()
+
+
+class UpdateBrokerAccountDetailsRequest(BaseModel):
+    """Operator metadata edits. Mode and provider stay pinned at creation."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    display_name: str = Field(min_length=1)
 
 
 class ReplaceBrokerAccountCredentialsRequest(BaseModel):

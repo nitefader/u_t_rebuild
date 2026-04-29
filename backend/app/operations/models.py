@@ -14,6 +14,7 @@ from backend.app.brokers.models import (
     BrokerSyncState,
 )
 from backend.app.control_plane.service import ControlPlaneState
+from backend.app.domain import AccountSignalPlanEvaluation
 from backend.app.governor.models import GovernorDecision, GovernorPolicy
 from backend.app.orders.models import InternalOrder, InternalOrderStatus
 from backend.app.pipeline.models import PipelineEvent
@@ -27,8 +28,8 @@ class DeploymentSummary(BaseModel):
     status: RuntimeStatus
     is_running: bool
     account_id: UUID | None = None
-    program_id: UUID | None = None
-    program_version: int | None = None
+    strategy_version_id: UUID | None = None
+    strategy_version: int | None = None
 
 
 class AccountSummary(BaseModel):
@@ -79,6 +80,7 @@ class RuntimeOverview(BaseModel):
     latest_governor_decisions: tuple[GovernorDecision, ...] = ()
     latest_broker_sync_timestamp: datetime | None = None
     latest_runtime_event_timestamp: datetime | None = None
+    research_evidence_summary: tuple["ResearchEvidenceSummary", ...] = ()
 
 
 class AccountOperations(BaseModel):
@@ -95,13 +97,19 @@ class AccountOperations(BaseModel):
     is_killed: bool = False
 
 
+class AccountSignalPlanEvaluationListResponse(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    evaluations: tuple[AccountSignalPlanEvaluation, ...] = ()
+
+
 class DeploymentOperations(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     deployment_id: UUID
     runtime_status: RuntimeStatus | None = None
-    program_id: UUID | None = None
-    program_version: int | None = None
+    strategy_version_id: UUID | None = None
+    strategy_version: int | None = None
     broker_account_id: UUID | None = None
     governor_id: str
     governor_state: GovernorPolicy | None = None
@@ -126,13 +134,21 @@ class OrderDetail(BaseModel):
     internal_order: InternalOrder
     broker_mapping: BrokerOrderMapping | None = None
     broker_account_id: UUID
-    deployment_id: UUID
-    program_id: UUID
+    deployment_id: UUID | None = None
+    strategy_version_id: UUID | None = None
     broker_order_id: str | None = None
     broker_status: str = "unknown_stale"
     broker_sync_timestamp: datetime | None = None
     fills: tuple[BrokerFillUpdateEvent, ...] = ()
     trade_summary: dict[str, object] = Field(default_factory=dict)
+
+
+class ResearchEvidenceSummary(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    evidence_type: str
+    count: int = Field(ge=0)
+    latest_created_at: datetime | None = None
 
 
 OPEN_ORDER_STATUSES = {

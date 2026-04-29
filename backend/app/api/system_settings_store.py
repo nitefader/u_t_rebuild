@@ -23,7 +23,13 @@ _DEFAULT_PATH = Path(os.getenv("UTOS_SYSTEM_SETTINGS_PATH", "data/system_setting
 class SystemSettingsStore:
     """Tiny atomic JSON store. Lock-guarded so two requests can't tear writes."""
 
-    SUPPORTED_KEYS = ("alpaca_use_test_stream", "alpaca_data_feed", "chart_lab_default_symbol")
+    SUPPORTED_KEYS = (
+        "alpaca_use_test_stream",
+        "alpaca_data_feed",
+        "chart_lab_default_symbol",
+        # Chart Lab WebSocket / one-symbol bars only — never read by broker trade streams.
+        "chart_lab_one_symbol_fakepaca",
+    )
 
     def __init__(self, path: Path | str | None = None) -> None:
         self._path = Path(path) if path is not None else _DEFAULT_PATH

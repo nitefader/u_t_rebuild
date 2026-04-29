@@ -219,7 +219,7 @@ def test_warnings_generated_correctly_without_blocking() -> None:
     assert result.blocking_reasons == []
     assert result.warnings == [
         "limited_paper_trade_count",
-        "short_paper_runtime_duration",
+        "short_paper_account_run_duration",
         "high_paper_rejection_rate",
         "high_paper_drawdown_observed",
         "inconsistent_broker_sync_events",

@@ -11,6 +11,16 @@ from backend.app.domain._base import utc_now
 from backend.app.control_plane.client_order_id import (
     build_manual_client_order_id,
     build_program_client_order_id,
+    build_signal_plan_client_order_id,
+)
+from backend.app.domain import (
+    AccountEvaluationStatus,
+    AccountSignalPlanEvaluation,
+    GovernorDecisionTrace,
+    RiskResolverResult,
+    SignalPlan,
+    SignalPlanIntent,
+    SignalPlanSide,
 )
 
 from .ledger import OrderLedger
@@ -26,9 +36,29 @@ class OrderManager:
     }
     _PROTECTIVE_INTENTS = {
         InternalOrderIntent.CLOSE,
+        InternalOrderIntent.REDUCE,
+        InternalOrderIntent.TARGET,
+        InternalOrderIntent.STOP,
+        InternalOrderIntent.TRAIL,
+        InternalOrderIntent.BREAKEVEN,
+        InternalOrderIntent.RUNNER,
+        InternalOrderIntent.LOGICAL_EXIT,
         InternalOrderIntent.TAKE_PROFIT,
         InternalOrderIntent.STOP_LOSS,
         InternalOrderIntent.SCALE,
+    }
+    _POSITION_MANAGEMENT_PRIORITY = {
+        InternalOrderIntent.CLOSE: 100,
+        InternalOrderIntent.LOGICAL_EXIT: 100,
+        InternalOrderIntent.STOP: 80,
+        InternalOrderIntent.STOP_LOSS: 80,
+        InternalOrderIntent.TRAIL: 80,
+        InternalOrderIntent.BREAKEVEN: 80,
+        InternalOrderIntent.TARGET: 60,
+        InternalOrderIntent.TAKE_PROFIT: 60,
+        InternalOrderIntent.REDUCE: 60,
+        InternalOrderIntent.SCALE: 60,
+        InternalOrderIntent.RUNNER: 40,
     }
     _REPLACEABLE_FIELDS = {"quantity", "limit_price", "stop_price", "time_in_force", "extended_hours"}
 
@@ -63,6 +93,12 @@ class OrderManager:
         """
         self._broker_sync_service = service
 
+    def attach_broker_adapter(self, adapter: Any) -> None:
+        self._broker_adapter = adapter
+
+    def attach_broker_sync(self, broker_sync: Any) -> None:
+        self._broker_sync = broker_sync
+
     def create_order(
         self,
         *,
@@ -95,7 +131,7 @@ class OrderManager:
             deployment_id=execution_intent.deployment_id,
             program_id=execution_intent.program_version_id,
             symbol=execution_intent.symbol.upper(),
-            side=execution_intent.side,
+            side=self._side_for_execution_intent(execution_intent=execution_intent, intent=intent),
             quantity=execution_intent.qty,
             order_type=execution_intent.order_type,
             time_in_force=execution_intent.time_in_force,
@@ -165,6 +201,141 @@ class OrderManager:
         )
         return self._ledger.add(order)
 
+    def create_signal_plan_order(
+        self,
+        *,
+        account_id: UUID,
+        signal_plan: SignalPlan,
+        account_evaluation: AccountSignalPlanEvaluation,
+        risk_result: RiskResolverResult,
+        governor_decision: GovernorDecisionTrace,
+        order_intent: InternalOrderIntent | str | None = None,
+        position_lineage_id: UUID | None = None,
+        position_side: CandidateSide | SignalPlanSide | str | None = None,
+        opening_signal_plan_id: UUID | None = None,
+        leg_label: str | None = None,
+    ) -> InternalOrder:
+        if account_evaluation.account_id != account_id:
+            raise OrderManagerError("account evaluation does not belong to account")
+        if account_evaluation.signal_plan_id != signal_plan.signal_plan_id:
+            raise OrderManagerError("account evaluation does not match SignalPlan")
+        if account_evaluation.status != AccountEvaluationStatus.ACCEPTED:
+            raise OrderManagerError("account evaluation is not accepted")
+        if risk_result.account_id != account_id or risk_result.signal_plan_id != signal_plan.signal_plan_id:
+            raise OrderManagerError("risk result does not match SignalPlan/account")
+        if not risk_result.allowed:
+            raise OrderManagerError("risk result is not allowed")
+        if risk_result.resolved_quantity is None:
+            raise OrderManagerError("signal plan order requires resolved_quantity")
+        if governor_decision.account_id != account_id or governor_decision.signal_plan_id != signal_plan.signal_plan_id:
+            raise OrderManagerError("governor decision does not match SignalPlan/account")
+        if not governor_decision.approved:
+            raise OrderManagerError("SignalPlan is not approved by Governor")
+        if self._control_plane.system_recovery_active:
+            raise OrderManagerError("system recovery is active; new order creation is blocked")
+
+        intent = self._resolve_signal_plan_order_intent(signal_plan.intent, order_intent)
+        lineage_id = self._resolve_position_lineage_id(signal_plan=signal_plan, position_lineage_id=position_lineage_id)
+        opening_lineage_id = self._resolve_opening_signal_plan_id(
+            signal_plan=signal_plan,
+            opening_signal_plan_id=opening_signal_plan_id,
+        )
+        client_order_id = build_signal_plan_client_order_id(
+            account_id,
+            signal_plan.deployment_id,
+            signal_plan.signal_plan_id,
+            intent=intent,
+            position_lineage_id=lineage_id,
+            leg_label=leg_label,
+        )
+        existing = self._ledger.by_client_order_id(client_order_id)
+        if existing is not None:
+            if existing.account_id != account_id:
+                raise OrderManagerError("idempotency key collision across accounts")
+            return existing
+        self._enforce_broker_sync_freshness(account_id=account_id, intent=intent)
+        now = utc_now()
+        order = InternalOrder(
+            order_id=uuid4(),
+            client_order_id=client_order_id,
+            account_id=account_id,
+            origin=OrderOrigin.SIGNAL_PLAN,
+            deployment_id=signal_plan.deployment_id,
+            program_id=None,
+            strategy_id=signal_plan.strategy_id,
+            strategy_version_id=signal_plan.strategy_version_id,
+            signal_plan_id=signal_plan.signal_plan_id,
+            opening_signal_plan_id=opening_lineage_id,
+            current_signal_plan_id=signal_plan.signal_plan_id,
+            position_lineage_id=lineage_id,
+            account_evaluation_id=account_evaluation.evaluation_id,
+            governor_decision_id=governor_decision.governor_decision_id,
+            leg_label=leg_label,
+            lifecycle_intent=intent.value,
+            symbol=signal_plan.symbol.upper(),
+            side=self._side_for_signal_plan(
+                signal_plan=signal_plan,
+                order_intent=intent,
+                position_side=position_side,
+            ),
+            quantity=risk_result.resolved_quantity,
+            order_type=self._order_type_for_signal_plan(signal_plan),
+            time_in_force=self._time_in_force_for_signal_plan(signal_plan),
+            intent=intent,
+            status=InternalOrderStatus.CREATED,
+            created_at=now,
+            updated_at=now,
+            signal_name=signal_plan.reason,
+            reason=signal_plan.reason,
+        )
+        return self._ledger.add(order)
+
+    def create_signal_plan_leg_orders(
+        self,
+        *,
+        account_id: UUID,
+        signal_plan: SignalPlan,
+        account_evaluation: AccountSignalPlanEvaluation,
+        risk_result: RiskResolverResult,
+        governor_decision: GovernorDecisionTrace,
+        position_lineage_id: UUID | None = None,
+        position_side: CandidateSide | SignalPlanSide | str | None = None,
+        opening_signal_plan_id: UUID | None = None,
+    ) -> tuple[InternalOrder, ...]:
+        if not risk_result.leg_allocations:
+            return (
+                self.create_signal_plan_order(
+                    account_id=account_id,
+                    signal_plan=signal_plan,
+                    account_evaluation=account_evaluation,
+                    risk_result=risk_result,
+                    governor_decision=governor_decision,
+                    position_lineage_id=position_lineage_id,
+                    position_side=position_side,
+                    opening_signal_plan_id=opening_signal_plan_id,
+                ),
+            )
+        orders: list[InternalOrder] = []
+        lineage_id = position_lineage_id or signal_plan.related_position_lineage_id or signal_plan.signal_plan_id
+        opening_id = opening_signal_plan_id or signal_plan.opening_signal_plan_id or signal_plan.signal_plan_id
+        for allocation in risk_result.leg_allocations:
+            leg_risk_result = risk_result.model_copy(update={"resolved_quantity": allocation.resolved_quantity})
+            orders.append(
+                self.create_signal_plan_order(
+                    account_id=account_id,
+                    signal_plan=signal_plan,
+                    account_evaluation=account_evaluation,
+                    risk_result=leg_risk_result,
+                    governor_decision=governor_decision,
+                    order_intent=InternalOrderIntent(allocation.lifecycle_intent.value),
+                    position_lineage_id=lineage_id,
+                    position_side=position_side or signal_plan.side,
+                    opening_signal_plan_id=opening_id,
+                    leg_label=allocation.leg_label,
+                )
+            )
+        return tuple(orders)
+
     @staticmethod
     def _coerce_manual_intent(intent: InternalOrderIntent | str) -> str:
         if isinstance(intent, InternalOrderIntent):
@@ -183,6 +354,83 @@ class OrderManager:
         if manual_intent == "open":
             return InternalOrderIntent.OPEN
         return InternalOrderIntent.CLOSE
+
+    @staticmethod
+    def _resolve_signal_plan_order_intent(
+        signal_plan_intent: SignalPlanIntent,
+        override: InternalOrderIntent | str | None,
+    ) -> InternalOrderIntent:
+        if override is not None:
+            try:
+                return override if isinstance(override, InternalOrderIntent) else InternalOrderIntent(str(override))
+            except ValueError as exc:
+                raise OrderManagerError(f"unsupported signal plan order intent: {override}") from exc
+        try:
+            return InternalOrderIntent(signal_plan_intent.value)
+        except ValueError as exc:
+            raise OrderManagerError(f"unsupported SignalPlan intent: {signal_plan_intent}") from exc
+
+    @staticmethod
+    def _resolve_position_lineage_id(
+        *,
+        signal_plan: SignalPlan,
+        position_lineage_id: UUID | None,
+    ) -> UUID:
+        if position_lineage_id is not None:
+            return position_lineage_id
+        if signal_plan.related_position_lineage_id is not None:
+            return signal_plan.related_position_lineage_id
+        if signal_plan.intent == SignalPlanIntent.OPEN:
+            return signal_plan.signal_plan_id
+        raise OrderManagerError("position-management SignalPlan order requires position_lineage_id")
+
+    @staticmethod
+    def _resolve_opening_signal_plan_id(
+        *,
+        signal_plan: SignalPlan,
+        opening_signal_plan_id: UUID | None,
+    ) -> UUID:
+        if signal_plan.intent == SignalPlanIntent.OPEN:
+            return signal_plan.signal_plan_id
+        if opening_signal_plan_id is not None:
+            return opening_signal_plan_id
+        if signal_plan.opening_signal_plan_id is not None:
+            return signal_plan.opening_signal_plan_id
+        raise OrderManagerError("position-management SignalPlan order requires opening_signal_plan_id")
+
+    @staticmethod
+    def _side_for_signal_plan(
+        *,
+        signal_plan: SignalPlan,
+        order_intent: InternalOrderIntent,
+        position_side: CandidateSide | SignalPlanSide | str | None = None,
+    ) -> CandidateSide:
+        if signal_plan.side == SignalPlanSide.FLAT:
+            raise OrderManagerError("flat SignalPlan side cannot create an order")
+        if order_intent == InternalOrderIntent.OPEN:
+            return CandidateSide(signal_plan.side.value)
+
+        side = signal_plan.side
+        if position_side is not None:
+            normalized = position_side.value if isinstance(position_side, CandidateSide | SignalPlanSide) else str(position_side)
+            side = SignalPlanSide(normalized)
+        if side == SignalPlanSide.LONG:
+            return CandidateSide.SHORT
+        if side == SignalPlanSide.SHORT:
+            return CandidateSide.LONG
+        raise OrderManagerError("flat position side cannot create a position-management order")
+
+    @staticmethod
+    def _order_type_for_signal_plan(signal_plan: SignalPlan) -> OrderType:
+        if signal_plan.entry is not None:
+            return signal_plan.entry.order_type
+        return OrderType.MARKET
+
+    @staticmethod
+    def _time_in_force_for_signal_plan(signal_plan: SignalPlan) -> TimeInForce:
+        if signal_plan.entry is not None and signal_plan.entry.time_in_force_preference is not None:
+            return signal_plan.entry.time_in_force_preference
+        return TimeInForce.DAY
 
     def update_status(
         self,
@@ -207,8 +455,29 @@ class OrderManager:
 
     def request_cancel(self, order_id: UUID) -> InternalOrder:
         order = self._ledger.get(order_id)
+        return self._request_cancel(order, preserve_protective=True)
+
+    def request_superseded_position_management_cancels(
+        self,
+        *,
+        account_id: UUID,
+        position_lineage_id: UUID,
+        incoming_intent: InternalOrderIntent,
+        exclude_order_id: UUID | None = None,
+    ) -> tuple[InternalOrder, ...]:
+        return tuple(
+            self._request_cancel(order, preserve_protective=False)
+            for order in self.superseded_position_management_orders(
+                account_id=account_id,
+                position_lineage_id=position_lineage_id,
+                incoming_intent=incoming_intent,
+            )
+            if order.order_id != exclude_order_id
+        )
+
+    def _request_cancel(self, order: InternalOrder, *, preserve_protective: bool) -> InternalOrder:
         self._ensure_cancelable(order)
-        if self._should_preserve_order(order):
+        if preserve_protective and self._should_preserve_order(order):
             return order
         requested = self._mark_cancel_requested(order)
         if self._broker_adapter is None:
@@ -256,6 +525,41 @@ class OrderManager:
         replaced = synced.model_copy(update={**updates, "updated_at": utc_now()})
         return self._ledger.replace(replaced)
 
+    def pending_position_management_orders(
+        self,
+        *,
+        account_id: UUID,
+        position_lineage_id: UUID,
+    ) -> tuple[InternalOrder, ...]:
+        return tuple(
+            order
+            for order in self._ledger.by_account(account_id)
+            if order.position_lineage_id == position_lineage_id
+            and order.intent != InternalOrderIntent.OPEN
+            and order.status not in self._TERMINAL_STATUSES
+            and order.cancel_requested_at is None
+        )
+
+    def superseded_position_management_orders(
+        self,
+        *,
+        account_id: UUID,
+        position_lineage_id: UUID,
+        incoming_intent: InternalOrderIntent,
+    ) -> tuple[InternalOrder, ...]:
+        incoming_priority = self._position_management_priority(incoming_intent)
+        if incoming_priority <= 0:
+            return ()
+        return tuple(
+            order
+            for order in self.pending_position_management_orders(
+                account_id=account_id,
+                position_lineage_id=position_lineage_id,
+            )
+            if incoming_priority > self._position_management_priority(order.intent)
+            or incoming_intent in {InternalOrderIntent.CLOSE, InternalOrderIntent.LOGICAL_EXIT}
+        )
+
     def _enforce_broker_sync_freshness(
         self,
         *,
@@ -287,6 +591,24 @@ class OrderManager:
         if execution_intent.intent_type == IntentType.EXIT:
             return InternalOrderIntent.CLOSE
         raise OrderManagerError(f"unsupported execution intent type: {execution_intent.intent_type}")
+
+    def _position_management_priority(self, intent: InternalOrderIntent) -> int:
+        return self._POSITION_MANAGEMENT_PRIORITY.get(intent, 0)
+
+    @staticmethod
+    def _side_for_execution_intent(
+        *,
+        execution_intent,
+        intent: InternalOrderIntent,
+    ) -> CandidateSide:
+        side = execution_intent.side
+        if intent == InternalOrderIntent.OPEN:
+            return side
+        if side == CandidateSide.LONG:
+            return CandidateSide.SHORT
+        if side == CandidateSide.SHORT:
+            return CandidateSide.LONG
+        raise OrderManagerError(f"unsupported execution side: {side}")
 
     def _next_sequence(
         self,

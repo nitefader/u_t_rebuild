@@ -1,0 +1,2454 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Ultimate Trading OS — UI Mockup v2 (blueprint-aligned)</title>
+<style>
+  :root {
+    --bg: #0b0f17;
+    --bg-elev: #121826;
+    --bg-card: #161e2e;
+    --bg-row: #1a2335;
+    --border: #243049;
+    --text: #d8e0f0;
+    --text-dim: #8a96ad;
+    --text-faint: #5b667d;
+    --accent: #4f8cff;
+    --accent-soft: rgba(79,140,255,0.15);
+    --green: #2ecc71;
+    --green-soft: rgba(46,204,113,0.15);
+    --yellow: #f6c344;
+    --yellow-soft: rgba(246,195,68,0.15);
+    --orange: #f08a3c;
+    --orange-soft: rgba(240,138,60,0.18);
+    --red: #ff4d5e;
+    --red-soft: rgba(255,77,94,0.18);
+    --purple: #a76bff;
+    --purple-soft: rgba(167,107,255,0.15);
+    --teal: #36c5b8;
+    --teal-soft: rgba(54,197,184,0.18);
+  }
+  * { box-sizing: border-box; }
+  html, body { margin:0; padding:0; height:100%; background:var(--bg); color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    font-size:13px; line-height:1.45; }
+  a { color:var(--accent); text-decoration:none; }
+  button { font-family:inherit; cursor:pointer; }
+
+  .app { display:grid; grid-template-columns:240px 1fr; grid-template-rows:54px 1fr 28px;
+    grid-template-areas:"sidebar header" "sidebar main" "sidebar footer"; height:100vh; }
+  header.topbar { grid-area:header; background:var(--bg-elev); border-bottom:1px solid var(--border);
+    display:flex; align-items:center; padding:0 16px; gap:14px; }
+  aside.sidebar { grid-area:sidebar; background:#0a0e16; border-right:1px solid var(--border); overflow-y:auto; }
+  main.content { grid-area:main; overflow-y:auto; padding:18px 22px 36px; }
+  footer.statusbar { grid-area:footer; background:var(--bg-elev); border-top:1px solid var(--border);
+    display:flex; align-items:center; padding:0 14px; gap:12px; font-size:11px; color:var(--text-dim); }
+
+  .brand { font-weight:700; font-size:13px; letter-spacing:0.5px; color:var(--text); margin-right:14px; }
+  .brand .dot { display:inline-block; width:8px; height:8px; border-radius:50%; background:var(--accent); margin-right:8px; vertical-align:middle; }
+
+  /* Mode label — canonical compound names per MODE_NAMING_CONTRACT */
+  .mode-label { padding:5px 12px; border-radius:6px; font-size:11px; font-weight:700; letter-spacing:0.6px;
+    text-transform:uppercase; border:1px solid; }
+  .mode-broker-paper { color:var(--accent); border-color:var(--accent); background:var(--accent-soft); }
+  .mode-broker-live  { color:var(--red); border-color:var(--red); background:var(--red-soft); }
+  .mode-sim-historical { color:var(--yellow); border-color:var(--yellow); background:var(--yellow-soft); }
+  .mode-sim-live { color:var(--orange); border-color:var(--orange); background:var(--orange-soft); }
+  .mode-chartlab-batch { color:var(--purple); border-color:var(--purple); background:var(--purple-soft); }
+  .mode-chartlab-live { color:var(--teal); border-color:var(--teal); background:var(--teal-soft); }
+  .mode-design { color:var(--text-dim); border-color:var(--border); background:var(--bg-card); }
+
+  .topbar-spacer { flex:1; }
+  .status-chip { display:flex; align-items:center; gap:6px; padding:5px 10px; border-radius:6px;
+    font-size:11.5px; background:var(--bg-card); border:1px solid var(--border); }
+  .status-chip .indicator { width:8px; height:8px; border-radius:50%; }
+  .ind-green { background:var(--green); box-shadow:0 0 6px var(--green); }
+  .ind-yellow { background:var(--yellow); box-shadow:0 0 6px var(--yellow); }
+  .ind-red { background:var(--red); box-shadow:0 0 6px var(--red); }
+  .ind-orange { background:var(--orange); box-shadow:0 0 6px var(--orange); }
+  .kill-btn { background:var(--red); color:white; border:none; padding:7px 14px; border-radius:6px;
+    font-weight:700; font-size:11px; letter-spacing:0.5px; text-transform:uppercase; }
+  .kill-btn:hover { background:#ff3344; }
+
+  .nav-group { padding:14px 12px 6px; font-size:10px; text-transform:uppercase; letter-spacing:1.2px; color:var(--text-faint); font-weight:600; }
+  .nav-item { display:flex; align-items:center; gap:10px; padding:8px 14px; color:var(--text-dim);
+    cursor:pointer; border-left:3px solid transparent; user-select:none; }
+  .nav-item:hover { background:#0f1422; color:var(--text); }
+  .nav-item.active { background:#101828; color:var(--text); border-left-color:var(--accent); }
+  .nav-icon { width:14px; text-align:center; opacity:0.85; }
+  .nav-badge { margin-left:auto; font-size:10px; padding:1px 6px; border-radius:8px; background:var(--bg-card); color:var(--text-dim); border:1px solid var(--border); }
+  .nav-item.active .nav-badge { background:var(--accent-soft); color:var(--accent); border-color:var(--accent); }
+
+  .page { display:none; }
+  .page.active { display:block; }
+  h1 { font-size:18px; margin:0 0 4px; font-weight:600; }
+  h2 { font-size:14px; margin:18px 0 10px; font-weight:600; letter-spacing:0.3px; }
+  h3 { font-size:12px; margin:8px 0 6px; font-weight:600; color:var(--text-dim); text-transform:uppercase; letter-spacing:0.6px; }
+  .page-sub { color:var(--text-dim); margin:0 0 16px; }
+
+  .card { background:var(--bg-card); border:1px solid var(--border); border-radius:8px; padding:14px 16px; }
+  .card.tight { padding:12px; }
+  .grid { display:grid; gap:14px; }
+  .grid-2 { grid-template-columns:repeat(2,minmax(0,1fr)); }
+  .grid-3 { grid-template-columns:repeat(3,minmax(0,1fr)); }
+  .grid-4 { grid-template-columns:repeat(4,minmax(0,1fr)); }
+
+  .stat-label { color:var(--text-dim); font-size:10.5px; text-transform:uppercase; letter-spacing:0.6px; }
+  .stat-value { font-size:22px; font-weight:600; margin-top:4px; letter-spacing:-0.3px; }
+  .stat-sub { color:var(--text-dim); font-size:11px; margin-top:2px; }
+  .stat-up { color:var(--green); }
+  .stat-down { color:var(--red); }
+
+  table { width:100%; border-collapse:collapse; font-size:12px; }
+  th { text-align:left; padding:8px 10px; color:var(--text-dim); font-weight:500; font-size:10.5px;
+    text-transform:uppercase; letter-spacing:0.6px; border-bottom:1px solid var(--border); background:#0f1422; }
+  td { padding:9px 10px; border-bottom:1px solid var(--border); }
+  tr:hover td { background:var(--bg-row); }
+  tr:last-child td { border-bottom:none; }
+  td.mono, th.mono { font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace; font-size:11.5px; }
+
+  .badge { display:inline-block; padding:2px 8px; border-radius:4px; font-size:10.5px; font-weight:600;
+    letter-spacing:0.4px; text-transform:uppercase; border:1px solid transparent; white-space:nowrap; }
+  .badge.green { background:var(--green-soft); color:var(--green); border-color:var(--green); }
+  .badge.yellow { background:var(--yellow-soft); color:var(--yellow); border-color:var(--yellow); }
+  .badge.red { background:var(--red-soft); color:var(--red); border-color:var(--red); }
+  .badge.orange { background:var(--orange-soft); color:var(--orange); border-color:var(--orange); }
+  .badge.blue { background:var(--accent-soft); color:var(--accent); border-color:var(--accent); }
+  .badge.purple { background:var(--purple-soft); color:var(--purple); border-color:var(--purple); }
+  .badge.teal { background:var(--teal-soft); color:var(--teal); border-color:var(--teal); }
+  .badge.gray { background:var(--bg-row); color:var(--text-dim); border-color:var(--border); }
+
+  /* Feature availability states */
+  .feat-available { background:var(--green-soft); color:var(--green); border-color:var(--green); }
+  .feat-warmup { background:var(--yellow-soft); color:var(--yellow); border-color:var(--yellow); }
+  .feat-missing { background:var(--orange-soft); color:var(--orange); border-color:var(--orange); }
+  .feat-unsupported { background:var(--red-soft); color:var(--red); border-color:var(--red); }
+  .feat-stale { background:var(--purple-soft); color:var(--purple); border-color:var(--purple); }
+
+  .btn { background:var(--bg-card); color:var(--text); border:1px solid var(--border); padding:6px 12px;
+    border-radius:5px; font-size:12px; }
+  .btn:hover { background:var(--bg-row); border-color:#33415e; }
+  .btn.primary { background:var(--accent); border-color:var(--accent); color:white; }
+  .btn.primary:hover { background:#3a78f0; }
+  .btn.danger { background:var(--red-soft); color:var(--red); border-color:var(--red); }
+  .btn.danger:hover { background:var(--red); color:white; }
+  .btn.ghost { background:transparent; }
+  .btn.sm { padding:4px 9px; font-size:11px; }
+  .btn-row { display:flex; gap:8px; flex-wrap:wrap; }
+
+  label { display:block; font-size:11px; color:var(--text-dim); margin-bottom:4px; text-transform:uppercase; letter-spacing:0.4px; }
+  input[type=text], input[type=number], input[type=password], select, textarea {
+    width:100%; background:#0d1322; color:var(--text); border:1px solid var(--border); border-radius:5px;
+    padding:7px 9px; font-size:12px; font-family:inherit; }
+  input:focus, select:focus, textarea:focus { outline:none; border-color:var(--accent); }
+  .form-row { display:grid; gap:12px; margin-bottom:12px; }
+  .form-row.cols-2 { grid-template-columns:1fr 1fr; }
+  .form-row.cols-3 { grid-template-columns:1fr 1fr 1fr; }
+  .form-row.cols-4 { grid-template-columns:1fr 1fr 1fr 1fr; }
+
+  .tabs { display:flex; gap:2px; border-bottom:1px solid var(--border); margin-bottom:14px; }
+  .tab { padding:8px 14px; color:var(--text-dim); cursor:pointer; border-bottom:2px solid transparent; font-size:12px; }
+  .tab.active { color:var(--text); border-bottom-color:var(--accent); }
+  .tab:hover { color:var(--text); }
+
+  .banner { padding:10px 14px; border-radius:6px; margin-bottom:14px; display:flex; gap:10px; align-items:center; }
+  .banner.warn { background:var(--orange-soft); border:1px solid var(--orange); color:#ffd9be; }
+  .banner.danger { background:var(--red-soft); border:1px solid var(--red); color:#ffcdd2; }
+  .banner.info { background:var(--accent-soft); border:1px solid var(--accent); color:#cfe0ff; }
+  .banner.success { background:var(--green-soft); border:1px solid var(--green); color:#bbeed1; }
+
+  .equity-curve { stroke:var(--green); fill:none; stroke-width:1.5; }
+  .grid-svg { stroke:#1d2741; stroke-width:0.5; }
+
+  .modal-mask { position:fixed; inset:0; background:rgba(5,8,15,0.7); display:none; align-items:center; justify-content:center; z-index:1000; }
+  .modal-mask.show { display:flex; }
+  .modal { background:var(--bg-card); border:1px solid var(--border); border-radius:10px; padding:20px 22px;
+    width:560px; max-width:92vw; box-shadow:0 25px 60px rgba(0,0,0,0.6); }
+  .modal h3 { font-size:14px; color:var(--text); margin:0 0 8px; text-transform:none; letter-spacing:0; }
+  .modal .modal-body { color:var(--text-dim); margin-bottom:16px; line-height:1.55; }
+  .modal .modal-actions { display:flex; gap:8px; justify-content:flex-end; }
+
+  .toasts { position:fixed; top:60px; right:18px; display:flex; flex-direction:column; gap:8px; z-index:900; max-width:340px; }
+  .toast { background:var(--bg-card); border:1px solid var(--border); border-left:3px solid var(--accent);
+    border-radius:6px; padding:10px 12px; font-size:12px; box-shadow:0 8px 24px rgba(0,0,0,0.4); }
+  .toast.green { border-left-color:var(--green); }
+  .toast.red { border-left-color:var(--red); }
+  .toast.yellow { border-left-color:var(--yellow); }
+  .toast .t-title { font-weight:600; margin-bottom:2px; }
+  .toast .t-sub { color:var(--text-dim); font-size:11px; }
+
+  .feature-tag { display:inline-flex; gap:6px; align-items:center; background:#0f1525; border:1px solid var(--border);
+    padding:4px 10px; border-radius:18px; margin:2px 4px 2px 0; font-size:11.5px; font-family:ui-monospace,monospace; }
+  .feature-tag .tf { color:var(--text-faint); font-size:10px; }
+  .feature-tag.planned { background:transparent; border-style:dashed; color:var(--text-dim); }
+  .feature-cat { background:var(--bg-card); border:1px solid var(--border); border-radius:8px; padding:12px 14px; margin-bottom:12px; }
+  .feature-cat-head { display:flex; align-items:center; gap:10px; margin-bottom:10px; }
+  .feature-cat-title { font-size:11.5px; text-transform:uppercase; letter-spacing:0.7px; color:var(--text); font-weight:600; }
+  .feature-cat-count { font-size:10.5px; color:var(--text-faint); }
+  .feature-cat-meta { margin-left:auto; font-size:10.5px; color:var(--text-faint); }
+  .feature-cat-body { display:flex; flex-wrap:wrap; gap:0; }
+
+  pre.diff { background:#0a0f1c; padding:12px 14px; border-radius:6px; border:1px solid var(--border);
+    font-family:ui-monospace,monospace; font-size:11.5px; line-height:1.55; overflow-x:auto; }
+
+  .chart-shell { background:#0a0f1c; border:1px solid var(--border); border-radius:6px; padding:8px; }
+
+  .fs-divider { width:1px; height:14px; background:var(--border); }
+
+  .muted { color:var(--text-dim); }
+  .nowrap { white-space:nowrap; }
+  .right { text-align:right; }
+  .small { font-size:11px; }
+  .pct-up { color:var(--green); }
+  .pct-down { color:var(--red); }
+  .help-tip { color:var(--text-faint); font-size:11px; margin-top:4px; }
+
+  /* Condition truth tree */
+  .truth-tree { font-family:ui-monospace,monospace; font-size:12px; line-height:1.7; background:#0a0f1c; border:1px solid var(--border); border-radius:6px; padding:14px 16px; }
+  .truth-line { display:flex; align-items:center; gap:10px; }
+  .truth-line.fail { color:#ffb1b6; }
+  .truth-line.pass { color:#9eebbc; }
+  .truth-icon { width:14px; }
+  .truth-feature { color:var(--text); }
+  .truth-op { color:var(--text-dim); }
+  .truth-val { color:var(--accent); }
+
+  /* Promotion gate checklist */
+  .gate-list { list-style:none; padding:0; margin:0; }
+  .gate-item { display:flex; align-items:center; gap:10px; padding:8px 0; border-bottom:1px solid var(--border); font-size:12px; }
+  .gate-item:last-child { border-bottom:none; }
+  .gate-icon { width:18px; text-align:center; font-weight:700; }
+  .gate-pass { color:var(--green); }
+  .gate-fail { color:var(--red); }
+  .gate-warn { color:var(--yellow); }
+
+  /* Decision Inspector */
+  .inspector-stage { display:flex; gap:12px; padding:10px 12px; border-left:3px solid var(--border); margin-bottom:6px; background:#0d1322; border-radius:0 4px 4px 0; }
+  .inspector-stage.pass { border-left-color:var(--green); }
+  .inspector-stage.fail { border-left-color:var(--red); }
+  .inspector-stage.warn { border-left-color:var(--yellow); }
+  .stage-name { width:160px; font-size:11px; text-transform:uppercase; letter-spacing:0.5px; color:var(--text-dim); }
+  .stage-detail { flex:1; font-size:12px; color:var(--text); }
+  .stage-meta { font-family:ui-monospace,monospace; color:var(--text-faint); font-size:11px; }
+
+  /* client_order_id split */
+  .coid { font-family:ui-monospace,monospace; font-size:11.5px; display:inline-flex; gap:0; }
+  .coid span { padding:2px 6px; border:1px solid var(--border); }
+  .coid span:first-child { border-radius:4px 0 0 4px; }
+  .coid span:last-child { border-radius:0 4px 4px 0; border-right:1px solid var(--border); }
+  .coid span:not(:last-child) { border-right:none; }
+  .coid .c-prefix { background:#0d1322; color:var(--text-faint); }
+  .coid .c-acct { background:var(--accent-soft); color:var(--accent); }
+  .coid .c-dep  { background:var(--purple-soft); color:var(--purple); }
+  .coid .c-prog { background:var(--teal-soft); color:var(--teal); }
+  .coid .c-int  { background:var(--green-soft); color:var(--green); }
+  .coid .c-seq  { background:#0d1322; color:var(--text-dim); }
+
+  /* Slice progress */
+  .slice { display:flex; align-items:center; gap:12px; padding:9px 12px; border:1px solid var(--border); border-radius:6px; margin-bottom:6px; }
+  .slice-num { font-family:ui-monospace,monospace; color:var(--text-faint); font-size:11px; width:60px; }
+  .slice-title { flex:1; font-size:12px; }
+  .slice-bar { width:140px; height:5px; background:#0a0f1c; border-radius:3px; overflow:hidden; }
+  .slice-bar > span { display:block; height:100%; background:var(--accent); }
+  .slice.done .slice-bar > span { background:var(--green); }
+
+  /* Marker legend */
+  .marker-legend { display:flex; flex-wrap:wrap; gap:6px; }
+  .marker-chip { font-size:11px; padding:3px 8px; border-radius:12px; border:1px solid; display:inline-flex; gap:6px; align-items:center; }
+  .marker-chip svg { width:12px; height:12px; }
+
+  /* Event stream */
+  .event-row { display:grid; grid-template-columns:90px 80px 160px 1fr 90px; gap:10px;
+    padding:6px 10px; border-bottom:1px solid var(--border); font-size:11.5px; align-items:center; cursor:pointer; }
+  .event-row:hover { background:var(--bg-row); }
+  .event-time { color:var(--text-faint); font-family:ui-monospace,monospace; }
+  .event-stage { font-size:10.5px; }
+
+  /* Inspector layout */
+  .inspector-grid { display:grid; grid-template-columns:1.2fr 0.8fr; gap:14px; }
+
+  /* AI builder steps */
+  .builder-step { display:flex; align-items:flex-start; gap:14px; padding:14px 0; border-bottom:1px solid var(--border); }
+  .builder-step:last-child { border-bottom:none; }
+  .step-num { width:28px; height:28px; border-radius:50%; background:var(--accent-soft); color:var(--accent);
+    font-weight:700; font-size:13px; display:flex; align-items:center; justify-content:center; flex-shrink:0; }
+  .step-content { flex:1; }
+  .step-title { font-size:13px; font-weight:600; margin-bottom:4px; }
+
+  /* AI Composer */
+  .composer-input-card { background:var(--bg-card); border:1px solid var(--border); border-radius:10px; padding:14px 16px; margin-bottom:14px; }
+  .composer-input-row { display:flex; gap:10px; align-items:center; margin-bottom:10px; }
+  .composer-input-row textarea { flex:1; min-height:46px; resize:vertical; }
+  .example-chips { display:flex; gap:6px; flex-wrap:wrap; align-items:center; }
+  .example-chip { font-size:11.5px; padding:5px 10px; border-radius:14px; border:1px solid var(--border);
+    background:#0d1322; color:var(--text-dim); cursor:pointer; }
+  .example-chip:hover { color:var(--text); border-color:var(--accent); }
+
+  .draft-banner { display:flex; align-items:center; gap:12px; padding:10px 14px; background:#0d1322;
+    border:1px solid var(--border); border-radius:8px; margin-bottom:10px; }
+  .draft-title { font-size:14px; font-weight:600; }
+  .conf-pill { padding:2px 9px; border-radius:10px; font-size:11px; font-weight:600;
+    background:var(--green-soft); color:var(--green); border:1px solid var(--green); }
+  .draft-actions { margin-left:auto; display:flex; gap:6px; }
+
+  .step-card { display:grid; grid-template-columns:14px 36px 1fr 110px 90px 200px 30px;
+    gap:12px; align-items:center; padding:11px 12px; background:var(--bg-card); border:1px solid var(--border);
+    border-radius:8px; margin-bottom:6px; }
+  .step-card.expanded { display:block; padding:14px 16px; }
+  .step-handle { color:var(--text-faint); font-size:14px; cursor:grab; user-select:none; line-height:1; }
+  .step-icon { width:34px; height:34px; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:14px; }
+  .si-blue { background:var(--accent-soft); color:var(--accent); }
+  .si-green { background:var(--green-soft); color:var(--green); }
+  .si-purple { background:var(--purple-soft); color:var(--purple); }
+  .si-red { background:var(--red-soft); color:var(--red); }
+  .si-yellow { background:var(--yellow-soft); color:var(--yellow); }
+  .si-orange { background:var(--orange-soft); color:var(--orange); }
+  .si-teal { background:var(--teal-soft); color:var(--teal); }
+  .step-body { display:flex; flex-direction:column; gap:3px; min-width:0; }
+  .step-name { font-size:13px; font-weight:600; }
+  .step-summary { color:var(--text-dim); font-size:11.5px; line-height:1.5; overflow:hidden; }
+  .step-status { font-size:11px; }
+  .step-mini-actions { display:flex; gap:5px; }
+  .step-mini-actions .btn { padding:3px 9px; font-size:11px; }
+  .reuse-pill { background:#0d1322; border:1px solid var(--border); border-radius:6px;
+    padding:5px 8px; display:flex; flex-direction:column; gap:2px; cursor:pointer; }
+  .reuse-pill:hover { border-color:var(--accent); }
+  .reuse-line { font-size:10.5px; color:var(--text-dim); }
+  .reuse-line strong { color:var(--text); }
+  .match-bar { width:100%; height:3px; background:#1d2741; border-radius:2px; overflow:hidden; margin-top:2px; }
+  .match-bar > span { display:block; height:100%; background:var(--green); }
+  .step-toggle { width:24px; height:14px; border-radius:8px; background:var(--green); position:relative; cursor:pointer; }
+  .step-toggle::after { content:""; position:absolute; right:1px; top:1px; width:12px; height:12px; border-radius:50%; background:white; }
+  .step-toggle.off { background:#2c3552; }
+  .step-toggle.off::after { left:1px; right:auto; }
+
+  /* Visual condition builder */
+  .cond-section { background:#0a0f1c; border:1px solid var(--border); border-radius:6px; padding:10px 12px; margin-top:10px; }
+  .cond-label { font-size:10.5px; text-transform:uppercase; letter-spacing:0.6px; color:var(--text-dim); margin-bottom:8px; }
+  .cond-row { display:flex; align-items:center; gap:6px; flex-wrap:wrap; padding:5px 0; position:relative; }
+  .cond-and { font-size:10px; color:var(--text-faint); font-weight:700; letter-spacing:0.7px; padding:0 6px; }
+  .cond-pill { display:inline-flex; align-items:center; gap:5px; padding:5px 10px; border-radius:5px;
+    background:#0f1525; border:1px solid var(--border); font-family:ui-monospace,monospace; font-size:11.5px;
+    color:var(--text); cursor:pointer; user-select:none; }
+  .cond-pill:hover { border-color:var(--accent); }
+  .cond-pill .caret { color:var(--text-faint); font-size:9px; }
+  .cond-pill.tf { color:var(--purple); border-color:var(--purple); background:var(--purple-soft); }
+  .cond-pill.field { color:var(--accent); border-color:var(--accent); background:var(--accent-soft); }
+  .cond-pill.op { color:var(--text-dim); }
+  .cond-pill.val { color:var(--green); border-color:var(--green); background:var(--green-soft); }
+  .cond-pill.feat { color:var(--teal); border-color:var(--teal); background:var(--teal-soft); }
+  .cond-pill.del { color:var(--text-faint); padding:5px 8px; background:transparent; border:none; }
+  .cond-pill.del:hover { color:var(--red); }
+  .cond-pill.add { color:var(--text-dim); border-style:dashed; background:transparent; }
+  .cond-pill.add:hover { color:var(--accent); border-color:var(--accent); }
+  .cond-pill.active { box-shadow:0 0 0 2px var(--accent), 0 0 0 4px var(--accent-soft); }
+
+  .autocomplete { position:absolute; top:34px; left:0; background:var(--bg-card); border:1px solid var(--accent);
+    border-radius:6px; min-width:280px; box-shadow:0 12px 32px rgba(0,0,0,0.5); z-index:50; padding:6px 0; }
+  .ac-search { padding:8px 10px; border-bottom:1px solid var(--border); }
+  .ac-search input { font-size:11.5px; padding:5px 8px; }
+  .ac-group { padding:6px 0; }
+  .ac-group-title { font-size:10px; text-transform:uppercase; letter-spacing:0.5px; color:var(--text-faint); padding:2px 12px 4px; }
+  .ac-item { padding:5px 12px; font-size:12px; cursor:pointer; display:flex; align-items:center; gap:8px; font-family:ui-monospace,monospace; }
+  .ac-item:hover, .ac-item.selected { background:var(--accent-soft); color:var(--accent); }
+  .ac-item .ac-tf { color:var(--text-faint); font-size:10px; margin-left:auto; }
+  .ac-foot { border-top:1px solid var(--border); padding:6px 12px; font-size:10.5px; color:var(--text-faint); }
+  .ac-foot kbd { background:#0a0f1c; border:1px solid var(--border); border-radius:3px; padding:1px 5px;
+    font-family:ui-monospace,monospace; font-size:10px; color:var(--text-dim); }
+
+  /* Backtest Plan card */
+  .bt-plan-grid { display:grid; grid-template-columns:repeat(4, minmax(0,1fr)); gap:14px; }
+  .bt-plan-col h4 { font-size:11px; text-transform:uppercase; letter-spacing:0.6px; color:var(--text); margin:0 0 8px; }
+  .bt-plan-col table { font-size:11.5px; }
+  .bt-plan-col td { padding:3px 0; border:none; }
+  .bt-plan-col td.muted { color:var(--text-dim); padding-right:8px; }
+
+  /* Composer layout */
+  .composer-grid { display:grid; grid-template-columns:1fr 320px; gap:14px; align-items:start; }
+  .side-card { background:var(--bg-card); border:1px solid var(--border); border-radius:8px; padding:12px 14px; margin-bottom:10px; }
+  .side-card h3 { font-size:11px; text-transform:uppercase; letter-spacing:0.6px; color:var(--text); margin:0 0 8px; font-weight:600; }
+  .side-row { display:flex; align-items:center; gap:8px; padding:5px 0; font-size:12px; }
+  .side-row .right-num { margin-left:auto; color:var(--text-dim); font-family:ui-monospace,monospace; font-size:11px; }
+  .lib-count-row { display:flex; align-items:center; padding:4px 0; font-size:12px; }
+  .lib-count-row .ck { color:var(--green); margin-right:8px; }
+  .lib-count-row .num { font-family:ui-monospace,monospace; color:var(--text); margin-left:auto; }
+  .similar-row { display:flex; align-items:center; padding:6px 0; font-size:12px; cursor:pointer; border-bottom:1px solid var(--border); }
+  .similar-row:last-child { border-bottom:none; }
+  .similar-row:hover { color:var(--accent); }
+  .similar-row .pct { margin-left:auto; color:var(--green); font-family:ui-monospace,monospace; font-size:11px; }
+
+  /* Templates strip */
+  .templates-strip { display:flex; gap:10px; overflow-x:auto; padding:10px 0 4px; margin-top:14px; border-top:1px solid var(--border); }
+  .template-card { min-width:170px; background:var(--bg-card); border:1px solid var(--border); border-radius:8px;
+    padding:10px 12px; display:flex; align-items:center; gap:10px; cursor:pointer; }
+  .template-card:hover { border-color:var(--accent); }
+  .template-icon { width:30px; height:30px; border-radius:6px; display:flex; align-items:center; justify-content:center; font-size:14px; }
+
+</style>
+</head>
+<body>
+
+<div class="app">
+
+  <!-- ================= TOP BAR ================= -->
+  <header class="topbar">
+    <div class="brand"><span class="dot"></span>ULTIMATE TRADING OS</div>
+    <span class="mode-label mode-design" id="mode-label">Design Time</span>
+    <span class="muted small">Account: <strong style="color:var(--text)">acct-7c4f9b1a</strong></span>
+    <div class="topbar-spacer"></div>
+    <div class="status-chip" title="System recovery"><span class="indicator ind-green"></span>System OK</div>
+    <div class="status-chip" title="Broker sync freshness"><span class="indicator ind-green"></span>Broker sync 3s ago</div>
+    <div class="status-chip" title="Portfolio Governor"><span class="indicator ind-green"></span>Portfolio Governor active</div>
+    <div class="status-chip" id="kill-chip" title="Global kill switch"><span class="indicator ind-green"></span>Kill: none</div>
+    <button class="kill-btn" onclick="openKillModal()">⛔ STOP ALL OPENS</button>
+  </header>
+
+  <!-- ================= SIDEBAR ================= -->
+  <aside class="sidebar">
+
+    <div class="nav-group">Build</div>
+    <div class="nav-item active" data-page="strategies" data-mode="design"><span class="nav-icon">∿</span>Strategies<span class="nav-badge">7</span></div>
+    <div class="nav-item" data-page="components" data-mode="design"><span class="nav-icon">⊟</span>Components<span class="nav-badge">15</span></div>
+    <div class="nav-item" data-page="universes" data-mode="design"><span class="nav-icon">☰</span>Universes<span class="nav-badge">4</span></div>
+    <div class="nav-item" data-page="programs" data-mode="design"><span class="nav-icon">▢</span>Programs<span class="nav-badge">3</span></div>
+    <div class="nav-item" data-page="aicomposer" data-mode="design"><span class="nav-icon">✦</span>AI Composer<span class="nav-badge">new</span></div>
+
+    <div class="nav-group">Validate</div>
+    <div class="nav-item" data-page="chartlab" data-mode="chartlab-batch"><span class="nav-icon">📈</span>Chart Lab</div>
+    <div class="nav-item" data-page="simlab" data-mode="sim-historical"><span class="nav-icon">▶</span>Sim Lab</div>
+    <div class="nav-item" data-page="backtests" data-mode="design"><span class="nav-icon">⟳</span>Backtests</div>
+    <div class="nav-item" data-page="optimizations" data-mode="design"><span class="nav-icon">≣</span>Optimizations</div>
+    <div class="nav-item" data-page="walkforward" data-mode="design"><span class="nav-icon">⤳</span>Walk-Forward</div>
+    <div class="nav-item" data-page="evidence" data-mode="design"><span class="nav-icon">⚎</span>Evidence</div>
+
+    <div class="nav-group">Operate</div>
+    <div class="nav-item" data-page="deployments" data-mode="broker-paper"><span class="nav-icon">▦</span>Deployments<span class="nav-badge">4</span></div>
+    <div class="nav-item" data-page="operations" data-mode="broker-paper"><span class="nav-icon">⚙</span>Operations Center<span class="nav-badge">2</span></div>
+    <div class="nav-item" data-page="governor" data-mode="broker-paper"><span class="nav-icon">◎</span>Portfolio Governor</div>
+
+    <div class="nav-group">Admin</div>
+    <div class="nav-item" data-page="brokers" data-mode="design"><span class="nav-icon">🏦</span>Broker Accounts</div>
+    <div class="nav-item" data-page="providers" data-mode="design"><span class="nav-icon">⇆</span>Providers</div>
+    <div class="nav-item" data-page="audit" data-mode="design"><span class="nav-icon">📋</span>Audit Logs</div>
+    <div class="nav-item" data-page="backup" data-mode="design"><span class="nav-icon">⤓</span>Backup</div>
+    <div class="nav-item" data-page="aibuilder" data-mode="design"><span class="nav-icon">✦</span>AI Builder</div>
+    <div class="nav-item" data-page="features" data-mode="design"><span class="nav-icon">𝑓</span>Feature Catalog</div>
+    <div class="nav-item" data-page="journeys" data-mode="design"><span class="nav-icon">⊞</span>Journey Hub<span class="nav-badge">150</span></div>
+  </aside>
+
+  <!-- ================= MAIN ================= -->
+  <main class="content">
+
+    <!-- ============ STRATEGIES ============ -->
+    <section class="page active" id="page-strategies">
+      <h1>Strategies</h1>
+      <p class="page-sub">Signal logic only. No sizing, sessions, order types, or broker calls — those live elsewhere.</p>
+
+      <div class="tabs">
+        <div class="tab active">Library</div>
+        <div class="tab">Editor</div>
+        <div class="tab">Version Diff</div>
+      </div>
+
+      <div class="btn-row" style="margin-bottom:12px;">
+        <button class="btn primary">+ New Strategy</button>
+        <button class="btn ghost">Import</button>
+      </div>
+
+      <div class="grid grid-2">
+        <div class="card">
+          <div style="display:flex; justify-content:space-between; align-items:start;">
+            <div>
+              <h3 style="margin:0; font-size:13px; color:var(--text); text-transform:none; letter-spacing:0;">Momentum Breakout</h3>
+              <div class="muted small">v3.2 (frozen) · 4 versions · last edit 2d ago</div>
+            </div>
+            <span class="badge green">Validated</span>
+          </div>
+          <div class="muted small" style="margin-top:10px;">
+            <strong style="color:var(--text)">Entry:</strong> 5m.close[0] &gt; 5m.ema:length=20[0] AND 5m.rsi:length=14[0] &gt; 55<br>
+            <strong style="color:var(--text)">Stop candidate:</strong> entry − 1.5 × 5m.atr:length=14[0]<br>
+            <strong style="color:var(--text)">Target candidate:</strong> entry + 3.0 × 5m.atr:length=14[0]
+          </div>
+          <div class="btn-row" style="margin-top:10px;">
+            <button class="btn sm">Edit (creates v3.3)</button>
+            <button class="btn sm">Diff</button>
+            <button class="btn sm">Open in Chart Lab</button>
+          </div>
+        </div>
+
+        <div class="card">
+          <div style="display:flex; justify-content:space-between; align-items:start;">
+            <div>
+              <h3 style="margin:0; font-size:13px; color:var(--text); text-transform:none; letter-spacing:0;">Mean Reversion ETF</h3>
+              <div class="muted small">v1.4 (frozen) · 2 versions · last edit 5d ago</div>
+            </div>
+            <span class="badge green">Validated</span>
+          </div>
+          <div class="muted small" style="margin-top:10px;">
+            <strong style="color:var(--text)">Entry:</strong> 5m.close[0] &lt; bb_lower AND 5m.rsi:length=14[0] &lt; 30<br>
+            <strong style="color:var(--text)">Stop:</strong> entry − 2.0 × atr_14<br>
+            <strong style="color:var(--text)">Target:</strong> bb_mid (mid-band touch)
+          </div>
+        </div>
+
+        <div class="card">
+          <div style="display:flex; justify-content:space-between; align-items:start;">
+            <div>
+              <h3 style="margin:0; font-size:13px; color:var(--text); text-transform:none; letter-spacing:0;">VWAP Reversion 5m</h3>
+              <div class="muted small">v0.9 (draft) · 1 version</div>
+            </div>
+            <span class="badge yellow">Draft</span>
+          </div>
+          <div class="muted small" style="margin-top:10px;">
+            <strong style="color:var(--text)">Entry:</strong> price deviates &gt; 1.5σ from 5m.vwap_session<br>
+            <strong style="color:var(--text)">Stop:</strong> 0.8 × atr_14 · <strong>Target:</strong> 5m.vwap_session
+          </div>
+        </div>
+
+        <div class="card">
+          <div style="display:flex; justify-content:space-between; align-items:start;">
+            <div>
+              <h3 style="margin:0; font-size:13px; color:var(--text); text-transform:none; letter-spacing:0;">Gap &amp; Go</h3>
+              <div class="muted small">v2.1 · 3 versions</div>
+            </div>
+            <span class="badge red">Schema error</span>
+          </div>
+          <div class="muted small" style="margin-top:10px;">
+            <strong class="pct-down">Validation:</strong> stop candidate references unsupported feature <code>gap_fill_pct</code><br>
+            <span class="badge feat-unsupported">unsupported</span> AI may not invent features outside the registry.
+          </div>
+        </div>
+      </div>
+
+      <h2>Version Diff · Momentum Breakout v3.1 → v3.2</h2>
+      <pre class="diff">  entry:
+-   condition: 5m.close[0] &gt; 5m.ema:length=20[0] AND 5m.rsi:length=14[0] &gt; 50
++   condition: 5m.close[0] &gt; 5m.ema:length=20[0] AND 5m.rsi:length=14[0] &gt; 55
+  stop_candidate:
+    type: atr
+-   multiplier: 2.0
++   multiplier: 1.5
+  target_candidate:
+    type: atr
+    multiplier: 3.0</pre>
+    </section>
+
+    <!-- ============ COMPONENTS (Controls + Risk + Execution) ============ -->
+    <section class="page" id="page-components">
+      <h1>Components</h1>
+      <p class="page-sub">Strategy Controls · Risk Profiles · Execution Styles. Each is a versioned reference owned by Programs.</p>
+
+      <div class="tabs" id="comp-tabs">
+        <div class="tab active" data-comp="controls">Strategy Controls (5)</div>
+        <div class="tab" data-comp="risk">Risk Profiles (4)</div>
+        <div class="tab" data-comp="execution">Execution Styles (6)</div>
+      </div>
+
+      <!-- Strategy Controls -->
+      <div id="comp-controls">
+        <div class="grid grid-2">
+          <div class="card">
+            <h3 style="margin-top:0;">Day-Trade Standard</h3>
+            <div class="muted small">5 trades/session · 10m cooldown · 09:35–15:55 ET · Owns: timeframe, sessions, cooldowns, trade caps, blackouts</div>
+            <table style="margin-top:10px;">
+              <tr><td class="muted">Session windows</td><td>09:35–11:30, 13:30–15:55 ET</td></tr>
+              <tr><td class="muted">Cooldown</td><td>10 min after exit</td></tr>
+              <tr><td class="muted">Max trades / session</td><td>5</td></tr>
+              <tr><td class="muted">Earnings blackout</td><td><span class="badge green">On</span> ±2 days</td></tr>
+              <tr><td class="muted">Regime permission</td><td>SPY atr_14 &lt; 1.8%</td></tr>
+            </table>
+          </div>
+          <div class="card">
+            <h3 style="margin-top:0;">Swing Standard</h3>
+            <div class="muted small">3 trades/day · 1-bar cooldown (1h) · regular session</div>
+            <table style="margin-top:10px;">
+              <tr><td class="muted">Session windows</td><td>09:30–16:00 ET</td></tr>
+              <tr><td class="muted">Cooldown</td><td>1 bar (1h)</td></tr>
+              <tr><td class="muted">Max trades / session</td><td>3</td></tr>
+              <tr><td class="muted">Earnings blackout</td><td><span class="badge green">On</span> ±1 day</td></tr>
+              <tr><td class="muted">Regime permission</td><td>none</td></tr>
+            </table>
+          </div>
+        </div>
+        <h2>Editor — Day-Trade Standard</h2>
+        <div class="card">
+          <div class="form-row cols-3">
+            <div><label>Timeframe</label><select><option>5m</option><option>15m</option><option>1h</option></select></div>
+            <div><label>Max trades / session</label><input type="number" value="5"></div>
+            <div><label>Cooldown (min)</label><input type="number" value="10"></div>
+          </div>
+          <div class="form-row cols-2">
+            <div><label>Session window 1</label><input type="text" value="09:35-11:30 America/New_York"></div>
+            <div><label>Session window 2</label><input type="text" value="13:30-15:55 America/New_York"></div>
+          </div>
+          <div class="form-row cols-3">
+            <div><label>Earnings blackout (days)</label><input type="number" value="2"></div>
+            <div><label>Regime permission</label><input type="text" value="SPY atr_14 &lt; 1.8%"></div>
+            <div><label>Calendar version</label><select><option>NYSE_2026_v3</option></select></div>
+          </div>
+          <div class="btn-row"><button class="btn primary">Save (creates new version)</button><button class="btn">Test Overlap</button></div>
+          <div class="help-tip">Strategy Controls owns timeframe, sessions, cooldowns, trade caps, and blackouts. Sizing and order shape live elsewhere.</div>
+        </div>
+      </div>
+
+      <!-- Risk Profiles -->
+      <div id="comp-risk" style="display:none;">
+        <div class="grid grid-3">
+          <div class="card">
+            <h3 style="margin-top:0;">Conservative</h3>
+            <div class="muted small">Linked to: 2 programs · 1 broker account · Owns: sizing + loss + exposure limits + fallback stop</div>
+            <table style="margin-top:8px;">
+              <tr><td class="muted">Risk / trade</td><td>0.5%</td></tr>
+              <tr><td class="muted">Max positions</td><td>6</td></tr>
+              <tr><td class="muted">Max gross exposure</td><td>40%</td></tr>
+              <tr><td class="muted">Max daily loss</td><td>1.5%</td></tr>
+              <tr><td class="muted">Max drawdown</td><td>4%</td></tr>
+              <tr><td class="muted">Fallback stop</td><td>2.5 × atr_14</td></tr>
+            </table>
+          </div>
+          <div class="card">
+            <h3 style="margin-top:0;">Aggressive</h3>
+            <div class="muted small">Linked to: 1 program</div>
+            <table style="margin-top:8px;">
+              <tr><td class="muted">Risk / trade</td><td>1.5%</td></tr>
+              <tr><td class="muted">Max positions</td><td>12</td></tr>
+              <tr><td class="muted">Max gross exposure</td><td>120%</td></tr>
+              <tr><td class="muted">Max daily loss</td><td>3.0% <span class="badge red">Triggered</span></td></tr>
+              <tr><td class="muted">Max drawdown</td><td>8%</td></tr>
+              <tr><td class="muted">Fallback stop</td><td>1.5 × atr_14</td></tr>
+            </table>
+          </div>
+          <div class="card">
+            <h3 style="margin-top:0;">Earnings Plays</h3>
+            <div class="muted small">Template · 0 programs</div>
+            <table style="margin-top:8px;">
+              <tr><td class="muted">Risk / trade</td><td>0.25%</td></tr>
+              <tr><td class="muted">Max positions</td><td>3</td></tr>
+              <tr><td class="muted">Max gross exposure</td><td>15%</td></tr>
+              <tr><td class="muted">Max daily loss</td><td>1.0%</td></tr>
+              <tr><td class="muted">Max drawdown</td><td>3%</td></tr>
+              <tr><td class="muted">Fallback stop</td><td>1.0 × atr_14</td></tr>
+            </table>
+          </div>
+        </div>
+        <div class="banner warn" style="margin-top:14px;">
+          <strong>Daily-loss lockout active</strong> on Risk Profile <em>Aggressive</em> — new opens blocked until 00:00 ET. Existing positions remain managed; protective exits preserved.
+        </div>
+      </div>
+
+      <!-- Execution Styles -->
+      <div id="comp-execution" style="display:none;">
+        <div class="grid grid-3">
+          <div class="card">
+            <h3 style="margin-top:0;">Native Bracket</h3>
+            <div class="muted small">Owns: order expression, TIF, brackets, trailing, cancel/replace, scale-out</div>
+            <table>
+              <tr><td class="muted">Entry</td><td>Limit @ signal price</td></tr>
+              <tr><td class="muted">Stop leg</td><td>Native bracket stop</td></tr>
+              <tr><td class="muted">Target leg</td><td>Native bracket limit</td></tr>
+              <tr><td class="muted">TIF</td><td>DAY</td></tr>
+              <tr><td class="muted">Cancel after</td><td>10 bars unfilled</td></tr>
+            </table>
+          </div>
+          <div class="card">
+            <h3 style="margin-top:0;">Trailing Stop</h3>
+            <table>
+              <tr><td class="muted">Entry</td><td>Market on signal</td></tr>
+              <tr><td class="muted">Stop</td><td>Trailing 1.5 × atr_14</td></tr>
+              <tr><td class="muted">Target</td><td>None — trail to exit</td></tr>
+              <tr><td class="muted">TIF</td><td>GTC</td></tr>
+            </table>
+          </div>
+          <div class="card">
+            <h3 style="margin-top:0;">Scale-Out 3-Tier</h3>
+            <table>
+              <tr><td class="muted">Entry</td><td>Stop-Limit on breakout</td></tr>
+              <tr><td class="muted">Stop</td><td>Static 1.0 × atr_14</td></tr>
+              <tr><td class="muted">Targets</td><td>33% @ 1R · 33% @ 2R · 34% @ 3R</td></tr>
+              <tr><td class="muted">Bracket native</td><td>Simulated (sums to 100%)</td></tr>
+            </table>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ UNIVERSES ============ -->
+    <section class="page" id="page-universes">
+      <h1>Universes</h1>
+      <p class="page-sub">Tradable symbol source and resolution rules. A Program references a frozen Universe snapshot.</p>
+
+      <div class="btn-row" style="margin-bottom:12px;">
+        <button class="btn primary">+ New Universe</button>
+        <button class="btn">Refresh All</button>
+      </div>
+
+      <div class="grid grid-3">
+        <div class="card">
+          <h3 style="margin-top:0;">Liquid Large Caps</h3>
+          <div class="muted small">42 active · 3 candidate · 1 suspended</div>
+          <div class="stat-sub" style="margin-top:8px;">Last refresh: 2m ago · snapshot u-9d2b1f</div>
+        </div>
+        <div class="card">
+          <h3 style="margin-top:0;">High-Volume ETFs</h3>
+          <div class="muted small">18 active</div>
+          <div class="stat-sub" style="margin-top:8px;">Last refresh: 14m ago · snapshot u-77a204</div>
+        </div>
+        <div class="card">
+          <h3 style="margin-top:0;">Earnings Movers</h3>
+          <div class="muted small">7 active · 12 candidate · 4 suspended</div>
+          <div class="stat-sub" style="margin-top:8px;"><span class="badge orange">Stale</span> 3h 14m ago</div>
+        </div>
+      </div>
+
+      <h2>Liquid Large Caps · Members</h2>
+      <div class="card tight">
+        <table>
+          <thead><tr><th>Symbol</th><th>State</th><th>Since</th><th>Dwell</th><th>Reason</th></tr></thead>
+          <tbody>
+            <tr><td class="mono">AAPL</td><td><span class="badge green">Active</span></td><td class="muted">2026-03-12</td><td>43d</td><td class="muted">manual_add</td></tr>
+            <tr><td class="mono">MSFT</td><td><span class="badge green">Active</span></td><td class="muted">2026-03-12</td><td>43d</td><td class="muted">manual_add</td></tr>
+            <tr><td class="mono">NVDA</td><td><span class="badge green">Active</span></td><td class="muted">2026-03-12</td><td>43d</td><td class="muted">manual_add</td></tr>
+            <tr><td class="mono">TSLA</td><td><span class="badge yellow">Pending Removal</span></td><td class="muted">2026-04-22</td><td>2d</td><td class="muted">low_avg_volume</td></tr>
+            <tr><td class="mono">NFLX</td><td><span class="badge blue">Candidate</span></td><td class="muted">2026-04-23</td><td>1d</td><td class="muted">cooldown</td></tr>
+            <tr><td class="mono">META</td><td><span class="badge red">Suspended</span></td><td class="muted">2026-04-18</td><td>6d</td><td class="muted">earnings_blackout</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ============ PROGRAMS ============ -->
+    <section class="page" id="page-programs">
+      <h1>Programs</h1>
+      <p class="page-sub">A frozen package of references: Strategy + Strategy Controls + Risk Profile + Execution Style + Universe snapshot. Programs hold no inline behavior.</p>
+
+      <div class="btn-row" style="margin-bottom:12px;">
+        <button class="btn primary">+ New Program</button>
+      </div>
+
+      <div class="card">
+        <table>
+          <thead><tr><th>Name</th><th>Strategy</th><th>Controls</th><th>Risk</th><th>Execution</th><th>Universe</th><th>Status</th></tr></thead>
+          <tbody>
+            <tr><td><strong>Momentum Breakout v3</strong></td><td>Momentum Breakout v3.2</td><td>Day-Trade Standard v2</td><td>Conservative v3</td><td>Native Bracket v1</td><td>Liquid Large Caps u-9d2b1f</td><td><span class="badge green">Frozen · deployed</span></td></tr>
+            <tr><td><strong>Mean Reversion ETF</strong></td><td>Mean Reversion ETF v1.4</td><td>Swing Standard v1</td><td>Conservative v3</td><td>Trailing Stop v2</td><td>High-Volume ETFs u-77a204</td><td><span class="badge green">Frozen · deployed</span></td></tr>
+            <tr><td><strong>Gap &amp; Go Small Caps</strong></td><td>Gap &amp; Go v2.1</td><td>Day-Trade Standard v2</td><td>Aggressive v2</td><td>Scale-Out 3-Tier v1</td><td>Earnings Movers u-3a44e0</td><td><span class="badge yellow">Frozen · paper review</span></td></tr>
+            <tr><td><strong>VWAP Reversion 5m</strong></td><td>VWAP Reversion 5m v0.9</td><td>Day-Trade Standard v2</td><td>Conservative v3</td><td>Trailing Stop v2</td><td>Liquid Large Caps u-9d2b1f</td><td><span class="badge gray">Draft</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h2>Composer — Momentum Breakout v3</h2>
+      <div class="card">
+        <div class="form-row cols-3">
+          <div><label>Strategy version</label><select><option>Momentum Breakout v3.2 ✓</option></select></div>
+          <div><label>Strategy Controls version</label><select><option>Day-Trade Standard v2</option></select></div>
+          <div><label>Risk Profile version</label><select><option>Conservative v3</option></select></div>
+        </div>
+        <div class="form-row cols-2">
+          <div><label>Execution Style version</label><select><option>Native Bracket v1</option></select></div>
+          <div><label>Universe snapshot</label><select><option>Liquid Large Caps u-9d2b1f</option></select></div>
+        </div>
+        <div class="btn-row">
+          <button class="btn primary">Freeze Program</button>
+          <button class="btn">Save Draft</button>
+          <button class="btn ghost">Open Promotion Gate…</button>
+          <button class="btn danger">Deprecate</button>
+        </div>
+        <div class="help-tip">Freezing snapshots all five component versions immutably. New edits create a new Program version.</div>
+      </div>
+
+      <h2>Promotion Gate — Momentum Breakout v3 · Paper → Live</h2>
+      <div class="card">
+        <ul class="gate-list">
+          <li class="gate-item"><span class="gate-icon gate-pass">✓</span><div>Frozen Program (component versions immutable)</div><span class="badge green" style="margin-left:auto;">Pass</span></li>
+          <li class="gate-item"><span class="gate-icon gate-pass">✓</span><div>Valid Feature Plan (no unsupported features, warmup satisfied)</div><span class="badge green" style="margin-left:auto;">Pass · plan-fp-1a2b</span></li>
+          <li class="gate-item"><span class="gate-icon gate-pass">✓</span><div>Chart Lab evidence — signal validated on bars</div><span class="badge green" style="margin-left:auto;">3 sessions</span></li>
+          <li class="gate-item"><span class="gate-icon gate-pass">✓</span><div>Sim Lab evidence with Portfolio Governor mode = <strong>enforced</strong></div><span class="badge green" style="margin-left:auto;">2 sessions</span></li>
+          <li class="gate-item"><span class="gate-icon gate-pass">✓</span><div>Backtest result — Sharpe 1.84, Max DD 8.2%, 847 trades</div><span class="badge green" style="margin-left:auto;">#0142</span></li>
+          <li class="gate-item"><span class="gate-icon gate-warn">!</span><div>Walk-Forward — recommended, missing</div><span class="badge yellow" style="margin-left:auto;">Warn (not blocking)</span></li>
+          <li class="gate-item"><span class="gate-icon gate-warn">!</span><div>Optimization — recommended, missing</div><span class="badge yellow" style="margin-left:auto;">Warn (not blocking)</span></li>
+          <li class="gate-item"><span class="gate-icon gate-pass">✓</span><div>Broker sync fresh (live account)</div><span class="badge green" style="margin-left:auto;">1s ago</span></li>
+          <li class="gate-item"><span class="gate-icon gate-pass">✓</span><div>Market data fresh (provider streaming)</div><span class="badge green" style="margin-left:auto;">stream live</span></li>
+          <li class="gate-item"><span class="gate-icon gate-pass">✓</span><div>Order ledger enabled · Trade ledger enabled</div><span class="badge green" style="margin-left:auto;">Pass</span></li>
+          <li class="gate-item"><span class="gate-icon gate-pass">✓</span><div>Portfolio Governor enabled (enforced mode for live)</div><span class="badge green" style="margin-left:auto;">Pass</span></li>
+          <li class="gate-item"><span class="gate-icon gate-fail">✗</span><div>Operator approval (explicit live confirmation, this session)</div><span class="badge red" style="margin-left:auto;">Pending</span></li>
+        </ul>
+        <div class="btn-row" style="margin-top:14px;">
+          <button class="btn primary" disabled>Promote to Broker Runtime - Live</button>
+          <button class="btn">Confirm Operator Approval</button>
+        </div>
+        <div class="help-tip">Walk-Forward and Optimization are recommended; missing them creates a high-severity warning but does not block. Operator approval is required.</div>
+      </div>
+    </section>
+
+    <!-- ============ CHART LAB ============ -->
+    <section class="page" id="page-chartlab">
+      <h1>Chart Lab</h1>
+      <p class="page-sub">Signal and component preview only. No orders, fills, positions, P&amp;L, or drawdown — those live in Sim Lab.</p>
+
+      <div class="tabs" id="cl-tabs">
+        <div class="tab active" data-cl="strategy">Strategy Preview</div>
+        <div class="tab" data-cl="program">Program Preview</div>
+      </div>
+
+      <div class="card">
+        <div class="form-row cols-4">
+          <div><label>Strategy / Program</label><select><option>Momentum Breakout v3.2</option></select></div>
+          <div><label>Symbol</label><input type="text" value="NVDA"></div>
+          <div><label>Timeframe</label><select><option>1m</option><option selected>5m</option><option>1h</option><option>1d</option></select></div>
+          <div><label>Mode</label><select><option>CHART_LAB_BATCH</option><option>CHART_LAB_LIVE_PREVIEW</option></select></div>
+        </div>
+        <div class="form-row cols-3">
+          <div><label>Date range</label><input type="text" value="2026-04-01 → 2026-04-23"></div>
+          <div><label>Provider</label><select><option>Auto (Alpaca chosen)</option></select></div>
+          <div><label>Lookback bars</label><input type="number" value="200"></div>
+        </div>
+      </div>
+
+      <h2>Marker legend</h2>
+      <div class="card tight">
+        <div class="marker-legend">
+          <span class="marker-chip" style="border-color:var(--green); color:var(--green);">▲ candidate_entry</span>
+          <span class="marker-chip" style="border-color:var(--red); color:var(--red);">▼ candidate_exit</span>
+          <span class="marker-chip" style="border-color:var(--yellow); color:var(--yellow);">◌ blocked_by_signal</span>
+          <span class="marker-chip" style="border-color:var(--orange); color:var(--orange);">◌ blocked_by_controls</span>
+          <span class="marker-chip" style="border-color:var(--purple); color:var(--purple);">◌ blocked_by_risk</span>
+          <span class="marker-chip" style="border-color:var(--accent); color:var(--accent);">◌ blocked_by_governor</span>
+          <span class="marker-chip" style="border-color:var(--text-faint); color:var(--text-faint);">⊘ feature_unavailable</span>
+          <span class="marker-chip" style="border-color:var(--teal); color:var(--teal);">✦ manual_hypothetical</span>
+        </div>
+      </div>
+
+      <div class="card" style="margin-top:14px;">
+        <h3 style="margin-top:0;">NVDA · 5m · 200 bars</h3>
+        <div class="chart-shell">
+          <svg viewBox="0 0 700 280" style="width:100%; height:280px;">
+            <line x1="0" y1="60" x2="700" y2="60" class="grid-svg"/>
+            <line x1="0" y1="120" x2="700" y2="120" class="grid-svg"/>
+            <line x1="0" y1="180" x2="700" y2="180" class="grid-svg"/>
+            <line x1="0" y1="220" x2="700" y2="220" stroke="#243049" stroke-width="1"/>
+            <!-- warmup region (shaded) -->
+            <rect x="0" y="0" width="60" height="220" fill="#243049" fill-opacity="0.4"/>
+            <text x="6" y="14" fill="#8a96ad" font-size="9">warmup</text>
+            <!-- price line -->
+            <polyline points="0,160 30,155 60,148 90,158 120,140 150,130 180,138 210,118 240,108 270,116 300,98 330,88 360,96 390,80 420,72 450,82 480,68 510,58 540,72 570,62 600,54 630,66 660,52 700,46" stroke="#d8e0f0" fill="none" stroke-width="1.2"/>
+            <!-- EMA-20 -->
+            <polyline points="60,158 100,148 150,134 200,124 250,114 300,104 350,94 400,82 450,76 500,66 550,62 600,58 650,52 700,48" stroke="#4f8cff" fill="none" stroke-width="1"/>
+            <!-- VWAP -->
+            <polyline points="60,164 100,150 150,144 200,134 250,128 300,116 350,108 400,98 450,90 500,80 550,74 600,68 650,60 700,54" stroke="#a76bff" fill="none" stroke-width="1" stroke-dasharray="4,3"/>
+            <!-- markers -->
+            <polygon points="200,118 207,128 193,128" fill="#2ecc71"/>
+            <text x="210" y="126" fill="#2ecc71" font-size="9">candidate_entry</text>
+            <circle cx="330" cy="88" r="5" fill="none" stroke="#f6c344" stroke-width="1.5"/>
+            <text x="338" y="92" fill="#f6c344" font-size="9">blocked_by_signal</text>
+            <circle cx="450" cy="82" r="5" fill="none" stroke="#a76bff" stroke-width="1.5"/>
+            <text x="458" y="86" fill="#a76bff" font-size="9">blocked_by_risk</text>
+            <circle cx="540" cy="72" r="5" fill="none" stroke="#4f8cff" stroke-width="1.5"/>
+            <text x="548" y="76" fill="#4f8cff" font-size="9">blocked_by_governor</text>
+            <!-- ORB band -->
+            <line x1="60" y1="148" x2="700" y2="148" stroke="#36c5b8" stroke-dasharray="2,3" stroke-width="0.6"/>
+            <text x="62" y="146" fill="#36c5b8" font-size="9">opening_range_high (complete)</text>
+            <!-- RSI subplot -->
+            <text x="6" y="240" fill="#8a96ad" font-size="9">RSI 14</text>
+            <line x1="0" y1="260" x2="700" y2="260" stroke="#1d2741"/>
+            <polyline points="60,265 130,255 200,260 280,238 350,232 420,225 490,232 560,228 630,224 700,232" stroke="#f6c344" fill="none" stroke-width="1"/>
+          </svg>
+        </div>
+        <div class="muted small" style="margin-top:6px;">
+          Provider chosen: <strong style="color:var(--text)">Alpaca</strong> (yFinance can't supply 5m bars for this lookback). Cache hit 184/200 · last update 14s ago. ORB completed at 09:50 ET.
+        </div>
+      </div>
+
+      <h2>Condition Truth · bar 2026-04-23 14:25 ET (no entry)</h2>
+      <div class="card tight">
+        <div class="truth-tree">
+          <div class="muted small" style="margin-bottom:6px;">No entry because the AND tree evaluated to <strong style="color:#ffb1b6;">false</strong>.</div>
+          <div class="truth-line pass"><span class="truth-icon">✓</span><span class="truth-feature">5m.close[0]</span> <span class="truth-op">=</span> <span class="truth-val">962.40</span> <span class="truth-op">&gt;</span> <span class="truth-feature">5m.ema:length=20[0]</span> <span class="truth-op">=</span> <span class="truth-val">958.12</span></div>
+          <div class="truth-line fail"><span class="truth-icon">✗</span><span class="truth-feature">5m.rsi:length=14[0]</span> <span class="truth-op">=</span> <span class="truth-val">52.4</span> <span class="truth-op">&gt;</span> <span class="truth-val">55</span> <span class="muted">← failed</span></div>
+          <div class="truth-line pass"><span class="truth-icon">✓</span><span class="truth-feature">opening_range_complete</span> <span class="truth-op">=</span> <span class="truth-val">true</span></div>
+          <div class="truth-line pass"><span class="truth-icon">✓</span><span class="truth-feature">5m.volume[0]</span> <span class="truth-op">=</span> <span class="truth-val">1,420,300</span> <span class="truth-op">&gt;</span> <span class="truth-feature">5m.volume_sma:length=20[0]</span> × 1.5 <span class="truth-op">=</span> <span class="truth-val">1,182,400</span></div>
+          <div class="muted small" style="margin-top:8px;">Final result: <strong style="color:#ffb1b6;">false</strong> · Multi-tf alignment: 1d.high[0] sourced from previous completed daily bar 2026-04-22.</div>
+        </div>
+      </div>
+
+      <h2>Feature availability</h2>
+      <div class="card tight">
+        <table>
+          <thead><tr><th>Feature</th><th>Timeframe</th><th>State</th><th>Latest value</th><th>Provenance</th></tr></thead>
+          <tbody>
+            <tr><td class="mono">close[0]</td><td>5m</td><td><span class="badge feat-available">available</span></td><td class="mono">962.40</td><td class="muted">Alpaca · last bar 14:25 ET</td></tr>
+            <tr><td class="mono">ema:length=20[0]</td><td>5m</td><td><span class="badge feat-available">available</span></td><td class="mono">958.12</td><td class="muted">cache hit</td></tr>
+            <tr><td class="mono">rsi:length=14[0]</td><td>5m</td><td><span class="badge feat-available">available</span></td><td class="mono">52.4</td><td class="muted">cache hit</td></tr>
+            <tr><td class="mono">opening_range_high</td><td>session</td><td><span class="badge feat-available">available</span></td><td class="mono">947.10</td><td class="muted">complete @ 09:50 ET</td></tr>
+            <tr><td class="mono">vwap_anchored</td><td>1d</td><td><span class="badge feat-warmup">warmup</span></td><td class="mono">—</td><td class="muted">need 12 more bars</td></tr>
+            <tr><td class="mono">prior_week_high</td><td>1w</td><td><span class="badge feat-stale">stale</span></td><td class="mono">948.20</td><td class="muted">last update 2d ago</td></tr>
+            <tr><td class="mono">gap_fill_pct</td><td>1d</td><td><span class="badge feat-unsupported">unsupported</span></td><td>—</td><td class="muted">not in registry</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ============ SIM LAB ============ -->
+    <section class="page" id="page-simlab">
+      <h1>Sim Lab</h1>
+      <p class="page-sub">Full Program simulation surface — simulated orders, fills, positions, P&amp;L. No BrokerAdapter, no real broker data.</p>
+
+      <div class="card">
+        <div class="form-row cols-4">
+          <div><label>Program</label><select><option>Momentum Breakout v3</option></select></div>
+          <div><label>Mode</label><select><option>SIM_LAB_HISTORICAL</option><option>SIM_LAB_LIVE_SIMULATION</option></select></div>
+          <div><label>Date range</label><input type="text" value="2026-04-01 → 2026-04-23"></div>
+          <div><label>Universe size</label><input type="text" value="50 symbols (virtualized)"></div>
+        </div>
+        <div class="form-row cols-3">
+          <div><label>Portfolio Governor mode</label>
+            <select id="governor-mode">
+              <option>off — simulate signals only</option>
+              <option>advisory — record would_approve / would_reject</option>
+              <option selected>enforced — required for paper readiness</option>
+            </select>
+          </div>
+          <div><label>Slippage model</label><select><option>spread/2 + impact_curve</option></select></div>
+          <div><label>Fill model</label><select><option>conservative (next-bar open)</option></select></div>
+        </div>
+        <div class="btn-row">
+          <button class="btn primary">▶ Play</button>
+          <button class="btn">⏸ Pause</button>
+          <button class="btn">⏭ Step bar</button>
+          <button class="btn">⏯ Step event</button>
+          <button class="btn ghost">↪ Next signal</button>
+          <button class="btn ghost">↪ Next fill</button>
+          <button class="btn ghost">↪ Next governor rejection</button>
+          <button class="btn danger">↺ Reset</button>
+          <span class="muted small" style="margin-left:auto; align-self:center;">Speed 2× · Bar 47/78 · feature warm <span class="badge feat-available">available</span></span>
+        </div>
+      </div>
+
+      <h2>Portfolio strip</h2>
+      <div class="grid grid-4">
+        <div class="card"><div class="stat-label">Equity (sim)</div><div class="stat-value">$100,612.40</div><div class="stat-sub stat-up">+$612.40</div></div>
+        <div class="card"><div class="stat-label">Drawdown (sim)</div><div class="stat-value">-1.4%</div><div class="stat-sub muted">peak 2026-04-09</div></div>
+        <div class="card"><div class="stat-label">Open positions</div><div class="stat-value">3</div><div class="stat-sub muted">7 closed today</div></div>
+        <div class="card"><div class="stat-label">Blocked signals</div><div class="stat-value">5</div><div class="stat-sub muted">2 controls · 1 risk · 2 governor</div></div>
+      </div>
+
+      <h2>Symbol table <span class="muted small" style="font-weight:normal;">(virtualized, top 8 of 50 shown)</span></h2>
+      <div class="card tight">
+        <table>
+          <thead><tr><th>Symbol</th><th>State</th><th class="right">Last</th><th>Last signal</th><th class="right">Position</th><th class="right">Open orders</th><th class="right">Unreal</th><th class="right">Real</th><th class="right">Exposure</th><th>Blocked reason</th><th>Feat.</th></tr></thead>
+          <tbody>
+            <tr><td class="mono">AAPL</td><td><span class="badge green">running</span></td><td class="right">184.20</td><td class="muted">14:23 entry</td><td class="right">+100</td><td class="right">2</td><td class="right pct-up">+$180</td><td class="right pct-up">+$420</td><td class="right">17.6%</td><td class="muted">—</td><td><span class="badge feat-available">avail</span></td></tr>
+            <tr><td class="mono">MSFT</td><td><span class="badge green">running</span></td><td class="right">416.10</td><td class="muted">11:08 entry</td><td class="right">+50</td><td class="right">2</td><td class="right pct-up">+$162</td><td class="right">$0</td><td class="right">19.9%</td><td class="muted">—</td><td><span class="badge feat-available">avail</span></td></tr>
+            <tr><td class="mono">NVDA</td><td><span class="badge green">running</span></td><td class="right">962.40</td><td class="muted">10:41 entry</td><td class="right">+25</td><td class="right">2</td><td class="right pct-up">+$355</td><td class="right pct-up">+$84</td><td class="right">22.4%</td><td class="muted">—</td><td><span class="badge feat-available">avail</span></td></tr>
+            <tr><td class="mono">SPY</td><td><span class="badge red">blocked</span></td><td class="right">516.90</td><td class="muted">14:18 cand.</td><td class="right">0</td><td class="right">0</td><td class="right">—</td><td class="right">—</td><td class="right">0%</td><td class="muted">governor: symbol_concentration_pct &gt; 30</td><td><span class="badge feat-available">avail</span></td></tr>
+            <tr><td class="mono">META</td><td><span class="badge yellow">blocked</span></td><td class="right">488.20</td><td class="muted">13:52 cand.</td><td class="right">0</td><td class="right">0</td><td class="right">—</td><td class="right">—</td><td class="right">0%</td><td class="muted">controls: earnings_blackout</td><td><span class="badge feat-available">avail</span></td></tr>
+            <tr><td class="mono">TSLA</td><td><span class="badge orange">blocked</span></td><td class="right">178.50</td><td class="muted">11:30 cand.</td><td class="right">0</td><td class="right">1</td><td class="right">—</td><td class="right">—</td><td class="right">0%</td><td class="muted">risk: max_positions reached</td><td><span class="badge feat-available">avail</span></td></tr>
+            <tr><td class="mono">XYZ</td><td><span class="badge gray">idle</span></td><td class="right">—</td><td class="muted">—</td><td class="right">0</td><td class="right">0</td><td class="right">—</td><td class="right">—</td><td class="right">0%</td><td class="muted">feature warmup</td><td><span class="badge feat-warmup">warmup</span></td></tr>
+            <tr><td class="mono">QQQ</td><td><span class="badge green">running</span></td><td class="right">443.20</td><td class="muted">12:18 entry</td><td class="right">+50</td><td class="right">2</td><td class="right pct-up">+$55</td><td class="right pct-up">+$108</td><td class="right">10.6%</td><td class="muted">—</td><td><span class="badge feat-available">avail</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h2>Event stream <span class="muted small" style="font-weight:normal;">· click any row to open Decision Inspector</span></h2>
+      <div class="card tight" style="padding:0;">
+        <div class="event-row" style="background:#0f1422; font-weight:600;">
+          <span>Time</span><span>Symbol</span><span>Stage</span><span>Detail</span><span>Action</span>
+        </div>
+        <div class="event-row" onclick="openInspector()">
+          <span class="event-time">14:25:18</span><span class="mono">SPY</span>
+          <span class="event-stage"><span class="badge red">governor_rejected</span></span>
+          <span class="muted">portfolio_symbol_concentration_pct=31.2 &gt; 30 cap</span>
+          <span><button class="btn sm">Inspect</button></span>
+        </div>
+        <div class="event-row" onclick="openInspector()">
+          <span class="event-time">14:23:02</span><span class="mono">AAPL</span>
+          <span class="event-stage"><span class="badge green">order_filled</span></span>
+          <span class="muted">100 @ 182.40 · bracket legs held (sl, tp)</span>
+          <span><button class="btn sm">Inspect</button></span>
+        </div>
+        <div class="event-row" onclick="openInspector()">
+          <span class="event-time">14:18:55</span><span class="mono">META</span>
+          <span class="event-stage"><span class="badge yellow">controls_blocked</span></span>
+          <span class="muted">earnings_blackout · earnings 2026-04-25 within ±1d window</span>
+          <span><button class="btn sm">Inspect</button></span>
+        </div>
+        <div class="event-row" onclick="openInspector()">
+          <span class="event-time">14:12:30</span><span class="mono">TSLA</span>
+          <span class="event-stage"><span class="badge orange">risk_rejected</span></span>
+          <span class="muted">max_positions reached (12/12) — sizing fell to zero</span>
+          <span><button class="btn sm">Inspect</button></span>
+        </div>
+        <div class="event-row" onclick="openInspector()">
+          <span class="event-time">14:08:11</span><span class="mono">NVDA</span>
+          <span class="event-stage"><span class="badge purple">position_scaled</span></span>
+          <span class="muted">25 → 16 (33% tier @ 1R = 962.40)</span>
+          <span><button class="btn sm">Inspect</button></span>
+        </div>
+        <div class="event-row" onclick="openInspector()">
+          <span class="event-time">11:30:02</span><span class="mono">MSFT</span>
+          <span class="event-stage"><span class="badge feat-warmup">feature_unavailable</span></span>
+          <span class="muted">opening_range_complete = false (window not closed)</span>
+          <span><button class="btn sm">Inspect</button></span>
+        </div>
+        <div class="event-row" onclick="openInspector()">
+          <span class="event-time">11:28:05</span><span class="mono">AAPL</span>
+          <span class="event-stage"><span class="badge blue">order_created</span></span>
+          <span class="muted">internal_id=ord-0a82 · intent=open · qty=100</span>
+          <span><button class="btn sm">Inspect</button></span>
+        </div>
+        <div class="event-row" onclick="openInspector()">
+          <span class="event-time">11:27:55</span><span class="mono">AAPL</span>
+          <span class="event-stage"><span class="badge green">signal_candidate</span></span>
+          <span class="muted">all conditions true · proceeding to controls</span>
+          <span><button class="btn sm">Inspect</button></span>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ BACKTESTS ============ -->
+    <section class="page" id="page-backtests">
+      <h1>Backtests</h1>
+      <p class="page-sub">Historical validation. Indicators may not be computed outside the Feature Engine — backtests consume FeatureSnapshots only.</p>
+
+      <div class="card">
+        <h2 style="margin-top:0;">New Run</h2>
+        <div class="form-row cols-4">
+          <div><label>Program</label><select><option>Momentum Breakout v3</option></select></div>
+          <div><label>Date range</label><input type="text" value="2023-01-01 → 2026-04-01"></div>
+          <div><label>Provider</label><select><option>Auto (recommended)</option></select></div>
+          <div><label>Cost model</label><select><option>Alpaca commission + spread</option></select></div>
+        </div>
+        <div class="btn-row"><button class="btn primary">Launch Backtest</button></div>
+        <div class="help-tip">Provider auto-pick: <strong>Alpaca</strong> (only Alpaca supplies 5m bars at this lookback).</div>
+      </div>
+
+      <h2>Recent Runs</h2>
+      <div class="card tight">
+        <table>
+          <thead><tr><th>#</th><th>Program</th><th>Range</th><th>Sharpe</th><th>Max DD</th><th>Trades</th><th>Win%</th><th>PF</th><th>Cost Sens.</th><th>Status</th></tr></thead>
+          <tbody>
+            <tr><td class="mono">#0142</td><td>Momentum Breakout v3</td><td class="muted">2023→2026</td><td>1.84</td><td>-8.2%</td><td>847</td><td>56%</td><td>1.92</td><td><span class="badge green">Robust</span></td><td><span class="badge green">Complete</span></td></tr>
+            <tr><td class="mono">#0141</td><td>Mean Reversion ETF</td><td class="muted">2023→2026</td><td>1.34</td><td>-6.4%</td><td>312</td><td>62%</td><td>1.71</td><td><span class="badge yellow">Sensitive</span></td><td><span class="badge green">Complete</span></td></tr>
+            <tr><td class="mono">#0140</td><td>VWAP Reversion 5m</td><td class="muted">2024→2026</td><td>2.12</td><td>-3.8%</td><td>1,402</td><td>54%</td><td>1.66</td><td><span class="badge red">Fragile</span></td><td><span class="badge orange">Overfit warning</span></td></tr>
+            <tr><td class="mono">#0139</td><td>Gap &amp; Go</td><td class="muted">2023→2026</td><td>—</td><td>—</td><td>—</td><td>—</td><td>—</td><td>—</td><td><span class="badge red">Failed (unsupported features)</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h2>Run #0142 — Detail</h2>
+      <div class="grid grid-2">
+        <div class="card">
+          <h3 style="margin-top:0;">Equity Curve</h3>
+          <div class="chart-shell">
+            <svg viewBox="0 0 600 180" style="width:100%; height:180px;">
+              <line x1="0" y1="60" x2="600" y2="60" class="grid-svg"/>
+              <line x1="0" y1="120" x2="600" y2="120" class="grid-svg"/>
+              <polyline class="equity-curve" points="0,150 50,148 100,140 150,135 200,128 250,116 300,118 350,98 400,86 450,72 500,55 550,42 600,28"/>
+            </svg>
+          </div>
+          <div class="muted small" style="margin-top:6px;">+82.4% · CAGR 22.1% · OOS Sharpe 1.62</div>
+        </div>
+        <div class="card">
+          <h3 style="margin-top:0;">Feature plan reference</h3>
+          <div class="mono small">plan-fp-1a2b · 12 features · warmup max 200 bars · provider=Alpaca · adjustment=split-only</div>
+          <div class="muted small" style="margin-top:6px;">Reproducibility: this Backtest's evidence record references the exact Feature Plan and component versions used.</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ OPTIMIZATIONS ============ -->
+    <section class="page" id="page-optimizations">
+      <h1>Optimizations</h1>
+      <p class="page-sub">Parameter sweeps. Promotion blocked when IS→OOS decay is severe.</p>
+
+      <div class="card">
+        <div class="form-row cols-4">
+          <div><label>Strategy</label><select><option>Momentum Breakout v3.2</option></select></div>
+          <div><label>Sweep method</label><select><option>Grid</option><option>Latin Hypercube</option><option>Bayesian</option></select></div>
+          <div><label>WF folds</label><input type="number" value="6"></div>
+          <div><label>Run CPCV</label><select><option>No</option><option>Yes</option></select></div>
+        </div>
+        <div class="btn-row"><button class="btn primary">Launch Sweep</button></div>
+      </div>
+
+      <h2>Top candidates — Sweep #018</h2>
+      <div class="card tight">
+        <table>
+          <thead><tr><th>Rank</th><th>RSI thr</th><th>ATR mult</th><th>EMA len</th><th>IS Sharpe</th><th>OOS Sharpe</th><th>OOS DD</th><th>Decay</th><th>Promote</th></tr></thead>
+          <tbody>
+            <tr><td>1</td><td>55</td><td>1.5</td><td>20</td><td>2.14</td><td>1.62</td><td>-9.2%</td><td><span class="badge green">Mild</span></td><td><button class="btn sm primary">→ Paper</button></td></tr>
+            <tr><td>2</td><td>52</td><td>1.6</td><td>20</td><td>2.08</td><td>1.48</td><td>-10.1%</td><td><span class="badge green">Mild</span></td><td><button class="btn sm">→ Paper</button></td></tr>
+            <tr><td>3</td><td>58</td><td>1.4</td><td>15</td><td>2.42</td><td>1.18</td><td>-12.4%</td><td><span class="badge orange">Moderate</span></td><td><button class="btn sm">→ Paper</button></td></tr>
+            <tr><td>4</td><td>60</td><td>1.2</td><td>10</td><td>2.91</td><td>0.84</td><td>-18.7%</td><td><span class="badge red">Severe</span></td><td><button class="btn sm" disabled>Blocked</button></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="banner warn" style="margin-top:14px;">Rank 4 shows severe IS→OOS decay (Δ Sharpe −2.07). Promotion blocked until decay ≤ 1.0 or CPCV passes.</div>
+    </section>
+
+    <!-- ============ WALK-FORWARD ============ -->
+    <section class="page" id="page-walkforward">
+      <h1>Walk-Forward</h1>
+      <p class="page-sub">Out-of-sample stability check across rolling folds. Strongly recommended before paper; missing it raises a high-severity warning at the promotion gate.</p>
+
+      <div class="card">
+        <div class="form-row cols-4">
+          <div><label>Program</label><select><option>Momentum Breakout v3</option></select></div>
+          <div><label>Folds</label><input type="number" value="6"></div>
+          <div><label>IS / OOS split</label><select><option>250 / 60 trading days</option></select></div>
+          <div><label>Refit</label><select><option>Anchored</option><option>Rolling</option></select></div>
+        </div>
+        <div class="btn-row"><button class="btn primary">Launch Walk-Forward</button></div>
+      </div>
+
+      <h2>Run #wf-021 — Folds</h2>
+      <div class="card tight">
+        <table>
+          <thead><tr><th>Fold</th><th>IS dates</th><th>OOS dates</th><th>IS Sharpe</th><th>OOS Sharpe</th><th>OOS DD</th><th>Trades (OOS)</th><th>Decay</th></tr></thead>
+          <tbody>
+            <tr><td>1</td><td class="muted">2024-01 → 09</td><td class="muted">2024-10 → 12</td><td>2.04</td><td>1.81</td><td>-4.2%</td><td>62</td><td><span class="badge green">Mild</span></td></tr>
+            <tr><td>2</td><td class="muted">2024-04 → 12</td><td class="muted">2025-01 → 03</td><td>1.92</td><td>1.54</td><td>-6.1%</td><td>58</td><td><span class="badge green">Mild</span></td></tr>
+            <tr><td>3</td><td class="muted">2024-07 → 03</td><td class="muted">2025-04 → 06</td><td>1.88</td><td>1.62</td><td>-5.4%</td><td>71</td><td><span class="badge green">Mild</span></td></tr>
+            <tr><td>4</td><td class="muted">2024-10 → 06</td><td class="muted">2025-07 → 09</td><td>1.96</td><td>1.40</td><td>-7.8%</td><td>64</td><td><span class="badge yellow">Moderate</span></td></tr>
+            <tr><td>5</td><td class="muted">2025-01 → 09</td><td class="muted">2025-10 → 12</td><td>2.10</td><td>1.72</td><td>-4.8%</td><td>69</td><td><span class="badge green">Mild</span></td></tr>
+            <tr><td>6</td><td class="muted">2025-04 → 12</td><td class="muted">2026-01 → 03</td><td>1.84</td><td>1.58</td><td>-5.2%</td><td>72</td><td><span class="badge green">Mild</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="banner success" style="margin-top:14px;">All 6 folds show mild-to-moderate decay. Median OOS Sharpe 1.60. Walk-Forward gate would <strong>pass</strong>.</div>
+    </section>
+
+    <!-- ============ EVIDENCE ============ -->
+    <section class="page" id="page-evidence">
+      <h1>Evidence</h1>
+      <p class="page-sub">Aggregated validation evidence per Program. Feeds the promotion gate. Each record is immutable and references the exact Feature Plan + component versions used.</p>
+
+      <div class="card">
+        <table>
+          <thead><tr><th>Program</th><th>Chart Lab</th><th>Sim Lab (enforced)</th><th>Backtest</th><th>Optimization</th><th>Walk-Forward</th><th>Promotion-ready</th></tr></thead>
+          <tbody>
+            <tr>
+              <td><strong>Momentum Breakout v3</strong></td>
+              <td><span class="badge green">3 sessions</span></td>
+              <td><span class="badge green">2 sessions</span></td>
+              <td><span class="badge green">#0142</span></td>
+              <td><span class="badge gray">missing</span></td>
+              <td><span class="badge gray">missing</span></td>
+              <td><span class="badge yellow">Paper-ready · Live needs ops approval</span></td>
+            </tr>
+            <tr>
+              <td><strong>Mean Reversion ETF</strong></td>
+              <td><span class="badge green">2 sessions</span></td>
+              <td><span class="badge green">1 session</span></td>
+              <td><span class="badge green">#0141</span></td>
+              <td><span class="badge green">#sw-014</span></td>
+              <td><span class="badge green">#wf-019</span></td>
+              <td><span class="badge green">Live-eligible</span></td>
+            </tr>
+            <tr>
+              <td><strong>VWAP Reversion 5m</strong></td>
+              <td><span class="badge green">1 session</span></td>
+              <td><span class="badge yellow">advisory only</span></td>
+              <td><span class="badge orange">overfit warning</span></td>
+              <td><span class="badge gray">missing</span></td>
+              <td><span class="badge gray">missing</span></td>
+              <td><span class="badge red">Not paper-ready</span></td>
+            </tr>
+            <tr>
+              <td><strong>Gap &amp; Go</strong></td>
+              <td><span class="badge red">schema error</span></td>
+              <td>—</td>
+              <td><span class="badge red">failed</span></td>
+              <td>—</td>
+              <td>—</td>
+              <td><span class="badge red">Blocked</span></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h2>Evidence Record · ev-7c1f · Momentum Breakout v3 · Sim Lab · 2026-04-22</h2>
+      <div class="card">
+        <table>
+          <tr><td class="muted">Mode</td><td>SIM_LAB_HISTORICAL</td></tr>
+          <tr><td class="muted">Governor mode</td><td><span class="badge green">enforced</span></td></tr>
+          <tr><td class="muted">Program version</td><td>prog-mom-v3.2 (frozen)</td></tr>
+          <tr><td class="muted">Feature plan</td><td class="mono">plan-fp-1a2b</td></tr>
+          <tr><td class="muted">Strategy version</td><td>strat-mom-v3.2</td></tr>
+          <tr><td class="muted">Strategy Controls version</td><td>ctrl-day-v2</td></tr>
+          <tr><td class="muted">Risk Profile version</td><td>risk-cons-v3</td></tr>
+          <tr><td class="muted">Execution Style version</td><td>exec-bracket-v1</td></tr>
+          <tr><td class="muted">Universe snapshot</td><td>u-9d2b1f (50 symbols)</td></tr>
+          <tr><td class="muted">Date range</td><td>2026-04-01 → 2026-04-21</td></tr>
+          <tr><td class="muted">Provider</td><td>Alpaca</td></tr>
+          <tr><td class="muted">Run hash</td><td class="mono">sha256:7c1f8b…</td></tr>
+        </table>
+      </div>
+    </section>
+
+    <!-- ============ DEPLOYMENTS ============ -->
+    <section class="page" id="page-deployments">
+      <h1>Deployments</h1>
+      <p class="page-sub">A Deployment is the only runtime unit: one Program on one Broker Account under Portfolio Governor.</p>
+
+      <div class="card tight">
+        <table>
+          <thead><tr><th>Program</th><th>Broker Account</th><th>Mode</th><th>Status</th><th>Feature plan</th><th>Started</th><th>Last signal</th></tr></thead>
+          <tbody>
+            <tr>
+              <td>Momentum Breakout v3</td>
+              <td>acct-7c4f9b1a</td>
+              <td><span class="mode-label mode-broker-paper" style="font-size:9px;">Broker Runtime - Paper</span></td>
+              <td><span class="badge green">Running</span></td>
+              <td class="mono">plan-fp-1a2b</td>
+              <td class="muted">Apr 22 09:30 ET</td>
+              <td class="muted">2m ago</td>
+            </tr>
+            <tr>
+              <td>Mean Reversion ETF</td>
+              <td>acct-7c4f9b1a</td>
+              <td><span class="mode-label mode-broker-paper" style="font-size:9px;">Broker Runtime - Paper</span></td>
+              <td><span class="badge green">Running</span></td>
+              <td class="mono">plan-fp-3c5d</td>
+              <td class="muted">Apr 22 09:30 ET</td>
+              <td class="muted">8m ago</td>
+            </tr>
+            <tr>
+              <td>Gap &amp; Go</td>
+              <td>acct-22b1e8f0</td>
+              <td><span class="mode-label mode-broker-paper" style="font-size:9px;">Broker Runtime - Paper</span></td>
+              <td><span class="badge yellow">Paused</span></td>
+              <td class="mono">plan-fp-9911</td>
+              <td class="muted">Apr 23 09:30 ET</td>
+              <td class="muted">1h 22m ago</td>
+            </tr>
+            <tr>
+              <td>VWAP Reversion 5m</td>
+              <td>acct-7c4f9b1a</td>
+              <td><span class="mode-label mode-broker-paper" style="font-size:9px;">Broker Runtime - Paper</span></td>
+              <td><span class="badge green">Running</span></td>
+              <td class="mono">plan-fp-aa01</td>
+              <td class="muted">Apr 24 09:30 ET</td>
+              <td class="muted">just now</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="banner info" style="margin-top:14px;">Each Deployment binds to its Feature Plan at start. If the plan validation fails, the Deployment cannot start — fail-closed by design.</div>
+    </section>
+
+    <!-- ============ OPERATIONS CENTER ============ -->
+    <section class="page" id="page-operations">
+      <h1>Operations Center</h1>
+      <p class="page-sub">Authoritative runtime state — positions, orders, kill events, broker truth. Absorbs what was previously called "Live Monitor."</p>
+
+      <div class="grid grid-4">
+        <div class="card"><div class="stat-label">Equity</div><div class="stat-value">$104,328.47</div></div>
+        <div class="card"><div class="stat-label">Cash</div><div class="stat-value">$64,201.14</div></div>
+        <div class="card"><div class="stat-label">Gross Exposure</div><div class="stat-value">38.4%</div></div>
+        <div class="card"><div class="stat-label">Open P&amp;L</div><div class="stat-value pct-up">+$1,284.20</div></div>
+      </div>
+
+      <h2>Positions <span class="muted small" style="font-weight:normal;">· stream <span class="badge green">live</span> · last tick 1s ago · per-symbol authority</span></h2>
+      <div class="card tight">
+        <table>
+          <thead><tr><th>Symbol</th><th>Deployment</th><th>Side</th><th class="right">Qty</th><th class="right">Avg Entry</th><th class="right">Last</th><th class="right">Unreal</th><th>Stop</th><th>Target</th><th class="right">Action</th></tr></thead>
+          <tbody>
+            <tr><td class="mono">AAPL</td><td>Momentum v3</td><td><span class="badge green">LONG</span></td><td class="right">100</td><td class="right">182.40</td><td class="right">184.20</td><td class="right pct-up">+$180.00</td><td class="muted">180.10 (sl)</td><td class="muted">187.40 (tp)</td><td class="right"><button class="btn sm">Close</button></td></tr>
+            <tr><td class="mono">MSFT</td><td>Momentum v3</td><td><span class="badge green">LONG</span></td><td class="right">50</td><td class="right">412.85</td><td class="right">416.10</td><td class="right pct-up">+$162.50</td><td class="muted">408.40 (sl)</td><td class="muted">421.20 (tp)</td><td class="right"><button class="btn sm">Close</button></td></tr>
+            <tr><td class="mono">NVDA</td><td>Momentum v3</td><td><span class="badge green">LONG</span></td><td class="right">25</td><td class="right">948.20</td><td class="right">962.40</td><td class="right pct-up">+$355.00</td><td class="muted">932.00 (sl)</td><td class="muted">980.50 (tp)</td><td class="right"><button class="btn sm">Close</button></td></tr>
+            <tr><td class="mono">META</td><td>VWAP Rev. 5m</td><td><span class="badge red">SHORT</span></td><td class="right">30</td><td class="right">486.40</td><td class="right">488.20</td><td class="right pct-down">-$54.00</td><td class="muted">492.30 (sl)</td><td class="muted">478.00 (tp)</td><td class="right"><button class="btn sm">Close</button></td></tr>
+            <tr><td class="mono">SPY</td><td>Mean Rev. ETF</td><td><span class="badge green">LONG</span></td><td class="right">200</td><td class="right">514.20</td><td class="right">516.90</td><td class="right pct-up">+$540.00</td><td class="muted">512.10 (sl)</td><td class="muted">520.40 (tp)</td><td class="right"><button class="btn sm">Close</button></td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="btn-row" style="margin-top:10px;">
+        <button class="btn danger">Close All Positions</button>
+        <button class="btn">Refresh Broker Sync</button>
+      </div>
+
+      <h2>Open Orders <span class="muted small" style="font-weight:normal;">· internal id is canonical · broker id shown as last-synced reference</span></h2>
+      <div class="card tight">
+        <table>
+          <thead><tr><th>Time</th><th>Symbol</th><th>Internal ID</th><th>Intent</th><th>Side / Type</th><th>Qty</th><th>Price</th><th>Broker ID</th><th>Last sync</th><th>Status</th></tr></thead>
+          <tbody>
+            <tr><td class="mono muted">15:42:18</td><td class="mono">AAPL</td><td class="mono">ord-0a82</td><td><span class="badge red">sl</span></td><td>SELL · STOP</td><td>100</td><td>180.10</td><td class="mono muted">brk-9214f</td><td class="muted">2s ago</td><td><span class="badge yellow">held</span></td></tr>
+            <tr><td class="mono muted">15:42:18</td><td class="mono">AAPL</td><td class="mono">ord-0a83</td><td><span class="badge green">tp</span></td><td>SELL · LIMIT</td><td>100</td><td>187.40</td><td class="mono muted">brk-9215a</td><td class="muted">2s ago</td><td><span class="badge yellow">held</span></td></tr>
+            <tr><td class="mono muted">15:38:02</td><td class="mono">TSLA</td><td class="mono">ord-0a90</td><td><span class="badge blue">open</span></td><td>BUY · STOP-LIMIT</td><td>40</td><td>178.50</td><td class="mono muted">brk-9220c</td><td class="muted">3s ago</td><td><span class="badge green">working</span></td></tr>
+            <tr><td class="mono muted">15:21:06</td><td class="mono">XYZ</td><td class="mono"><em class="muted">— external —</em></td><td><span class="badge red">unknown</span></td><td>SELL · MARKET</td><td>50</td><td>—</td><td class="mono muted">brk-9180e</td><td class="muted">12s ago</td><td><span class="badge orange">flagged for review</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="banner warn" style="margin-top:8px;">
+        <strong>Unknown external broker order detected</strong> · 1 order has no internal mapping. Per spec, unknown intent is kept and flagged — never auto-canceled.
+      </div>
+
+      <h2>Order detail · ord-0a82</h2>
+      <div class="card">
+        <div class="grid grid-2">
+          <div>
+            <h3 style="margin-top:0;">Internal truth (OrderManager)</h3>
+            <table>
+              <tr><td class="muted">Internal ID</td><td class="mono">ord-0a82</td></tr>
+              <tr><td class="muted">Created at</td><td class="muted">2026-04-24 15:42:18.214 ET</td></tr>
+              <tr><td class="muted">Intent</td><td><span class="badge red">sl</span> (protective)</td></tr>
+              <tr><td class="muted">Side / Type</td><td>SELL / STOP</td></tr>
+              <tr><td class="muted">Qty</td><td>100</td></tr>
+              <tr><td class="muted">Stop price</td><td>180.10</td></tr>
+              <tr><td class="muted">Status</td><td><span class="badge yellow">held</span> (bracket leg)</td></tr>
+              <tr><td class="muted">Deployment</td><td>Momentum Breakout v3</td></tr>
+              <tr><td class="muted">Broker account</td><td>acct-7c4f9b1a</td></tr>
+            </table>
+          </div>
+          <div>
+            <h3 style="margin-top:0;">Broker truth (BrokerSync)</h3>
+            <table>
+              <tr><td class="muted">Broker ID</td><td class="mono">brk-9214f</td></tr>
+              <tr><td class="muted">Provider</td><td>Alpaca · paper endpoint</td></tr>
+              <tr><td class="muted">Raw status</td><td>held</td></tr>
+              <tr><td class="muted">Filled qty</td><td>0</td></tr>
+              <tr><td class="muted">Filled avg</td><td>—</td></tr>
+              <tr><td class="muted">Last synced</td><td class="muted">2s ago · <span class="badge green">fresh</span></td></tr>
+              <tr><td class="muted">Reject reason</td><td>—</td></tr>
+            </table>
+          </div>
+        </div>
+
+        <h3>client_order_id</h3>
+        <div class="coid">
+          <span class="c-prefix">utos</span><span class="c-acct">7c4f9b1a</span><span class="c-dep">d3a05f12</span><span class="c-prog">8e21f7c0</span><span class="c-int">sl</span><span class="c-seq">000142</span>
+        </div>
+        <div class="muted small" style="margin-top:6px;">prefix · account[8] · deployment[8] · program[8] · intent · sequence — every broker order is attributable to (account, deployment, program, intent).</div>
+      </div>
+
+      <h2>Kill / Cancellation Event Log</h2>
+      <div class="card tight">
+        <table>
+          <thead><tr><th>Time</th><th>Action</th><th>Scope</th><th>Initiated By</th><th>Canceled</th><th>Protected</th><th>Unknown</th><th>Result</th></tr></thead>
+          <tbody>
+            <tr><td class="mono muted">2026-04-24 15:11:02</td><td><span class="badge yellow">deployment_paused</span></td><td>Gap &amp; Go (acct-22b1)</td><td>operator</td><td>4</td><td>2</td><td>0</td><td><span class="badge green">success</span></td></tr>
+            <tr><td class="mono muted">2026-04-24 11:02:33</td><td><span class="badge orange">account_paused</span></td><td>acct-22b1e8f0</td><td>operator</td><td>2</td><td>4</td><td>0</td><td><span class="badge green">success</span></td></tr>
+            <tr><td class="mono muted">2026-04-23 16:00:00</td><td><span class="badge red">global_kill</span></td><td>global</td><td>scheduler</td><td>8</td><td>0</td><td>0</td><td><span class="badge green">success</span></td></tr>
+            <tr><td class="mono muted">2026-04-23 15:58:14</td><td><span class="badge purple">flatten</span></td><td>acct-22b1e8f0</td><td>operator</td><td>4</td><td>0</td><td>1</td><td><span class="badge orange">unknown_orders_flagged</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="banner danger" style="margin-top:14px; display:none;" id="kill-banner">
+        <strong>GLOBAL STOP ACTIVE</strong> — new opens are blocked across all accounts. Existing positions remain managed. Protective exits (sl, tp, close, scale) preserved.
+      </div>
+    </section>
+
+    <!-- ============ PORTFOLIO GOVERNOR ============ -->
+    <section class="page" id="page-governor">
+      <h1>Portfolio Governor</h1>
+      <p class="page-sub">Final approval authority for new exposure. Separate from Broker Account — the Governor is policy, the Broker Account is broker truth.</p>
+
+      <div class="grid grid-4">
+        <div class="card"><div class="stat-label">Status</div><div class="stat-value" style="font-size:14px;"><span class="badge green">Active · enforced</span></div></div>
+        <div class="card"><div class="stat-label">Open risk</div><div class="stat-value">1.82%</div><div class="stat-sub muted">cap 4.0%</div></div>
+        <div class="card"><div class="stat-label">Symbol concentration</div><div class="stat-value">22.4%</div><div class="stat-sub muted">max NVDA · cap 30%</div></div>
+        <div class="card"><div class="stat-label">Daily loss buffer</div><div class="stat-value pct-up">+0.84%</div><div class="stat-sub muted">cap -1.5%</div></div>
+      </div>
+
+      <h2>Active Deployments in Account</h2>
+      <div class="card tight">
+        <table>
+          <thead><tr><th>Deployment</th><th>Open positions</th><th>Open risk</th><th>Today P&amp;L</th><th>Status</th><th class="right">Action</th></tr></thead>
+          <tbody>
+            <tr><td>Momentum Breakout v3</td><td>3</td><td>0.82%</td><td class="pct-up">+$612.40</td><td><span class="badge green">Approved</span></td><td class="right"><button class="btn sm">Pause</button></td></tr>
+            <tr><td>Mean Reversion ETF</td><td>2</td><td>0.42%</td><td class="pct-up">+$248.60</td><td><span class="badge green">Approved</span></td><td class="right"><button class="btn sm">Pause</button></td></tr>
+            <tr><td>VWAP Reversion 5m</td><td>1</td><td>0.58%</td><td class="pct-up">+$423.20</td><td><span class="badge green">Approved</span></td><td class="right"><button class="btn sm">Pause</button></td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h2>Governor Event Log</h2>
+      <div class="card tight">
+        <table>
+          <thead><tr><th>Time</th><th>Event</th><th>Deployment</th><th>Symbol</th><th>Reason</th><th>Projected exposure</th></tr></thead>
+          <tbody>
+            <tr><td class="mono muted">15:42:18</td><td><span class="badge green">approved</span></td><td>Momentum v3</td><td class="mono">AAPL</td><td class="muted">within all caps</td><td class="muted">17.6% / 30%</td></tr>
+            <tr><td class="mono muted">15:38:02</td><td><span class="badge red">rejected</span></td><td>Mean Rev. ETF</td><td class="mono">SPY</td><td class="muted">portfolio_symbol_concentration_pct &gt; 30 (cap)</td><td class="muted">31.2% / 30%</td></tr>
+            <tr><td class="mono muted">15:31:51</td><td><span class="badge yellow">deferred</span></td><td>VWAP Rev.</td><td class="mono">NVDA</td><td class="muted">overlaps Momentum v3 open · partial sizing</td><td class="muted">22.4% / 30%</td></tr>
+            <tr><td class="mono muted">14:21:40</td><td><span class="badge red">rejected</span></td><td>Gap &amp; Go</td><td class="mono">XYZ</td><td class="muted">unknown_symbol — not in approved Universe snapshot</td><td>—</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ============ BROKER ACCOUNTS ============ -->
+    <section class="page" id="page-brokers">
+      <h1>Broker Accounts</h1>
+      <p class="page-sub">Broker identity, credentials, balances, restrictions. Owns broker truth only — not internal trading policy.</p>
+
+      <div class="btn-row" style="margin-bottom:12px;">
+        <button class="btn primary">+ Add Account</button>
+      </div>
+
+      <div class="grid grid-2">
+        <div class="card">
+          <div style="display:flex; justify-content:space-between;">
+            <div>
+              <h3 style="margin:0; font-size:13px; text-transform:none; letter-spacing:0; color:var(--text);">acct-7c4f9b1a</h3>
+              <div class="muted small">Alpaca · paper endpoint · created 2026-03-04</div>
+            </div>
+            <span class="mode-label mode-broker-paper">Broker Runtime - Paper</span>
+          </div>
+          <div class="grid grid-2" style="margin-top:12px; gap:8px;">
+            <div><div class="stat-label">Equity</div><div class="stat-value" style="font-size:18px;">$104,328.47</div></div>
+            <div><div class="stat-label">Buying Power</div><div class="stat-value" style="font-size:18px;">$208,656.94</div></div>
+            <div><div class="stat-label">Day-Trade BP</div><div class="stat-value" style="font-size:18px;">$204,221.10</div></div>
+            <div><div class="stat-label">PDT</div><div class="stat-value" style="font-size:18px;">No</div></div>
+          </div>
+          <div class="muted small" style="margin-top:8px;">Last sync 3s ago · status <span class="badge green">healthy</span></div>
+          <div class="btn-row" style="margin-top:10px;">
+            <button class="btn sm">Open</button>
+            <button class="btn sm">Refresh</button>
+            <button class="btn sm">Replace credentials</button>
+            <button class="btn sm danger">Halt</button>
+            <button class="btn sm danger">Flatten</button>
+          </div>
+        </div>
+
+        <div class="card">
+          <div style="display:flex; justify-content:space-between;">
+            <div>
+              <h3 style="margin:0; font-size:13px; text-transform:none; letter-spacing:0; color:var(--text);">acct-22b1e8f0</h3>
+              <div class="muted small">Alpaca · paper endpoint · created 2026-03-19</div>
+            </div>
+            <span class="mode-label mode-broker-paper">Broker Runtime - Paper</span>
+          </div>
+          <div class="grid grid-2" style="margin-top:12px; gap:8px;">
+            <div><div class="stat-label">Equity</div><div class="stat-value" style="font-size:18px;">$48,920.10</div></div>
+            <div><div class="stat-label">Buying Power</div><div class="stat-value" style="font-size:18px;">$97,840.20</div></div>
+          </div>
+          <div class="muted small" style="margin-top:8px;"><span class="badge orange">Sync stale</span> last sync 4m 12s ago — new opens blocked for this account.</div>
+          <div class="btn-row" style="margin-top:10px;">
+            <button class="btn sm primary">Force Refresh</button>
+            <button class="btn sm">Replace credentials</button>
+            <button class="btn sm danger">Halt</button>
+          </div>
+        </div>
+
+        <div class="card">
+          <div style="display:flex; justify-content:space-between;">
+            <div>
+              <h3 style="margin:0; font-size:13px; text-transform:none; letter-spacing:0; color:var(--text);">acct-live-001</h3>
+              <div class="muted small">Alpaca · live endpoint · created 2026-04-01</div>
+            </div>
+            <span class="mode-label mode-broker-live">Broker Runtime - Live</span>
+          </div>
+          <div class="grid grid-2" style="margin-top:12px; gap:8px;">
+            <div><div class="stat-label">Equity</div><div class="stat-value" style="font-size:18px;">$25,400.00</div></div>
+            <div><div class="stat-label">Buying Power</div><div class="stat-value" style="font-size:18px;">$50,800.00</div></div>
+            <div><div class="stat-label">PDT</div><div class="stat-value" style="font-size:18px;"><span class="badge yellow">Yes</span></div></div>
+            <div><div class="stat-label">Deployments</div><div class="stat-value" style="font-size:18px;">0</div></div>
+          </div>
+          <div class="muted small" style="margin-top:8px;">Last sync 1s ago · status <span class="badge green">healthy</span></div>
+          <div class="btn-row" style="margin-top:10px;">
+            <button class="btn sm">Open</button>
+            <button class="btn sm">Replace credentials</button>
+            <button class="btn sm danger">Halt</button>
+            <button class="btn sm danger">Flatten</button>
+            <button class="btn sm danger">Emergency Exit</button>
+          </div>
+        </div>
+
+        <div class="card" style="border-style:dashed;">
+          <h3 style="margin-top:0;">Replace credentials · acct-7c4f9b1a</h3>
+          <div class="muted small">Current secret: ***8 chars*** (masked-secret rejection in effect)</div>
+          <div class="form-row cols-2" style="margin-top:10px;">
+            <div><label>API Key</label><input type="text" placeholder="PK…"></div>
+            <div><label>Secret</label><input type="password" placeholder="••••••••"></div>
+          </div>
+          <div class="form-row cols-2">
+            <div><label>Endpoint</label><select><option>paper (api.alpaca.markets/paper)</option><option>live (api.alpaca.markets)</option></select></div>
+            <div><label>Mode-mismatch policy</label><select><option>Reject if mode does not match account</option></select></div>
+          </div>
+          <div class="btn-row"><button class="btn primary">Validate &amp; Replace</button></div>
+          <div class="help-tip">After successful validation, broker sync is marked stale until next refresh. Mode mismatch (paper key on live account) is rejected explicitly.</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ PROVIDERS ============ -->
+    <section class="page" id="page-providers">
+      <h1>Providers</h1>
+      <p class="page-sub">Market Data and AI provider configuration. Capability tags drive Auto-pick.</p>
+
+      <div class="tabs">
+        <div class="tab active">Market Data</div>
+        <div class="tab">AI Services</div>
+      </div>
+
+      <div class="card tight">
+        <table>
+          <thead><tr><th>Name</th><th>Provider</th><th>Endpoint</th><th>Capabilities</th><th>Default</th><th>Validated</th><th>Status</th></tr></thead>
+          <tbody>
+            <tr><td><strong>Alpaca paper</strong></td><td>Alpaca</td><td class="muted">paper</td>
+              <td><span class="feature-tag">historical-bars</span><span class="feature-tag">stream-trades</span><span class="feature-tag">stream-bars</span></td>
+              <td><span class="badge green">YES</span></td><td class="muted">3s ago · OK</td><td><span class="badge green">healthy</span></td></tr>
+            <tr><td><strong>Alpaca live</strong></td><td>Alpaca</td><td class="muted">live</td>
+              <td><span class="feature-tag">historical-bars</span><span class="feature-tag">stream-trades</span><span class="feature-tag">stream-bars</span></td>
+              <td>—</td><td class="muted">1s ago · OK</td><td><span class="badge green">healthy</span></td></tr>
+            <tr><td><strong>yFinance</strong></td><td>yFinance</td><td class="muted">historical-only</td>
+              <td><span class="feature-tag">historical-bars (1d+)</span></td>
+              <td>—</td><td class="muted">2h ago · OK</td><td><span class="badge yellow">limited capability</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h2>Resolver — last decision</h2>
+      <div class="card">
+        <table>
+          <tr><td class="muted">Requested</td><td>NVDA · 5m bars · 200-bar lookback</td></tr>
+          <tr><td class="muted">Selected</td><td><strong>Alpaca paper</strong></td></tr>
+          <tr><td class="muted">Reason</td><td>yFinance lacks 5m granularity for &gt;7d lookbacks; Alpaca live not used for design-time research</td></tr>
+          <tr><td class="muted">Rejected candidates</td><td><span class="badge gray">yFinance</span> capability mismatch</td></tr>
+        </table>
+      </div>
+    </section>
+
+    <!-- ============ AUDIT LOGS ============ -->
+    <section class="page" id="page-audit">
+      <h1>Audit Logs</h1>
+      <p class="page-sub">Risk events, signal stream, broker fills, feature engine diagnostics.</p>
+
+      <div class="tabs">
+        <div class="tab active">Risk &amp; Control</div>
+        <div class="tab">Signal Stream</div>
+        <div class="tab">Broker Fills</div>
+        <div class="tab">Feature Engine</div>
+      </div>
+
+      <div class="card tight">
+        <table>
+          <thead><tr><th>Time</th><th>Severity</th><th>Event</th><th>Scope</th><th>Detail</th></tr></thead>
+          <tbody>
+            <tr><td class="mono muted">15:42:18</td><td><span class="badge green">info</span></td><td>portfolio_governor_approved</td><td>AAPL</td><td class="muted">within all caps · projected 17.6%</td></tr>
+            <tr><td class="mono muted">15:38:02</td><td><span class="badge yellow">warn</span></td><td>portfolio_governor_rejected</td><td>SPY</td><td class="muted">portfolio_symbol_concentration_pct &gt; 30 cap</td></tr>
+            <tr><td class="mono muted">15:11:02</td><td><span class="badge orange">warn</span></td><td>deployment_paused</td><td>Gap &amp; Go (acct-22b1)</td><td class="muted">operator action · 4 canceled · 2 protected</td></tr>
+            <tr><td class="mono muted">14:58:40</td><td><span class="badge red">error</span></td><td>broker_sync_stale</td><td>acct-22b1e8f0</td><td class="muted">last sync &gt; 4m — new opens blocked for account</td></tr>
+            <tr><td class="mono muted">14:21:40</td><td><span class="badge yellow">warn</span></td><td>strategy_controls_blocked</td><td>Day-Trade Standard</td><td class="muted">earnings_blackout for AAPL on 2026-04-25</td></tr>
+            <tr><td class="mono muted">14:15:08</td><td><span class="badge red">error</span></td><td>unknown_external_order_flagged</td><td>acct-22b1e8f0 / XYZ</td><td class="muted">brk-9180e — kept and flagged for review (never auto-canceled)</td></tr>
+            <tr><td class="mono muted">11:02:33</td><td><span class="badge orange">warn</span></td><td>account_paused</td><td>acct-22b1e8f0</td><td class="muted">operator action · 2 canceled · 4 protected</td></tr>
+            <tr><td class="mono muted">09:30:01</td><td><span class="badge green">info</span></td><td>deployment_started</td><td>Momentum v3</td><td class="muted">recovered_ready · plan-fp-1a2b warm · 0 reconciliation issues</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ============ BACKUP ============ -->
+    <section class="page" id="page-backup">
+      <h1>Backup &amp; Restore</h1>
+      <p class="page-sub">Backup includes domain models, frozen versions, evidence, kill events, broker mappings. Excludes broker secrets.</p>
+
+      <div class="grid grid-2">
+        <div class="card">
+          <h2 style="margin-top:0;">Create backup</h2>
+          <p class="muted small">Last backup: 2026-04-23 23:55 UTC · 14.2 MB</p>
+          <div class="btn-row">
+            <button class="btn primary">⤓ Create backup</button>
+            <button class="btn">View backup history</button>
+          </div>
+        </div>
+        <div class="card">
+          <h2 style="margin-top:0;">Restore from file</h2>
+          <p class="muted small">Restoring overwrites the current DB. Use only on a known-clean environment.</p>
+          <div class="btn-row">
+            <button class="btn">⤒ Choose file…</button>
+            <button class="btn ghost">Verify checksum first</button>
+          </div>
+          <div class="help-tip">Partial failures are reported explicitly — never silently treated as success.</div>
+        </div>
+      </div>
+
+      <h2>Backup history</h2>
+      <div class="card tight">
+        <table>
+          <thead><tr><th>Created</th><th>Size</th><th>Programs</th><th>Deployments</th><th>Evidence records</th><th>Checksum</th></tr></thead>
+          <tbody>
+            <tr><td class="muted">2026-04-23 23:55 UTC</td><td>14.2 MB</td><td>4</td><td>4</td><td>17</td><td class="mono">sha256:9f02…</td></tr>
+            <tr><td class="muted">2026-04-22 23:55 UTC</td><td>13.8 MB</td><td>4</td><td>3</td><td>15</td><td class="mono">sha256:81ad…</td></tr>
+            <tr><td class="muted">2026-04-21 23:55 UTC</td><td>13.5 MB</td><td>3</td><td>3</td><td>13</td><td class="mono">sha256:5210…</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ============ AI COMPOSER ============ -->
+    <section class="page" id="page-aicomposer">
+      <h1>AI Composer</h1>
+      <p class="page-sub">Plain English in. Validated Program draft out. Reuse-first — no syntax to memorize.</p>
+
+      <!-- Input -->
+      <div class="composer-input-card">
+        <div class="composer-input-row">
+          <textarea>Build me a 5-minute TQQQ momentum strategy using opening range breakout, VWAP confirmation, and ATR stops. Only trade between 9:45 and 11:00.</textarea>
+          <div style="display:flex; flex-direction:column; gap:6px;">
+            <button class="btn">🎙 Voice</button>
+            <button class="btn primary">✦ Generate</button>
+          </div>
+          <div style="display:flex; flex-direction:column; gap:6px;">
+            <button class="btn">↗ Improve</button>
+            <button class="btn">✓ Validate</button>
+          </div>
+          <button class="btn primary" style="background:var(--green); border-color:var(--green);">💾 Save as Program</button>
+        </div>
+        <div class="example-chips">
+          <span class="muted small" style="margin-right:4px;">Try:</span>
+          <span class="example-chip">Ichimoku breakout on QQQ</span>
+          <span class="example-chip">ORB on morning movers</span>
+          <span class="example-chip">VWAP pullback with trend filter</span>
+          <span class="example-chip">Mean reversion on SPY</span>
+          <span class="example-chip">Gap-and-go small caps</span>
+          <span class="example-chip">More examples →</span>
+        </div>
+      </div>
+
+      <div class="composer-grid">
+        <!-- LEFT: draft + steps + backtest plan -->
+        <div>
+          <div class="draft-banner">
+            <span style="color:var(--accent);">⚙</span>
+            <span class="draft-title">AI Generated Program Draft</span>
+            <span class="badge gray">v1.0.0 · draft</span>
+            <span class="conf-pill">AI Confidence · High</span>
+            <div class="draft-actions">
+              <button class="btn sm ghost">Explain All</button>
+              <button class="btn sm ghost">Expand All</button>
+              <button class="btn sm">Diff vs library</button>
+            </div>
+          </div>
+
+          <!-- Step 1: Strategy Intent -->
+          <div class="step-card">
+            <span class="step-handle">⋮⋮</span>
+            <div class="step-icon si-blue">◎</div>
+            <div class="step-body">
+              <div class="step-name">1. Strategy Intent</div>
+              <div class="step-summary"><strong style="color:var(--text)">Morning Blue-Chip ORB Momentum</strong> · breakout continuation after the first 15-min opening range with VWAP confirmation and elevated volume.</div>
+            </div>
+            <span class="step-status"><span class="badge green">Ready</span></span>
+            <div class="step-mini-actions"><button class="btn">Edit</button><button class="btn ghost">Explain</button></div>
+            <div class="reuse-pill">
+              <span class="reuse-line">Reuse existing</span>
+              <span class="reuse-line"><strong>3 similar strategies</strong> found · <a href="#">View matches</a></span>
+            </div>
+            <span class="step-toggle"></span>
+          </div>
+
+          <!-- Step 2: Entry Rules — EXPANDED with visual condition builder -->
+          <div class="step-card expanded">
+            <div style="display:grid; grid-template-columns:14px 36px 1fr 110px 90px 200px 30px; gap:12px; align-items:center;">
+              <span class="step-handle">⋮⋮</span>
+              <div class="step-icon si-green">→</div>
+              <div class="step-body">
+                <div class="step-name">2. Entry Rules <span class="muted small" style="font-weight:400;">· editing</span></div>
+                <div class="step-summary">Visual builder · pick from registry · timeframe-aware autosuggest</div>
+              </div>
+              <span class="step-status"><span class="badge yellow">Editing</span></span>
+              <div class="step-mini-actions"><button class="btn">Save</button><button class="btn ghost">Cancel</button></div>
+              <div class="reuse-pill">
+                <span class="reuse-line">Reuse existing</span>
+                <span class="reuse-line"><strong>2 similar rule sets</strong> · <a href="#">View options</a></span>
+              </div>
+              <span class="step-toggle"></span>
+            </div>
+
+            <div class="cond-section">
+              <div class="cond-label">Entry — all conditions must be true (AND)</div>
+
+              <div class="cond-row">
+                <span class="cond-pill tf">5m <span class="caret">▾</span></span>
+                <span class="cond-pill field">close <span class="caret">▾</span></span>
+                <span class="cond-pill op">&gt;</span>
+                <span class="cond-pill feat">opening_range_high <span class="muted small">@15m</span> <span class="caret">▾</span></span>
+                <span class="cond-pill del">✕</span>
+              </div>
+
+              <div class="cond-row">
+                <span class="cond-and">AND</span>
+                <span class="cond-pill tf">5m <span class="caret">▾</span></span>
+                <span class="cond-pill field">close <span class="caret">▾</span></span>
+                <span class="cond-pill op">&gt;</span>
+                <span class="cond-pill feat">vwap_session <span class="caret">▾</span></span>
+                <span class="cond-pill del">✕</span>
+              </div>
+
+              <div class="cond-row">
+                <span class="cond-and">AND</span>
+                <span class="cond-pill tf">5m <span class="caret">▾</span></span>
+                <span class="cond-pill field">volume <span class="caret">▾</span></span>
+                <span class="cond-pill op">&gt;</span>
+                <span class="cond-pill feat">volume_sma:length=20 <span class="caret">▾</span></span>
+                <span class="cond-pill op">×</span>
+                <span class="cond-pill val">1.5</span>
+                <span class="cond-pill del">✕</span>
+              </div>
+
+              <!-- Active row with autocomplete dropdown OPEN -->
+              <div class="cond-row" style="position:relative;">
+                <span class="cond-and">AND</span>
+                <span class="cond-pill tf">15m <span class="caret">▾</span></span>
+                <span class="cond-pill field active">rsi:length=14 <span class="caret">▾</span></span>
+                <span class="cond-pill op">&gt;</span>
+                <span class="cond-pill val">50</span>
+                <span class="cond-pill del">✕</span>
+
+                <div class="autocomplete">
+                  <div class="ac-search"><input type="text" placeholder="Search features…" value="rs"></div>
+                  <div class="ac-group">
+                    <div class="ac-group-title">Technical · matches</div>
+                    <div class="ac-item selected">rsi:length=14<span class="ac-tf">5m, 15m, 1h, 1d</span></div>
+                    <div class="ac-item">rsi:length=7<span class="ac-tf">5m, 15m, 1h, 1d</span></div>
+                    <div class="ac-item">rsi:length=21<span class="ac-tf">5m, 15m, 1h, 1d</span></div>
+                  </div>
+                  <div class="ac-group">
+                    <div class="ac-group-title">Suggested by AI for this strategy</div>
+                    <div class="ac-item">stoch_k <span class="badge planned" style="margin-left:auto; font-size:9px;">post-v1</span></div>
+                    <div class="ac-item">zscore:length=20 <span class="badge planned" style="margin-left:auto; font-size:9px;">post-v1</span></div>
+                  </div>
+                  <div class="ac-foot">
+                    Pick one · <kbd>↑</kbd><kbd>↓</kbd> navigate · <kbd>↵</kbd> select · <kbd>Esc</kbd> close · all suggestions registry-validated
+                  </div>
+                </div>
+              </div>
+
+              <div class="cond-row">
+                <span class="cond-and">AND</span>
+                <span class="cond-pill feat">session_state <span class="caret">▾</span></span>
+                <span class="cond-pill op">=</span>
+                <span class="cond-pill val">regular <span class="caret">▾</span></span>
+                <span class="cond-pill del">✕</span>
+              </div>
+
+              <div class="cond-row" style="margin-top:6px;">
+                <span class="cond-pill add">+ Add condition</span>
+                <span class="cond-pill add">+ Add OR group</span>
+                <span class="muted small" style="margin-left:auto;">5 conditions · all features registry-valid · no syntax to memorize</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Step 3: Exit Rules -->
+          <div class="step-card">
+            <span class="step-handle">⋮⋮</span>
+            <div class="step-icon si-red">←</div>
+            <div class="step-body">
+              <div class="step-name">3. Exit Rules</div>
+              <div class="step-summary">Exit on stop · Exit on target · Exit if 5m close &lt; vwap_session · Exit by 11:00 ET</div>
+            </div>
+            <span class="step-status"><span class="badge green">Ready</span></span>
+            <div class="step-mini-actions"><button class="btn">Edit</button><button class="btn ghost">Explain</button></div>
+            <div class="reuse-pill">
+              <span class="reuse-line">Reuse existing</span>
+              <span class="reuse-line"><strong>1 similar rule set</strong> · <a href="#">View options</a></span>
+            </div>
+            <span class="step-toggle"></span>
+          </div>
+
+          <!-- Step 4: Stop Logic -->
+          <div class="step-card">
+            <span class="step-handle">⋮⋮</span>
+            <div class="step-icon si-orange">⛒</div>
+            <div class="step-body">
+              <div class="step-name">4. Stop Logic</div>
+              <div class="step-summary">ATR-based stop · entry − 1.5 × <span class="mono">5m.atr:length=14[0]</span> · fallback: opening_range_low</div>
+            </div>
+            <span class="step-status"><span class="badge green">Ready</span></span>
+            <div class="step-mini-actions"><button class="btn">Edit</button><button class="btn ghost">Explain</button></div>
+            <div class="reuse-pill">
+              <span class="reuse-line">Reuse existing</span>
+              <span class="reuse-line"><strong>2 similar stop sets</strong> · <a href="#">View options</a></span>
+            </div>
+            <span class="step-toggle"></span>
+          </div>
+
+          <!-- Step 5: Targets / Scale-Outs -->
+          <div class="step-card">
+            <span class="step-handle">⋮⋮</span>
+            <div class="step-icon si-purple">⚐</div>
+            <div class="step-body">
+              <div class="step-name">5. Targets / Scale-Outs</div>
+              <div class="step-summary">T1: 1R sell 40% · T2: 2R sell 40% · Runner: 20% · Move stop to break-even after T1</div>
+            </div>
+            <span class="step-status"><span class="badge green">Ready</span></span>
+            <div class="step-mini-actions"><button class="btn">Edit</button><button class="btn ghost">Explain</button></div>
+            <div class="reuse-pill">
+              <span class="reuse-line">Reuse existing</span>
+              <span class="reuse-line"><strong>1 similar target set</strong> · <a href="#">View options</a></span>
+            </div>
+            <span class="step-toggle"></span>
+          </div>
+
+          <!-- Step 6: Strategy Controls -->
+          <div class="step-card">
+            <span class="step-handle">⋮⋮</span>
+            <div class="step-icon si-yellow">⏱</div>
+            <div class="step-body">
+              <div class="step-name">6. Strategy Controls</div>
+              <div class="step-summary">Trading window 09:45–11:00 ET · max 2 trades/symbol · 10-bar cooldown · earnings blackout · force flat 11:00</div>
+            </div>
+            <span class="step-status"><span class="badge green">Ready</span></span>
+            <div class="step-mini-actions"><button class="btn">Edit</button><button class="btn ghost">Explain</button></div>
+            <div class="reuse-pill">
+              <span class="reuse-line">Reuse existing</span>
+              <span class="reuse-line"><strong>3 similar control sets</strong> · <a href="#">View options</a></span>
+            </div>
+            <span class="step-toggle"></span>
+          </div>
+
+          <!-- Step 7: Risk Profile (with match %) -->
+          <div class="step-card">
+            <span class="step-handle">⋮⋮</span>
+            <div class="step-icon si-green">⚖</div>
+            <div class="step-body">
+              <div class="step-name">7. Risk Profile <span class="muted small" style="font-weight:400;">· suggested: <span style="color:var(--green)">Conservative Intraday Momentum</span></span></div>
+              <div class="step-summary">Risk/trade 0.50% · max daily loss 1.50% · max positions 2 · max exposure 30%</div>
+            </div>
+            <span class="step-status"><span class="badge green">Ready</span></span>
+            <div class="step-mini-actions"><button class="btn">Edit</button><button class="btn ghost">Explain</button></div>
+            <div class="reuse-pill">
+              <span class="reuse-line"><strong>88% match</strong> with existing</span>
+              <div class="match-bar"><span style="width:88%;"></span></div>
+              <span class="reuse-line"><a href="#">Use this</a> · <a href="#">Variant</a> · <a href="#">Compare</a></span>
+            </div>
+            <span class="step-toggle"></span>
+          </div>
+
+          <!-- Step 8: Execution Style -->
+          <div class="step-card">
+            <span class="step-handle">⋮⋮</span>
+            <div class="step-icon si-teal">⛓</div>
+            <div class="step-body">
+              <div class="step-name">8. Execution Style</div>
+              <div class="step-summary">Market entry after confirmed candle close · stop-market sl · limit tp · TIF DAY · cancel unfilled after 2 bars</div>
+            </div>
+            <span class="step-status"><span class="badge green">Ready</span></span>
+            <div class="step-mini-actions"><button class="btn">Edit</button><button class="btn ghost">Explain</button></div>
+            <div class="reuse-pill">
+              <span class="reuse-line"><strong>92% match</strong> with existing</span>
+              <div class="match-bar"><span style="width:92%; background:var(--green);"></span></div>
+              <span class="reuse-line"><a href="#">Use this</a> · <a href="#">Variant</a></span>
+            </div>
+            <span class="step-toggle"></span>
+          </div>
+
+          <!-- Step 9: Universe / Screener -->
+          <div class="step-card">
+            <span class="step-handle">⋮⋮</span>
+            <div class="step-icon si-blue">☰</div>
+            <div class="step-body">
+              <div class="step-name">9. Universe / Screener <span class="muted small" style="font-weight:400;">· Top Blue-Chip Premarket Movers</span></div>
+              <div class="step-summary">Price &gt; $10 · relative volume &gt; 2 · market cap &gt; $10B · earnings today/yesterday · liquidity ≥ $5M avg</div>
+            </div>
+            <span class="step-status"><span class="badge green">Ready</span></span>
+            <div class="step-mini-actions"><button class="btn">Edit</button><button class="btn ghost">Open Screener</button></div>
+            <div class="reuse-pill">
+              <span class="reuse-line"><strong>Use existing</strong></span>
+              <span class="reuse-line">Top Movers (Blue Chips) · <a href="#">Use this</a></span>
+            </div>
+            <span class="step-toggle"></span>
+          </div>
+
+          <!-- Step 10: Program Draft Summary -->
+          <div class="step-card" style="border-color:var(--accent);">
+            <span class="step-handle">⋮⋮</span>
+            <div class="step-icon si-blue">📋</div>
+            <div class="step-body">
+              <div class="step-name">10. Program Draft Summary</div>
+              <div class="step-summary">v1.0.0 · 5m intraday momentum · long only · US equities · created just now · 0 unsupported features</div>
+            </div>
+            <span class="step-status"><span class="badge green">Ready</span></span>
+            <div class="step-mini-actions"><button class="btn primary">Create Program from Draft</button></div>
+            <div class="reuse-pill">
+              <span class="reuse-line muted">Frozen on save · 5 component versions snapshotted</span>
+            </div>
+            <span class="step-toggle"></span>
+          </div>
+
+          <!-- Backtest Plan -->
+          <h2>Backtest Plan <span class="muted small" style="font-weight:normal;">· AI-generated · run before promotion</span></h2>
+          <div class="card">
+            <div class="bt-plan-grid">
+              <div class="bt-plan-col">
+                <h4>Primary Test</h4>
+                <table>
+                  <tr><td class="muted">Symbols</td><td>TQQQ, QQQ</td></tr>
+                  <tr><td class="muted">Timeframe</td><td>5m</td></tr>
+                  <tr><td class="muted">Period</td><td>Last 2 years</td></tr>
+                  <tr><td class="muted">Data source</td><td>Alpaca</td></tr>
+                  <tr><td class="muted">Initial capital</td><td>$25,000</td></tr>
+                  <tr><td class="muted">Slippage / comm.</td><td>5 bps · default</td></tr>
+                </table>
+              </div>
+              <div class="bt-plan-col">
+                <h4>Validation</h4>
+                <table>
+                  <tr><td class="muted">Walk-Forward</td><td><span class="badge green">Enabled</span></td></tr>
+                  <tr><td class="muted">Out-of-sample</td><td>30%</td></tr>
+                  <tr><td class="muted">Min trades</td><td>100</td></tr>
+                  <tr><td class="muted">Reject if DD &gt;</td><td>15%</td></tr>
+                  <tr><td class="muted">Reject if PF &lt;</td><td>1.25</td></tr>
+                  <tr><td class="muted">No-lookahead</td><td><span class="badge green">Enforced</span></td></tr>
+                </table>
+              </div>
+              <div class="bt-plan-col">
+                <h4>Sensitivity Tests</h4>
+                <table>
+                  <tr><td class="muted">ORB window</td><td>15m · 30m · 45m</td></tr>
+                  <tr><td class="muted">ATR stop ×</td><td>1.0 · 1.5 · 2.0</td></tr>
+                  <tr><td class="muted">Volume filter</td><td>1.5 · 2.0 · 3.0</td></tr>
+                  <tr><td class="muted">Execution TF</td><td>5m vs 15m</td></tr>
+                  <tr><td class="muted">Confirm TF</td><td>15m vs 30m</td></tr>
+                </table>
+              </div>
+              <div class="bt-plan-col">
+                <h4>Regime / Market States</h4>
+                <table>
+                  <tr><td>Bull market</td><td><span class="badge green">✓</span></td></tr>
+                  <tr><td>Bear market</td><td><span class="badge green">✓</span></td></tr>
+                  <tr><td>High volatility</td><td><span class="badge green">✓</span></td></tr>
+                  <tr><td>Low volatility</td><td><span class="badge green">✓</span></td></tr>
+                  <tr><td>High trend</td><td><span class="badge green">✓</span></td></tr>
+                  <tr><td>Low trend</td><td><span class="badge green">✓</span></td></tr>
+                </table>
+              </div>
+            </div>
+            <div class="btn-row" style="margin-top:14px;">
+              <button class="btn primary">▶ Run Backtest Plan</button>
+              <button class="btn">💾 Save Plan</button>
+              <button class="btn ghost">View Plan Details</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- RIGHT SIDEBAR -->
+        <div>
+          <div class="side-card">
+            <h3 style="display:flex; align-items:center;">Feature Plan Preview <button class="btn sm ghost" style="margin-left:auto;">Edit Plan</button></h3>
+            <div class="muted small" style="margin-bottom:6px;">Required features (12)</div>
+            <div style="display:flex; flex-wrap:wrap; gap:0;">
+              <span class="feature-tag" style="font-size:10.5px; padding:3px 7px;">5m.close[0]</span>
+              <span class="feature-tag" style="font-size:10.5px; padding:3px 7px;">5m.vwap_session</span>
+              <span class="feature-tag" style="font-size:10.5px; padding:3px 7px;">5m.volume[0]</span>
+              <span class="feature-tag" style="font-size:10.5px; padding:3px 7px;">5m.volume_sma:length=20</span>
+              <span class="feature-tag" style="font-size:10.5px; padding:3px 7px;">5m.atr:length=14</span>
+              <span class="feature-tag" style="font-size:10.5px; padding:3px 7px;">15m.rsi:length=14</span>
+              <span class="feature-tag" style="font-size:10.5px; padding:3px 7px;">15m.opening_range_high</span>
+              <span class="feature-tag" style="font-size:10.5px; padding:3px 7px;">15m.opening_range_low</span>
+              <span class="feature-tag" style="font-size:10.5px; padding:3px 7px;">opening_range_complete</span>
+              <span class="feature-tag" style="font-size:10.5px; padding:3px 7px;">session_state</span>
+              <span class="feature-tag" style="font-size:10.5px; padding:3px 7px;">prior_day_close</span>
+              <span class="feature-tag" style="font-size:10.5px; padding:3px 7px;">gap_pct</span>
+            </div>
+            <table style="margin-top:8px;">
+              <tr><td class="muted">Warmup 5m</td><td class="right mono">120 bars</td></tr>
+              <tr><td class="muted">Warmup 15m</td><td class="right mono">80 bars</td></tr>
+              <tr><td class="muted">Status</td><td class="right"><span class="badge green">All supported</span></td></tr>
+              <tr><td class="muted">Plan id</td><td class="right mono small">plan-fp-1a2b</td></tr>
+            </table>
+          </div>
+
+          <div class="side-card">
+            <h3>Validation Status</h3>
+            <div class="lib-count-row"><span class="ck">✓</span>All features supported</div>
+            <div class="lib-count-row"><span class="ck">✓</span>No lookahead detected</div>
+            <div class="lib-count-row"><span class="ck">✓</span>Timeframes aligned</div>
+            <div class="lib-count-row"><span class="ck">✓</span>Risk profile attached</div>
+            <div class="lib-count-row"><span class="ck">✓</span>Strategy Controls valid</div>
+            <div class="lib-count-row"><span class="ck" style="color:var(--yellow);">!</span>Leveraged ETF (TQQQ): volatility elevated</div>
+            <div class="lib-count-row"><span class="ck">✓</span>Universe snapshot frozen</div>
+          </div>
+
+          <div class="side-card">
+            <h3>Similar Strategy Patterns</h3>
+            <div class="similar-row">ORB Momentum<span class="pct">92%</span></div>
+            <div class="similar-row">VWAP Breakout<span class="pct">87%</span></div>
+            <div class="similar-row">Opening Drive Continuation<span class="pct">83%</span></div>
+            <div class="similar-row">Gap and Go<span class="pct">71%</span></div>
+            <div class="similar-row">Momentum Pullback<span class="pct">64%</span></div>
+            <div class="muted small" style="margin-top:6px;"><a href="#">View all matches (8)</a></div>
+          </div>
+
+          <div class="side-card">
+            <h3>AI Context <span class="muted small" style="font-weight:normal;">· library searched</span></h3>
+            <div class="lib-count-row"><span class="ck">✓</span>Strategies<span class="num">142</span></div>
+            <div class="lib-count-row"><span class="ck">✓</span>Risk Profiles<span class="num">18</span></div>
+            <div class="lib-count-row"><span class="ck">✓</span>Execution Styles<span class="num">9</span></div>
+            <div class="lib-count-row"><span class="ck">✓</span>Universes / Screeners<span class="num">23</span></div>
+            <div class="lib-count-row"><span class="ck">✓</span>Feature Plans<span class="num">64</span></div>
+            <div class="muted small" style="margin-top:8px; padding-top:8px; border-top:1px solid var(--border);">
+              Reuse-first preference applied · cheap model first · cached · cost so far <strong style="color:var(--text)">$0.014</strong>
+            </div>
+          </div>
+
+          <div class="side-card">
+            <h3>Quick Actions</h3>
+            <div class="btn-row" style="flex-direction:column; gap:6px;">
+              <button class="btn" style="justify-content:flex-start;">📈 Open in Chart Lab</button>
+              <button class="btn" style="justify-content:flex-start;">▶ Run Sim Lab</button>
+              <button class="btn" style="justify-content:flex-start;">⟳ Run Backtest Plan</button>
+              <button class="btn" style="justify-content:flex-start;">≣ Optimize Variant</button>
+              <button class="btn" style="justify-content:flex-start;">🔔 Create Alert</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Templates strip -->
+      <h2 style="margin-top:18px;">Strategy Templates <span class="muted small" style="font-weight:normal;">· start from a proven framework</span></h2>
+      <div class="templates-strip">
+        <div class="template-card"><div class="template-icon si-green">∿</div><div><div style="font-size:12px; font-weight:600;">ORB Momentum</div><div class="muted small">Intraday</div></div></div>
+        <div class="template-card"><div class="template-icon si-purple">∿</div><div><div style="font-size:12px; font-weight:600;">VWAP Pullback</div><div class="muted small">Intraday</div></div></div>
+        <div class="template-card"><div class="template-icon si-teal">☁</div><div><div style="font-size:12px; font-weight:600;">Ichimoku Breakout</div><div class="muted small">Intraday / Swing · post-v1 features</div></div></div>
+        <div class="template-card"><div class="template-icon si-yellow">≋</div><div><div style="font-size:12px; font-weight:600;">Alligator Trend</div><div class="muted small">Swing · post-v1 features</div></div></div>
+        <div class="template-card"><div class="template-icon si-orange">↑</div><div><div style="font-size:12px; font-weight:600;">Supertrend Continuation</div><div class="muted small">Swing · post-v1 features</div></div></div>
+        <div class="template-card"><div class="template-icon si-red">∿</div><div><div style="font-size:12px; font-weight:600;">RSI Mean Reversion</div><div class="muted small">Intraday</div></div></div>
+        <div class="template-card" style="background:transparent; border-style:dashed;"><div class="muted small">View all templates →</div></div>
+      </div>
+
+      <div class="banner info" style="margin-top:14px;">
+        <strong>How time-to-market works here:</strong> AI generates a 10-step Program draft · every step shows reuse matches from your library (88% / 92% / etc.) · visual condition builder uses dropdowns sourced from the registry — never raw syntax · validation runs continuously (lookahead, alignment, controls) · "Create Program" snapshots all 5 component versions immutably and feeds the Promotion Gate.
+      </div>
+    </section>
+
+    <!-- ============ AI BUILDER ============ -->
+    <section class="page" id="page-aibuilder">
+      <h1>AI Builder</h1>
+      <p class="page-sub">Draft-only assistant. AI proposes; deterministic validators decide. AI may not invent features, approve trades, or call any broker.</p>
+
+      <div class="card">
+        <label>Describe what you want</label>
+        <textarea rows="3">Find me a momentum breakout strategy for liquid large caps that trades only during regular hours, exits on a 1.5×ATR stop and 3×ATR target, and avoids earnings.</textarea>
+        <div class="form-row cols-3" style="margin-top:10px;">
+          <div><label>Reuse preference</label><select><option>Exact existing → safe variant → new</option></select></div>
+          <div><label>Universe</label><select><option>Liquid Large Caps u-9d2b1f</option></select></div>
+          <div><label>Cost ceiling</label><select><option>Cheap model first</option></select></div>
+        </div>
+        <div class="btn-row"><button class="btn primary">Generate draft</button></div>
+      </div>
+
+      <h2>Draft generation flow</h2>
+      <div class="card">
+        <div class="builder-step">
+          <div class="step-num">1</div>
+          <div class="step-content">
+            <div class="step-title">Intent extraction</div>
+            <div class="muted small">Parsed intent: momentum breakout · large caps · regular session · ATR-based stops · earnings blackout. Cost: $0.00 (deterministic).</div>
+          </div>
+        </div>
+        <div class="builder-step">
+          <div class="step-num">2</div>
+          <div class="step-content">
+            <div class="step-title">Existing-component search</div>
+            <div class="muted small">Found exact match: <strong>Momentum Breakout v3.2</strong> (Strategy) and <strong>Day-Trade Standard v2</strong> (Strategy Controls).</div>
+          </div>
+        </div>
+        <div class="builder-step">
+          <div class="step-num">3</div>
+          <div class="step-content">
+            <div class="step-title">Reuse / variant / new decision</div>
+            <div class="muted small">Decision: reuse Strategy + Controls; create variant of Risk Profile (Conservative-v3-tighterDD).</div>
+          </div>
+        </div>
+        <div class="builder-step">
+          <div class="step-num">4</div>
+          <div class="step-content">
+            <div class="step-title">Feature Planner validation</div>
+            <div class="muted small">Plan validated · 12 features · all in registry · warmup 200 bars · provider Alpaca. <span class="badge green">Pass</span></div>
+          </div>
+        </div>
+        <div class="builder-step">
+          <div class="step-num">5</div>
+          <div class="step-content">
+            <div class="step-title">User review</div>
+            <div class="muted small">Draft Program presented for review. Cannot be marked deployable without explicit user freeze action.</div>
+          </div>
+        </div>
+        <div class="builder-step">
+          <div class="step-num">6</div>
+          <div class="step-content">
+            <div class="step-title">Draft Program created</div>
+            <div class="muted small">prog-mom-v3-aiv1 (draft) · ready for Chart Lab and Sim Lab validation.</div>
+            <div class="btn-row" style="margin-top:8px;"><button class="btn sm primary">Open in Programs</button><button class="btn sm">Open in Chart Lab</button></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="banner info" style="margin-top:14px;">
+        AI cost strategy: deterministic validators run first; cheap model first; no AI calls per symbol per bar; outputs cached. Signal Context Analyzer is advisory and disabled by default at runtime.
+      </div>
+    </section>
+
+    <!-- ============ FEATURE CATALOG ============ -->
+    <section class="page" id="page-features">
+      <h1>Feature Catalog</h1>
+      <p class="page-sub">Canonical Feature Registry v1. AI may only emit features from this catalog. Each feature lists the timeframes it supports and any scope rules.</p>
+
+      <div class="btn-row" style="margin-bottom:12px;">
+        <input type="text" placeholder="Search features…" style="max-width:240px;">
+        <select style="max-width:170px;"><option>All categories</option><option>Price</option><option>Technical</option><option>Session</option><option>Portfolio</option></select>
+        <select style="max-width:170px;"><option>All timeframes</option><option>1m</option><option>5m</option><option>15m</option><option>1h</option><option>1d</option></select>
+        <button class="btn ghost">Generate vocabulary catalog</button>
+      </div>
+
+      <div class="grid grid-2">
+
+        <div class="feature-cat">
+          <div class="feature-cat-head">
+            <div class="feature-cat-title">Price</div>
+            <div class="feature-cat-count">5 features</div>
+            <div class="feature-cat-meta">scope: per-bar · warmup: 0</div>
+          </div>
+          <div class="feature-cat-body">
+            <span class="feature-tag">open <span class="tf">[1m,5m,15m,1h,1d]</span></span>
+            <span class="feature-tag">high <span class="tf">[1m,5m,15m,1h,1d]</span></span>
+            <span class="feature-tag">low <span class="tf">[1m,5m,15m,1h,1d]</span></span>
+            <span class="feature-tag">close <span class="tf">[1m,5m,15m,1h,1d]</span></span>
+            <span class="feature-tag">volume <span class="tf">[1m,5m,15m,1h,1d]</span></span>
+          </div>
+        </div>
+
+        <div class="feature-cat">
+          <div class="feature-cat-head">
+            <div class="feature-cat-title">Technical</div>
+            <div class="feature-cat-count">8 features</div>
+            <div class="feature-cat-meta">scope: per-bar · param: length=N</div>
+          </div>
+          <div class="feature-cat-body">
+            <span class="feature-tag">sma:length=N <span class="tf">[5m,1h,1d]</span></span>
+            <span class="feature-tag">ema:length=N <span class="tf">[5m,1h,1d]</span></span>
+            <span class="feature-tag">rsi:length=N <span class="tf">[5m,1h,1d]</span></span>
+            <span class="feature-tag">atr:length=N <span class="tf">[5m,1h,1d]</span></span>
+            <span class="feature-tag">vwap_session <span class="tf">[1m,5m,15m]</span></span>
+            <span class="feature-tag">vwap_anchored <span class="tf">[5m,1h,1d]</span></span>
+            <span class="feature-tag">highest:length=N <span class="tf">[5m,1h,1d]</span></span>
+            <span class="feature-tag">lowest:length=N <span class="tf">[5m,1h,1d]</span></span>
+          </div>
+        </div>
+
+        <div class="feature-cat">
+          <div class="feature-cat-head">
+            <div class="feature-cat-title">Session &amp; Calendar</div>
+            <div class="feature-cat-count">13 features</div>
+            <div class="feature-cat-meta">scope: session · ORB unavailable until window completes</div>
+          </div>
+          <div class="feature-cat-body">
+            <span class="feature-tag">session_state <span class="tf">premarket / regular / ah / closed</span></span>
+            <span class="feature-tag">regular_session_high_so_far</span>
+            <span class="feature-tag">regular_session_low_so_far</span>
+            <span class="feature-tag">opening_range_high <span class="tf">[15m default]</span></span>
+            <span class="feature-tag">opening_range_low</span>
+            <span class="feature-tag">opening_range_mid</span>
+            <span class="feature-tag">opening_range_width</span>
+            <span class="feature-tag">opening_range_width_pct</span>
+            <span class="feature-tag">opening_range_complete <span class="tf">bool</span></span>
+            <span class="feature-tag">prior_day_high <span class="tf">[1d]</span></span>
+            <span class="feature-tag">prior_day_low <span class="tf">[1d]</span></span>
+            <span class="feature-tag">prior_day_close <span class="tf">[1d]</span></span>
+            <span class="feature-tag">gap_pct <span class="tf">[1d]</span></span>
+          </div>
+        </div>
+
+        <div class="feature-cat">
+          <div class="feature-cat-head">
+            <div class="feature-cat-title">Portfolio / Governor</div>
+            <div class="feature-cat-count">10 features</div>
+            <div class="feature-cat-meta">scope: account · refresh: per-decision</div>
+          </div>
+          <div class="feature-cat-body">
+            <span class="feature-tag">gross_exposure_pct</span>
+            <span class="feature-tag">net_exposure_pct</span>
+            <span class="feature-tag">open_risk_pct</span>
+            <span class="feature-tag">pending_open_risk_pct</span>
+            <span class="feature-tag">symbol_concentration_pct</span>
+            <span class="feature-tag">new_open_slots_remaining</span>
+            <span class="feature-tag">broker_sync_stale <span class="tf">bool</span></span>
+            <span class="feature-tag">global_kill_active <span class="tf">bool</span></span>
+            <span class="feature-tag">account_pause_active <span class="tf">bool</span></span>
+            <span class="feature-tag">deployment_pause_active <span class="tf">bool</span></span>
+          </div>
+        </div>
+
+      </div>
+
+      <div class="feature-cat" style="border-style:dashed;">
+        <div class="feature-cat-head">
+          <div class="feature-cat-title">Planned · Post-v1 (not in registry)</div>
+          <div class="feature-cat-count">awaiting Slice 8/9</div>
+          <div class="feature-cat-meta">AI cannot emit these; strategies referencing them fail validation</div>
+        </div>
+        <div class="feature-cat-body">
+          <span class="feature-tag planned">macd / macd_signal / macd_hist</span>
+          <span class="feature-tag planned">stoch_k / stoch_d</span>
+          <span class="feature-tag planned">adx / plus_di / minus_di</span>
+          <span class="feature-tag planned">ibs</span>
+          <span class="feature-tag planned">zscore:length=N</span>
+          <span class="feature-tag planned">bb_upper / bb_mid / bb_lower</span>
+          <span class="feature-tag planned">dc_upper / dc_lower</span>
+          <span class="feature-tag planned">pp / r1 / r2 / r3 / s1 / s2 / s3</span>
+          <span class="feature-tag planned">prior_week_high / prior_week_low / prior_week_close</span>
+          <span class="feature-tag planned">swing_high / swing_low</span>
+          <span class="feature-tag planned">volume_sma:length=N</span>
+          <span class="feature-tag planned">relative_volume</span>
+          <span class="feature-tag planned">rolling_volatility</span>
+        </div>
+      </div>
+
+      <h2>Canonical syntax examples</h2>
+      <div class="card">
+        <table>
+          <tr><td class="mono">5m.close[0]</td><td class="muted">latest completed 5-minute close</td></tr>
+          <tr><td class="mono">5m.close[1]</td><td class="muted">previous completed 5-minute close</td></tr>
+          <tr><td class="mono">1d.high[0]</td><td class="muted">latest completed daily high</td></tr>
+          <tr><td class="mono">15m.opening_range_high:session=regular,window_minutes=15</td><td class="muted">first 15m of regular session high</td></tr>
+          <tr><td class="mono">5m.ema:length=20[0]</td><td class="muted">latest 20-period EMA on 5m</td></tr>
+          <tr><td class="mono">1h.rsi:length=14[0]</td><td class="muted">latest 14-period RSI on 1h</td></tr>
+        </table>
+        <div class="help-tip">Rules: `[0]` is latest completed bar. No current forming bar. Aliases like "60m" rejected — use "1h". Multi-tf values align by latest completed source bar. ORB unavailable until window completes.</div>
+      </div>
+
+      <h2>Feature Engine — Build progress</h2>
+      <div class="card">
+        <div class="slice done"><span class="slice-num">SLICE 0</span><span class="slice-title">Vocabulary &amp; contract lock</span><div class="slice-bar"><span style="width:100%;"></span></div><span class="badge green">Done</span></div>
+        <div class="slice done"><span class="slice-num">SLICE 1</span><span class="slice-title">Build plan &amp; UI progress</span><div class="slice-bar"><span style="width:100%;"></span></div><span class="badge green">Done</span></div>
+        <div class="slice done"><span class="slice-num">SLICE 2</span><span class="slice-title">Registry &amp; planner refactor</span><div class="slice-bar"><span style="width:100%;"></span></div><span class="badge green">Done</span></div>
+        <div class="slice done"><span class="slice-num">SLICE 3</span><span class="slice-title">Feature registry &amp; canonical keys</span><div class="slice-bar"><span style="width:100%;"></span></div><span class="badge green">Done</span></div>
+        <div class="slice done"><span class="slice-num">SLICE 4</span><span class="slice-title">Session / calendar / safe symbol set</span><div class="slice-bar"><span style="width:100%;"></span></div><span class="badge green">Done</span></div>
+        <div class="slice done"><span class="slice-num">SLICE 5</span><span class="slice-title">Feature cache &amp; incremental runtime</span><div class="slice-bar"><span style="width:100%;"></span></div><span class="badge green">Done</span></div>
+        <div class="slice done"><span class="slice-num">SLICE 6</span><span class="slice-title">Multi-timeframe alignment</span><div class="slice-bar"><span style="width:100%;"></span></div><span class="badge green">Done</span></div>
+        <div class="slice done"><span class="slice-num">SLICE 7</span><span class="slice-title">Portfolio Governor feature layer</span><div class="slice-bar"><span style="width:100%;"></span></div><span class="badge green">Done</span></div>
+        <div class="slice"><span class="slice-num">SLICE 8</span><span class="slice-title">AI &amp; builder auto-sync</span><div class="slice-bar"><span style="width:35%;"></span></div><span class="badge yellow">In progress</span></div>
+        <div class="slice"><span class="slice-num">SLICE 9</span><span class="slice-title">Explainability &amp; operator diagnostics</span><div class="slice-bar"><span style="width:5%;"></span></div><span class="badge gray">Queued</span></div>
+      </div>
+    </section>
+
+    <!-- ============ JOURNEY HUB (compressed; full detail in v1) ============ -->
+    <section class="page" id="page-journeys">
+      <h1>Journey Validation Hub</h1>
+      <p class="page-sub">All 150 user journeys grouped by domain. Filter by status, priority, domain.</p>
+
+      <div class="btn-row" style="margin-bottom:12px;">
+        <input type="text" placeholder="Filter…" style="max-width:240px;">
+        <select style="max-width:170px;"><option>All priorities</option><option>P0 only</option></select>
+        <select style="max-width:170px;"><option>All statuses</option><option>Done</option><option>Partial</option><option>Pending</option></select>
+      </div>
+
+      <div class="card">
+        <table>
+          <thead><tr><th>Domain</th><th>Range</th><th>Done</th><th>Partial</th><th>Pending</th></tr></thead>
+          <tbody>
+            <tr><td>Onboarding &amp; Setup</td><td class="muted">1–10</td><td>9</td><td>1</td><td>0</td></tr>
+            <tr><td>Universes</td><td class="muted">11–20</td><td>8</td><td>1</td><td>1</td></tr>
+            <tr><td>Strategy Authoring</td><td class="muted">21–30</td><td>9</td><td>1</td><td>0</td></tr>
+            <tr><td>Strategy Controls</td><td class="muted">31–40</td><td>9</td><td>1</td><td>0</td></tr>
+            <tr><td>Risk Profiles</td><td class="muted">41–50</td><td>9</td><td>0</td><td>1</td></tr>
+            <tr><td>Execution Styles</td><td class="muted">51–60</td><td>9</td><td>1</td><td>0</td></tr>
+            <tr><td>Program Composition</td><td class="muted">61–70</td><td>10</td><td>0</td><td>0</td></tr>
+            <tr><td>Portfolio Governor</td><td class="muted">71–80</td><td>9</td><td>1</td><td>0</td></tr>
+            <tr><td>Broker Accounts &amp; Safety</td><td class="muted">81–90</td><td>10</td><td>0</td><td>0</td></tr>
+            <tr><td>Backtesting &amp; Validation</td><td class="muted">91–100</td><td>9</td><td>1</td><td>0</td></tr>
+            <tr><td>Simulation &amp; Replay</td><td class="muted">101–110</td><td>9</td><td>1</td><td>0</td></tr>
+            <tr><td>Optimization &amp; Quant Review</td><td class="muted">111–120</td><td>8</td><td>1</td><td>1</td></tr>
+            <tr><td>Deployments &amp; Live Monitoring</td><td class="muted">121–130</td><td>10</td><td>0</td><td>0</td></tr>
+            <tr><td>Data, Chart Lab &amp; Realtime Feeds</td><td class="muted">131–140</td><td>8</td><td>1</td><td>1</td></tr>
+            <tr><td>Logs, Reporting &amp; Operator UX</td><td class="muted">141–150</td><td>9</td><td>1</td><td>0</td></tr>
+          </tbody>
+          <tfoot>
+            <tr style="background:#0f1422;"><td><strong>TOTAL</strong></td><td class="muted">1–150</td><td><strong>135</strong></td><td><strong>10</strong></td><td><strong>5</strong></td></tr>
+          </tfoot>
+        </table>
+        <div class="help-tip">Per-journey detail (P0/P1/P2 + status + required steps) renders in the expanded view. Drill into any domain to see the 10-row breakdown.</div>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- ================= FOOTER ================= -->
+  <footer class="statusbar">
+    <span><span class="status-chip" style="padding:2px 8px;"><span class="indicator ind-green"></span>WS live</span></span>
+    <div class="fs-divider"></div>
+    <span>API <span style="color:var(--text)">127.0.0.1:8000</span></span>
+    <div class="fs-divider"></div>
+    <span>DB <span style="color:var(--text)">data/runtime.db</span></span>
+    <div class="fs-divider"></div>
+    <span>Build <span style="color:var(--text)">2026-04-24 19:55</span></span>
+    <div style="flex:1;"></div>
+    <span>Account: <strong style="color:var(--text);">acct-7c4f9b1a</strong></span>
+    <div class="fs-divider"></div>
+    <span>Deployments running: <strong style="color:var(--green);">3</strong></span>
+    <div class="fs-divider"></div>
+    <span>Open positions: <strong style="color:var(--text);">5</strong></span>
+    <div class="fs-divider"></div>
+    <span>Open risk: <strong style="color:var(--text);">1.82%</strong></span>
+  </footer>
+</div>
+
+<!-- ================= KILL MODAL ================= -->
+<div class="modal-mask" id="kill-modal">
+  <div class="modal">
+    <h3>⛔ Stop All New Opens (Global)</h3>
+    <div class="modal-body">
+      Halts <strong>new opens platform-wide</strong>. Existing positions remain managed.<br><br>
+      <strong>Will be canceled:</strong> open-intent orders not yet filled.<br>
+      <strong>Will be preserved:</strong> protective exits — <span class="badge red">sl</span> <span class="badge green">tp</span> <span class="badge purple">close</span> <span class="badge blue">scale</span> · and <span class="badge orange">unknown</span> orders (kept &amp; flagged).<br><br>
+      <span class="muted small">Result will be shown after action. If kill-state cannot be confirmed, the action will report an error — never a silent success.</span>
+    </div>
+    <div class="modal-actions">
+      <button class="btn ghost" onclick="closeKillModal()">Cancel</button>
+      <button class="btn danger" onclick="confirmKill()">Confirm Global Kill</button>
+    </div>
+  </div>
+</div>
+
+<!-- ================= DECISION INSPECTOR MODAL ================= -->
+<div class="modal-mask" id="inspector-modal">
+  <div class="modal" style="width:780px;">
+    <h3>Decision Inspector — AAPL · 2026-04-24 11:27:55 ET</h3>
+    <div class="muted small" style="margin-bottom:12px;">Full decision chain for one bar / candidate.</div>
+    <div>
+      <div class="inspector-stage pass">
+        <div class="stage-name">FeatureSnapshot</div>
+        <div class="stage-detail">12 features, all <span class="badge feat-available">available</span>. Sources: Alpaca · plan-fp-1a2b · cache hit 11/12<br><span class="stage-meta">close[0]=182.40 · ema_20[0]=181.06 · rsi_14[0]=58.2 · atr_14[0]=2.04 · opening_range_high=180.92</span></div>
+      </div>
+      <div class="inspector-stage pass">
+        <div class="stage-name">Signal Engine</div>
+        <div class="stage-detail">All entry conditions true → <strong>signal_candidate</strong><br><span class="stage-meta">close[0] &gt; ema_20 ✓ · rsi_14 &gt; 55 ✓ · volume &gt; volume_sma_20×1.5 ✓ · ORB complete ✓</span></div>
+      </div>
+      <div class="inspector-stage pass">
+        <div class="stage-name">Strategy Controls</div>
+        <div class="stage-detail">Allowed — within session, cooldown clear, trades_today=2/5, no blackout<br><span class="stage-meta">window=09:35-11:30 · cooldown_remaining=0 · earnings_in_window=false</span></div>
+      </div>
+      <div class="inspector-stage pass">
+        <div class="stage-name">Risk Engine</div>
+        <div class="stage-detail">Approved · qty=100 · risk=$229 (0.22% of equity)<br><span class="stage-meta">stop=180.10 · risk_per_share=$2.30 · max_positions ok 6/12</span></div>
+      </div>
+      <div class="inspector-stage pass">
+        <div class="stage-name">Execution Intent</div>
+        <div class="stage-detail">Native bracket · BUY LIMIT 182.40 · Stop 180.10 · Target 187.40 · TIF=DAY · cancel_after=10 bars<br><span class="stage-meta">execution_style=Native Bracket v1</span></div>
+      </div>
+      <div class="inspector-stage pass">
+        <div class="stage-name">Portfolio Governor</div>
+        <div class="stage-detail">Approved · projected exposure 17.6% / 30% cap · no symbol overlap<br><span class="stage-meta">portfolio_open_risk_pct projected = 1.04% / 4% cap</span></div>
+      </div>
+      <div class="inspector-stage pass">
+        <div class="stage-name">Order Manager</div>
+        <div class="stage-detail">Internal order created · <span class="mono">ord-0a82</span> · <span class="coid"><span class="c-prefix">utos</span><span class="c-acct">7c4f9b1a</span><span class="c-dep">d3a05f12</span><span class="c-prog">8e21f7c0</span><span class="c-int">open</span><span class="c-seq">000142</span></span></div>
+      </div>
+      <div class="inspector-stage pass">
+        <div class="stage-name">Broker Adapter</div>
+        <div class="stage-detail">Submitted to Alpaca paper endpoint · broker_id=brk-9210b · accepted</div>
+      </div>
+      <div class="inspector-stage pass">
+        <div class="stage-name">Fill Events</div>
+        <div class="stage-detail">Filled 100 @ 182.40 (1 fill) · slippage=$0.00 · bracket legs held (sl, tp)</div>
+      </div>
+      <div class="inspector-stage pass">
+        <div class="stage-name">Position State (after)</div>
+        <div class="stage-detail">+100 AAPL avg 182.40 · ΔPnL=+$0 · Δexposure=+17.6%</div>
+      </div>
+    </div>
+    <div class="modal-actions" style="margin-top:14px;">
+      <button class="btn" onclick="closeInspector()">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- ================= TOASTS ================= -->
+<div class="toasts" id="toasts">
+  <div class="toast green">
+    <div class="t-title">Signal approved</div>
+    <div class="t-sub">Momentum Breakout v3 → AAPL · entry 184.20 · 100 sh · governor approved</div>
+  </div>
+  <div class="toast yellow">
+    <div class="t-title">Governor rejected</div>
+    <div class="t-sub">Mean Reversion ETF → SPY · symbol concentration 30% cap reached</div>
+  </div>
+  <div class="toast">
+    <div class="t-title">Broker fill</div>
+    <div class="t-sub">NVDA bracket filled @ 948.20 · stop &amp; target legs held</div>
+  </div>
+</div>
+
+<script>
+  // Section navigation + contextual mode label
+  const modeLabels = {
+    'design':           { text:'Design Time',                     cls:'mode-design' },
+    'broker-paper':     { text:'Broker Runtime - Paper',          cls:'mode-broker-paper' },
+    'broker-live':      { text:'Broker Runtime - Live',           cls:'mode-broker-live' },
+    'sim-historical':   { text:'Sim Lab Historical',              cls:'mode-sim-historical' },
+    'sim-live':         { text:'Sim Lab Live Simulation',         cls:'mode-sim-live' },
+    'chartlab-batch':   { text:'Chart Lab Batch',                 cls:'mode-chartlab-batch' },
+    'chartlab-live':    { text:'Chart Lab Live Preview',          cls:'mode-chartlab-live' }
+  };
+
+  document.querySelectorAll('.nav-item').forEach(item => {
+    item.addEventListener('click', () => {
+      document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+      document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+      item.classList.add('active');
+      const target = item.getAttribute('data-page');
+      const page = document.getElementById('page-' + target);
+      if (page) page.classList.add('active');
+      const mode = item.getAttribute('data-mode') || 'design';
+      const cfg = modeLabels[mode] || modeLabels.design;
+      const el = document.getElementById('mode-label');
+      el.textContent = cfg.text;
+      el.className = 'mode-label ' + cfg.cls;
+      window.scrollTo({top:0});
+    });
+  });
+
+  // Tabs (within a page) — generic
+  document.querySelectorAll('.tabs').forEach(tabset => {
+    tabset.querySelectorAll('.tab').forEach(t => {
+      t.addEventListener('click', () => {
+        tabset.querySelectorAll('.tab').forEach(x => x.classList.remove('active'));
+        t.classList.add('active');
+        // Components page tab switching
+        if (tabset.id === 'comp-tabs') {
+          const which = t.getAttribute('data-comp');
+          ['controls','risk','execution'].forEach(k => {
+            const el = document.getElementById('comp-' + k);
+            if (el) el.style.display = (k === which ? '' : 'none');
+          });
+        }
+      });
+    });
+  });
+
+  // Kill modal
+  function openKillModal() { document.getElementById('kill-modal').classList.add('show'); }
+  function closeKillModal() { document.getElementById('kill-modal').classList.remove('show'); }
+  function confirmKill() {
+    closeKillModal();
+    document.getElementById('kill-banner').style.display = 'flex';
+    const chip = document.getElementById('kill-chip');
+    chip.innerHTML = '<span class="indicator ind-red"></span>Kill: GLOBAL';
+    addToast('red', 'Global Kill executed', 'Canceled 8 · preserved 6 protective · 1 unknown flagged · result audited');
+    document.querySelector('.nav-item[data-page="operations"]').click();
+  }
+  document.getElementById('kill-modal').addEventListener('click', e => { if (e.target.id === 'kill-modal') closeKillModal(); });
+
+  // Decision Inspector modal
+  function openInspector() { document.getElementById('inspector-modal').classList.add('show'); }
+  function closeInspector() { document.getElementById('inspector-modal').classList.remove('show'); }
+  document.getElementById('inspector-modal').addEventListener('click', e => { if (e.target.id === 'inspector-modal') closeInspector(); });
+
+  function addToast(kind, title, sub) {
+    const div = document.createElement('div');
+    div.className = 'toast ' + (kind || '');
+    div.innerHTML = '<div class="t-title">' + title + '</div><div class="t-sub">' + sub + '</div>';
+    document.getElementById('toasts').prepend(div);
+    setTimeout(() => div.remove(), 9000);
+  }
+</script>
+
+</body>
+</html>

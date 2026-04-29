@@ -1,10 +1,25 @@
 from __future__ import annotations
 
+import hashlib
 import re
 from uuid import UUID, uuid4
 
 
 _SUPPORTED_INTENTS = {"open", "close", "tp", "sl", "scale"}
+_SIGNAL_PLAN_INTENTS = {
+    "open",
+    "close",
+    "reduce",
+    "target",
+    "stop",
+    "trail",
+    "breakeven",
+    "runner",
+    "logical_exit",
+    "tp",
+    "sl",
+    "scale",
+}
 _MANUAL_INTENTS = {"open", "close", "reduce"}
 _CLIENT_ORDER_ID_RE = re.compile(
     r"^(?P<program>[a-z0-9]{2,12})-(?P<deployment>[0-9a-f]{8})-"
@@ -38,6 +53,31 @@ def build_manual_client_order_id(account_id: UUID, intent: object = "open") -> s
     if normalized_intent not in _MANUAL_INTENTS:
         raise ValueError(f"unsupported manual order intent: {intent}")
     return f"manual-{account_id.hex[:8]}-{normalized_intent}-{uuid4().hex[:8]}"
+
+
+def build_signal_plan_client_order_id(
+    account_id: UUID,
+    deployment_id: UUID,
+    signal_plan_id: UUID,
+    intent: object = "open",
+    position_lineage_id: UUID | None = None,
+    leg_label: str | None = None,
+) -> str:
+    normalized_intent = str(getattr(intent, "value", intent))
+    if normalized_intent not in _SIGNAL_PLAN_INTENTS:
+        raise ValueError(f"unsupported signal plan order intent: {intent}")
+    stable_seed = "|".join(
+        (
+            account_id.hex,
+            deployment_id.hex,
+            signal_plan_id.hex,
+            normalized_intent,
+            "" if position_lineage_id is None else position_lineage_id.hex,
+            "" if leg_label is None else leg_label,
+        )
+    )
+    digest = hashlib.sha256(stable_seed.encode("utf-8")).hexdigest()[:10]
+    return f"sigplan-{account_id.hex[:8]}-{signal_plan_id.hex[:8]}-{_signal_plan_intent_abbrev(normalized_intent)}-{digest}"
 
 
 def is_manual_client_order_id(client_order_id: str) -> bool:
@@ -85,3 +125,12 @@ def _program_abbrev(program_name: str) -> str:
     if len(normalized) < 2:
         normalized = "utos"
     return normalized[:12]
+
+
+def _signal_plan_intent_abbrev(intent: str) -> str:
+    return {
+        "breakeven": "be",
+        "logical_exit": "lx",
+        "take_profit": "tp",
+        "stop_loss": "sl",
+    }.get(intent, intent[:8])

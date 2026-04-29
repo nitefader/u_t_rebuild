@@ -6,3 +6,6 @@ data/
 *.pyc
 frontend/dist/
 frontend/node_modules/
+node_modules
+.runtime_logs/
+*.tsbuildinfo

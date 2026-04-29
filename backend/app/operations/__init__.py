@@ -2,6 +2,7 @@
 
 from .models import (
     AccountOperations,
+    AccountSignalPlanEvaluationListResponse,
     AccountSummary,
     DeploymentOperations,
     DeploymentSummary,
@@ -23,6 +24,7 @@ def __getattr__(name: str):
 
 __all__ = [
     "AccountOperations",
+    "AccountSignalPlanEvaluationListResponse",
     "AccountSummary",
     "DeploymentOperations",
     "DeploymentSummary",

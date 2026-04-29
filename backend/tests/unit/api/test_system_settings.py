@@ -40,6 +40,7 @@ def test_get_route_returns_defaults_when_store_empty(tmp_path) -> None:
     assert settings.alpaca_use_test_stream is False
     assert settings.alpaca_data_feed == "iex"
     assert settings.chart_lab_default_symbol == "SPY"
+    assert settings.chart_lab_one_symbol_fakepaca is None
 
 
 def test_put_route_persists_changes(tmp_path) -> None:
@@ -56,6 +57,16 @@ def test_put_route_persists_changes(tmp_path) -> None:
     # Persisted across a fresh store instance.
     fresh = SystemSettingsStore(tmp_path / "settings.json")
     assert fresh.load()["alpaca_data_feed"] == "sip"
+
+
+def test_put_route_persists_chart_lab_one_symbol_override(tmp_path) -> None:
+    store = SystemSettingsStore(tmp_path / "settings.json")
+    settings = put_system_settings(SystemSettingsUpdate(chart_lab_one_symbol_fakepaca=False), store)
+    assert settings.chart_lab_one_symbol_fakepaca is False
+    assert SystemSettingsStore(tmp_path / "settings.json").load()["chart_lab_one_symbol_fakepaca"] is False
+    cleared = put_system_settings(SystemSettingsUpdate(chart_lab_one_symbol_fakepaca=None), store)
+    assert cleared.chart_lab_one_symbol_fakepaca is None
+    assert "chart_lab_one_symbol_fakepaca" not in SystemSettingsStore(tmp_path / "settings.json").load()
 
 
 def test_put_route_rejects_unsupported_data_feed(tmp_path) -> None:

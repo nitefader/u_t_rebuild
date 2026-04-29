@@ -389,8 +389,13 @@ class BrokerSyncService:
     def fills(self) -> tuple[BrokerFillUpdateEvent, ...]:
         return tuple(self._fills)
 
-    def handle_order_update(self, event: BrokerOrderUpdateEvent) -> InternalOrder:
-        order = self._order_by_client_order_id(event.account_id, event.client_order_id)
+    def handle_order_update(self, event: BrokerOrderUpdateEvent) -> InternalOrder | None:
+        try:
+            order = self._order_by_client_order_id(event.account_id, event.client_order_id)
+        except OrderManagerError:
+            self._record_external_order_update(event)
+            self._record_stream_event(event.account_id, event.event_at)
+            return None
         result = BrokerOrderResult(
             order_id=order.order_id,
             client_order_id=event.client_order_id,
@@ -427,6 +432,7 @@ class BrokerSyncService:
     def handle_position_update(self, event: BrokerPositionSnapshot) -> BrokerPositionSnapshot:
         positions = self._positions_by_account.setdefault(event.account_id, {})
         positions[event.symbol.upper()] = event
+        self._persist_position_snapshot(event)
         self._record_stream_event(event.account_id, event.timestamp)
         return event
 
@@ -455,6 +461,8 @@ class BrokerSyncService:
         open_orders = self.fetch_open_orders(account_id)
         self._account_snapshots_by_account[account_id] = account_snapshot
         self._persist_account_snapshot(account_snapshot)
+        self._persist_position_snapshots(account_id, positions)
+        self._persist_open_order_snapshots(account_id, open_orders)
         self._positions_by_account[account_id] = {position.symbol.upper(): position for position in positions}
         sync_status = self.sync_state(account_snapshot)
         self._last_poll_sync_at_by_account[account_id] = checked_at
@@ -479,10 +487,11 @@ class BrokerSyncService:
             )
 
         local_orders = self._order_ledger.by_account(account_id)
+        active_local_orders = tuple(order for order in local_orders if _requires_broker_order_reconcile(order))
         local_by_client_order_id = {order.client_order_id: order for order in local_orders}
         open_by_client_order_id = {order.client_order_id: order for order in open_orders}
 
-        for order in local_orders:
+        for order in active_local_orders:
             try:
                 broker_result = self._adapter.get_order(order)
             except BrokerAdapterError:
@@ -597,6 +606,39 @@ class BrokerSyncService:
             return
         self._runtime_store.save_broker_account_snapshot(snapshot)
 
+    def _persist_position_snapshots(
+        self,
+        account_id: UUID,
+        snapshots: tuple[BrokerPositionSnapshot, ...],
+    ) -> None:
+        if self._runtime_store is None:
+            return
+        if hasattr(self._runtime_store, "replace_broker_position_snapshots"):
+            self._runtime_store.replace_broker_position_snapshots(account_id, snapshots)
+            return
+        if hasattr(self._runtime_store, "save_broker_position_snapshot"):
+            for snapshot in snapshots:
+                self._runtime_store.save_broker_position_snapshot(snapshot)
+
+    def _persist_position_snapshot(self, snapshot: BrokerPositionSnapshot) -> None:
+        if self._runtime_store is None or not hasattr(self._runtime_store, "save_broker_position_snapshot"):
+            return
+        self._runtime_store.save_broker_position_snapshot(snapshot)
+
+    def _persist_open_order_snapshots(
+        self,
+        account_id: UUID,
+        snapshots: tuple[BrokerOpenOrderSnapshot, ...],
+    ) -> None:
+        if self._runtime_store is None:
+            return
+        if hasattr(self._runtime_store, "replace_broker_open_order_snapshots"):
+            self._runtime_store.replace_broker_open_order_snapshots(account_id, snapshots)
+            return
+        if hasattr(self._runtime_store, "save_broker_open_order_snapshot"):
+            for snapshot in snapshots:
+                self._runtime_store.save_broker_open_order_snapshot(snapshot)
+
     def _persist_sync_state(self, state: BrokerSyncState) -> None:
         _persist_sync_freshness(self._runtime_store, state)
 
@@ -631,6 +673,28 @@ class BrokerSyncService:
                 )
             )
         return tuple(deltas)
+
+    def _record_external_order_update(self, event: BrokerOrderUpdateEvent) -> None:
+        if _broker_order_update_terminal(event.status):
+            return
+        if event.broker_order_id is None or event.symbol is None or event.side is None or event.qty is None:
+            return
+        self._broker_sync.record_external_open_order(
+            BrokerOpenOrderSnapshot(
+                account_id=event.account_id,
+                broker_order_id=event.broker_order_id,
+                client_order_id=event.client_order_id,
+                symbol=event.symbol,
+                side=event.side,
+                qty=event.qty,
+                filled_qty=event.filled_quantity,
+                status=event.status,
+                order_type=event.order_type or "unknown",
+                limit_price=event.limit_price,
+                stop_price=event.stop_price,
+                timestamp=event.event_at,
+            )
+        )
 
 
 def _aware(value: datetime) -> datetime:
@@ -669,3 +733,29 @@ def _persist_sync_freshness(runtime_store: object | None, state: BrokerSyncState
     if runtime_store is None or not hasattr(runtime_store, "save_broker_sync_freshness"):
         return
     runtime_store.save_broker_sync_freshness(state)
+
+
+def _requires_broker_order_reconcile(order: InternalOrder) -> bool:
+    """Return whether quiet polling should refresh this internal order.
+
+    Stream events and prior BrokerSync reconciliation own terminal broker truth.
+    The recurring REST poll only needs to chase orders that can still change at
+    the broker, otherwise a long-lived account pays one get_order call forever
+    for every historical fill/cancel/reject.
+    """
+    return order.status not in {
+        InternalOrderStatus.FILLED,
+        InternalOrderStatus.CANCELED,
+        InternalOrderStatus.REJECTED,
+        InternalOrderStatus.FAILED,
+    }
+
+
+def _broker_order_update_terminal(status: BrokerOrderStatus) -> bool:
+    return status in {
+        BrokerOrderStatus.FILLED,
+        BrokerOrderStatus.CANCELED,
+        BrokerOrderStatus.REJECTED,
+        BrokerOrderStatus.EXPIRED,
+        BrokerOrderStatus.REPLACED,
+    }

@@ -15,7 +15,7 @@ Allowed surfaces:
   an explicit "this file is the single source of truth" marker.
 - This test file itself (it lists the banned names as data).
 
-Compound members like ``DataIntentMode.LIVE_PREVIEW`` / ``LIVE_RUNTIME`` are
+Compound members like ``DataIntentMode.LIVE_PREVIEW`` / ``LIVE_TRADING`` are
 allowed — they are qualified terms, not standalone ``LIVE``.
 """
 

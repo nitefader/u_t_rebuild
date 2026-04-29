@@ -2,27 +2,42 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from datetime import datetime
-from uuid import UUID, uuid4
+from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 
-from backend.app.decision import SignalEngine, SignalEvaluationError
+from backend.app.decision import PositionContext, SignalEngine, SignalEvaluationError
+from backend.app.decision.signal_plan_builder import SignalPlanBuilder
 from backend.app.domain import (
     CandidateSide,
+    CandidateTradeIntent,
     IntentType,
+    LogicalExitRule,
+    LogicalExitRuleKind,
+    RiskDecisionCard,
+    RiskDecisionMode,
+    RiskDecisionStatus,
+    SignalPlanLogicalExitScope,
+    SignalPlanTargetAction,
+    SignalRule,
+    SimulationRunEvidence,
     SimulationSession,
     TradingMode,
 )
-from backend.app.domain.risk_profile import PositionSizingMethod
 from backend.app.features import (
-    BatchFeatureEngine,
     FeatureAvailability,
     FeatureFrame,
     FeatureFrameSet,
     FeaturePlan,
     FeatureSnapshot,
     FeatureValue,
+    IncrementalFeatureEngine,
     NormalizedBar,
-    ResolvedProgramComponents,
+    ResolvedDeploymentComponents,
     build_feature_plan,
+)
+from backend.app.risk_resolver import (
+    AccountStateSnapshot,
+    RiskDecisionCardSink,
+    RiskResolver,
 )
 
 from .models import (
@@ -75,6 +90,34 @@ class SimulatedPositionLedger:
         self._positions: dict[str, SimulatedPosition] = {}
         self._entry_order_by_symbol: dict[str, str] = {}
         self._entry_time_by_symbol: dict[str, datetime] = {}
+        self._entry_signal_plan_by_symbol: dict[str, UUID] = {}
+        self._entry_bar_index_by_symbol: dict[str, int] = {}
+
+    def record_entry_lineage(
+        self,
+        *,
+        symbol: str,
+        signal_plan_id: UUID | None,
+        bar_index: int,
+    ) -> None:
+        normalized = symbol.upper()
+        if signal_plan_id is not None:
+            self._entry_signal_plan_by_symbol.setdefault(normalized, signal_plan_id)
+        self._entry_bar_index_by_symbol.setdefault(normalized, bar_index)
+
+    def entry_signal_plan_id(self, symbol: str) -> UUID | None:
+        return self._entry_signal_plan_by_symbol.get(symbol.upper())
+
+    def entry_bar_index(self, symbol: str) -> int | None:
+        return self._entry_bar_index_by_symbol.get(symbol.upper())
+
+    def entry_timestamp(self, symbol: str) -> datetime | None:
+        return self._entry_time_by_symbol.get(symbol.upper())
+
+    def clear_entry_lineage(self, symbol: str) -> None:
+        normalized = symbol.upper()
+        self._entry_signal_plan_by_symbol.pop(normalized, None)
+        self._entry_bar_index_by_symbol.pop(normalized, None)
 
     def position_for(self, symbol: str) -> SimulatedPosition:
         normalized_symbol = symbol.upper()
@@ -89,12 +132,24 @@ class SimulatedPositionLedger:
         entry_order_id: str,
         trailing_enabled: bool,
     ) -> SimulatedPosition:
+        # Doctrine: qty is signed — positive for long, negative for short. The
+        # weighted-avg price uses absolute share counts so SHORT opens (SELL
+        # fills) and LONG opens (BUY fills) average the same way.
         position = self.position_for(fill.symbol)
-        total_qty = position.qty + fill.qty
-        avg_price = ((position.avg_price * position.qty) + (fill.price * fill.qty)) / total_qty
+        existing_abs = abs(position.qty)
+        new_abs_qty = existing_abs + fill.qty
+        avg_price = ((position.avg_price * existing_abs) + (fill.price * fill.qty)) / new_abs_qty
+        if fill.side == SimulatedOrderSide.SELL:
+            total_qty = position.qty - fill.qty  # short: more negative
+        else:
+            total_qty = position.qty + fill.qty  # long: more positive
         trailing_distance = position.trailing_distance
         if trailing_enabled and stop is not None:
-            trailing_distance = max(fill.price - stop, 0.01)
+            if fill.side == SimulatedOrderSide.SELL:
+                # SHORT trailing: stop sits ABOVE entry, distance = stop - entry.
+                trailing_distance = max(stop - fill.price, 0.01)
+            else:
+                trailing_distance = max(fill.price - stop, 0.01)
         updated = position.model_copy(
             update={
                 "qty": total_qty,
@@ -110,18 +165,28 @@ class SimulatedPositionLedger:
         return updated
 
     def apply_close_fill(self, fill: SimulatedFill) -> tuple[SimulatedPosition, float, float, str, datetime]:
+        # Doctrine: BUY-to-cover closes a SHORT (qty<0); SELL-to-close closes a
+        # LONG (qty>0). Realized PnL flips sign with side: long earns when
+        # exit > entry; short earns when entry > exit.
         position = self.position_for(fill.symbol)
-        if position.qty <= 0:
+        if position.qty == 0:
             raise SimulationError(f"cannot close empty position for {fill.symbol}")
-        close_qty = min(fill.qty, position.qty)
-        realized = (fill.price - position.avg_price) * close_qty
-        remaining_qty = position.qty - close_qty
+        existing_abs = abs(position.qty)
+        close_qty = min(fill.qty, existing_abs)
+        if position.qty > 0:
+            realized = (fill.price - position.avg_price) * close_qty
+            remaining_qty = position.qty - close_qty
+        else:
+            realized = (position.avg_price - fill.price) * close_qty
+            remaining_qty = position.qty + close_qty
         entry_order_id = self._entry_order_by_symbol.get(fill.symbol, "")
         opened_at = self._entry_time_by_symbol.get(fill.symbol, fill.timestamp)
         if remaining_qty == 0:
             updated = SimulatedPosition(symbol=fill.symbol, realized_pnl=position.realized_pnl + realized)
             self._entry_order_by_symbol.pop(fill.symbol, None)
             self._entry_time_by_symbol.pop(fill.symbol, None)
+            self._entry_signal_plan_by_symbol.pop(fill.symbol, None)
+            self._entry_bar_index_by_symbol.pop(fill.symbol, None)
         else:
             updated = position.model_copy(update={"qty": remaining_qty, "realized_pnl": position.realized_pnl + realized})
         self._positions[fill.symbol] = updated
@@ -134,7 +199,7 @@ class SimulatedPositionLedger:
         return updated
 
     def open_positions(self) -> tuple[SimulatedPosition, ...]:
-        return tuple(position for position in self._positions.values() if position.qty > 0)
+        return tuple(position for position in self._positions.values() if position.qty != 0)
 
     def all_positions(self) -> tuple[SimulatedPosition, ...]:
         return tuple(self._positions.values())
@@ -157,12 +222,16 @@ class SimulatedTradeLedger:
         closed_at: datetime,
         realized_pnl: float,
         exit_reason: SimulatedOrderIntent,
+        side: str = "long",
+        risk_decision_id: UUID | None = None,
+        signal_plan_id: UUID | None = None,
+        risk_plan_version_id: UUID | None = None,
     ) -> None:
         self._trades.append(
             SimulatedTrade(
                 id=f"SIM-TRD-{len(self._trades) + 1:06d}",
                 symbol=symbol,
-                side="long",
+                side=side,
                 qty=qty,
                 entry_price=entry_price,
                 exit_price=exit_price,
@@ -172,6 +241,9 @@ class SimulatedTradeLedger:
                 closed_at=closed_at,
                 realized_pnl=realized_pnl,
                 exit_reason=exit_reason,
+                risk_decision_id=risk_decision_id,
+                signal_plan_id=signal_plan_id,
+                risk_plan_version_id=risk_plan_version_id,
             )
         )
 
@@ -200,6 +272,9 @@ class SimulatedOrderManager:
         stop_price: float | None = None,
         parent_order_id: str | None = None,
         signal_name: str | None = None,
+        risk_decision_id: UUID | None = None,
+        signal_plan_id: UUID | None = None,
+        risk_plan_version_id: UUID | None = None,
     ) -> SimulatedOrder:
         order = SimulatedOrder(
             id=f"SIM-ORD-{len(self._orders) + 1:06d}",
@@ -215,6 +290,9 @@ class SimulatedOrderManager:
             created_at=timestamp,
             updated_at=timestamp,
             signal_name=signal_name,
+            risk_decision_id=risk_decision_id,
+            signal_plan_id=signal_plan_id,
+            risk_plan_version_id=risk_plan_version_id,
         )
         self._orders.append(order)
         return order
@@ -234,6 +312,9 @@ class SimulatedOrderManager:
             qty=qty,
             price=price,
             timestamp=timestamp,
+            risk_decision_id=updated.risk_decision_id,
+            signal_plan_id=updated.signal_plan_id,
+            risk_plan_version_id=updated.risk_plan_version_id,
         )
         self._fills.append(fill)
         return updated, fill
@@ -269,6 +350,12 @@ class SimulatedOrderManager:
     def snapshot_fills(self) -> tuple[SimulatedFill, ...]:
         return tuple(self._fills)
 
+    def get_order(self, order_id: str) -> SimulatedOrder:
+        for order in self._orders:
+            if order.id == order_id:
+                return order
+        raise SimulationError(f"unknown simulated order '{order_id}'")
+
     def _replace_order(self, order: SimulatedOrder) -> None:
         for index, existing in enumerate(self._orders):
             if existing.id == order.id:
@@ -298,6 +385,93 @@ class SimulatedBroker:
         self._process_protective_orders(bar)
         self._process_open_orders(bar)
 
+    def submit_close_order(
+        self,
+        *,
+        symbol: str,
+        qty: float,
+        timestamp: datetime,
+        price: float,
+        signal_name: str,
+        risk_decision_id: UUID | None = None,
+        signal_plan_id: UUID | None = None,
+        risk_plan_version_id: UUID | None = None,
+    ) -> None:
+        """Signal-driven exit fill.
+
+        Cancels any active protective stop/target for the symbol (the position
+        is being closed by an explicit logical_exit decision), creates a
+        market order in the direction that closes the position (SELL for
+        LONG positions, BUY-to-cover for SHORT positions), fills it at
+        ``price``, and records the trade with full lineage
+        (``risk_decision_id`` + ``signal_plan_id`` + ``risk_plan_version_id``).
+        """
+        position = self._positions.position_for(symbol)
+        if position.qty == 0:
+            return
+        existing_abs = abs(position.qty)
+        close_qty = min(qty, existing_abs)
+        if close_qty <= 0:
+            return
+        close_side = SimulatedOrderSide.SELL if position.qty > 0 else SimulatedOrderSide.BUY
+        position_side = "long" if position.qty > 0 else "short"
+        self._orders.cancel_active_protective_orders(symbol, timestamp=timestamp)
+        order = self._orders.create_order(
+            symbol=symbol,
+            intent=SimulatedOrderIntent.CLOSE,
+            side=close_side,
+            order_type=SimulatedOrderType.MARKET,
+            qty=close_qty,
+            timestamp=timestamp,
+            signal_name=signal_name,
+            risk_decision_id=risk_decision_id,
+            signal_plan_id=signal_plan_id,
+            risk_plan_version_id=risk_plan_version_id,
+        )
+        self._events.append(
+            timestamp=timestamp,
+            event_type=SimulatedEventType.ORDER_CREATED,
+            symbol=symbol,
+            message="signal-driven logical_exit close order created",
+            details={
+                "order_id": order.id,
+                "qty": close_qty,
+                "risk_decision_id": str(risk_decision_id) if risk_decision_id else None,
+                "signal_plan_id": str(signal_plan_id) if signal_plan_id else None,
+            },
+        )
+        updated, fill = self._orders.fill_order(order, price=price, timestamp=timestamp)
+        position_after, realized, entry_price, entry_order_id, opened_at = self._positions.apply_close_fill(fill)
+        self._trades.record(
+            symbol=symbol.upper(),
+            qty=fill.qty,
+            entry_price=entry_price,
+            exit_price=price,
+            entry_order_id=entry_order_id,
+            exit_order_id=updated.id,
+            opened_at=opened_at,
+            closed_at=timestamp,
+            realized_pnl=realized,
+            exit_reason=SimulatedOrderIntent.CLOSE,
+            side=position_side,
+            risk_decision_id=risk_decision_id,
+            signal_plan_id=signal_plan_id,
+            risk_plan_version_id=risk_plan_version_id,
+        )
+        self._log_fill(updated, fill)
+        self._events.append(
+            timestamp=timestamp,
+            event_type=SimulatedEventType.POSITION_CLOSED if position_after.qty == 0 else SimulatedEventType.POSITION_UPDATED,
+            symbol=symbol,
+            message="signal-driven logical_exit fill recorded",
+            details={
+                "qty": fill.qty,
+                "realized_pnl": realized,
+                "remaining_qty": position_after.qty,
+                "risk_decision_id": str(risk_decision_id) if risk_decision_id else None,
+            },
+        )
+
     def submit_open_order(
         self,
         *,
@@ -308,15 +482,22 @@ class SimulatedBroker:
         signal_name: str,
         stop: float | None,
         target: float | None,
+        side: SimulatedOrderSide = SimulatedOrderSide.BUY,
+        risk_decision_id: UUID | None = None,
+        signal_plan_id: UUID | None = None,
+        risk_plan_version_id: UUID | None = None,
     ) -> None:
         order = self._orders.create_order(
             symbol=symbol,
             intent=SimulatedOrderIntent.OPEN,
-            side=SimulatedOrderSide.BUY,
+            side=side,
             order_type=SimulatedOrderType.MARKET,
             qty=qty,
             timestamp=timestamp,
             signal_name=signal_name,
+            risk_decision_id=risk_decision_id,
+            signal_plan_id=signal_plan_id,
+            risk_plan_version_id=risk_plan_version_id,
         )
         self._events.append(
             timestamp=timestamp,
@@ -366,17 +547,32 @@ class SimulatedBroker:
             self._refresh_protective_orders(symbol=bar.symbol, timestamp=bar.timestamp, parent_order_id=updated.id)
 
     def _process_protective_orders(self, bar: NormalizedBar) -> None:
+        # Doctrine: protective triggers are side-aware. A LONG protective stop
+        # is a SELL fill triggered when bar.low <= stop_price; a LONG target
+        # is a SELL when bar.high >= limit. A SHORT protective stop is a
+        # BUY-to-cover triggered when bar.high >= stop_price; a SHORT target
+        # is a BUY when bar.low <= limit.
+        position_side_at_trigger = self._positions.position_for(bar.symbol)
+        is_short = position_side_at_trigger.qty < 0
         for order in self._orders.active_protective_orders(bar.symbol):
             trigger_price: float | None = None
             event_type: SimulatedEventType | None = None
             if order.intent in {SimulatedOrderIntent.STOP_LOSS, SimulatedOrderIntent.TRAILING_STOP}:
-                if order.stop_price is not None and bar.low <= order.stop_price:
-                    trigger_price = order.stop_price
-                    event_type = SimulatedEventType.STOP_TRIGGERED
+                if order.stop_price is not None:
+                    triggered = (
+                        bar.high >= order.stop_price if is_short else bar.low <= order.stop_price
+                    )
+                    if triggered:
+                        trigger_price = order.stop_price
+                        event_type = SimulatedEventType.STOP_TRIGGERED
             elif order.intent == SimulatedOrderIntent.TAKE_PROFIT:
-                if order.limit_price is not None and bar.high >= order.limit_price:
-                    trigger_price = order.limit_price
-                    event_type = SimulatedEventType.TARGET_TRIGGERED
+                if order.limit_price is not None:
+                    triggered = (
+                        bar.low <= order.limit_price if is_short else bar.high >= order.limit_price
+                    )
+                    if triggered:
+                        trigger_price = order.limit_price
+                        event_type = SimulatedEventType.TARGET_TRIGGERED
             if trigger_price is None or event_type is None:
                 continue
 
@@ -393,6 +589,10 @@ class SimulatedBroker:
                 closed_at=bar.timestamp,
                 realized_pnl=realized,
                 exit_reason=order.intent,
+                side="short" if is_short else "long",
+                risk_decision_id=updated.risk_decision_id,
+                signal_plan_id=updated.signal_plan_id,
+                risk_plan_version_id=updated.risk_plan_version_id,
             )
             self._log_fill(updated, fill)
             self._events.append(
@@ -414,56 +614,78 @@ class SimulatedBroker:
             break
 
     def _refresh_protective_orders(self, *, symbol: str, timestamp: datetime, parent_order_id: str) -> None:
+        # Doctrine: protective close direction mirrors the open direction —
+        # SELL closes a LONG, BUY-to-cover closes a SHORT.
         position = self._positions.position_for(symbol)
-        if position.qty <= 0:
+        if position.qty == 0:
             return
+        protective_side = SimulatedOrderSide.SELL if position.qty > 0 else SimulatedOrderSide.BUY
+        protective_qty = abs(position.qty)
+        parent = self._safe_get_order(parent_order_id)
+        risk_decision_id = parent.risk_decision_id if parent is not None else None
+        signal_plan_id = parent.signal_plan_id if parent is not None else None
+        risk_plan_version_id = parent.risk_plan_version_id if parent is not None else None
         self._orders.cancel_active_protective_orders(symbol, timestamp=timestamp)
         if position.open_stop is not None:
             intent = SimulatedOrderIntent.TRAILING_STOP if self._trailing_stop_enabled else SimulatedOrderIntent.STOP_LOSS
             order = self._orders.create_order(
                 symbol=symbol,
                 intent=intent,
-                side=SimulatedOrderSide.SELL,
+                side=protective_side,
                 order_type=SimulatedOrderType.STOP,
-                qty=position.qty,
+                qty=protective_qty,
                 timestamp=timestamp,
                 stop_price=position.open_stop,
                 parent_order_id=parent_order_id,
+                risk_decision_id=risk_decision_id,
+                signal_plan_id=signal_plan_id,
+                risk_plan_version_id=risk_plan_version_id,
             )
             self._events.append(
                 timestamp=timestamp,
                 event_type=SimulatedEventType.ORDER_CREATED,
                 symbol=symbol,
                 message="simulated protective stop created",
-                details={"order_id": order.id, "stop_price": position.open_stop, "qty": position.qty},
+                details={"order_id": order.id, "stop_price": position.open_stop, "qty": protective_qty},
             )
         if position.open_target is not None:
             order = self._orders.create_order(
                 symbol=symbol,
                 intent=SimulatedOrderIntent.TAKE_PROFIT,
-                side=SimulatedOrderSide.SELL,
+                side=protective_side,
                 order_type=SimulatedOrderType.LIMIT,
-                qty=position.qty,
+                qty=protective_qty,
                 timestamp=timestamp,
                 limit_price=position.open_target,
                 parent_order_id=parent_order_id,
+                risk_decision_id=risk_decision_id,
+                signal_plan_id=signal_plan_id,
+                risk_plan_version_id=risk_plan_version_id,
             )
             self._events.append(
                 timestamp=timestamp,
                 event_type=SimulatedEventType.ORDER_CREATED,
                 symbol=symbol,
                 message="simulated protective target created",
-                details={"order_id": order.id, "limit_price": position.open_target, "qty": position.qty},
+                details={"order_id": order.id, "limit_price": position.open_target, "qty": protective_qty},
             )
 
     def _update_trailing_stop(self, bar: NormalizedBar) -> None:
+        # Doctrine: a LONG trailing stop ratchets UP using bar.high; a SHORT
+        # trailing stop ratchets DOWN using bar.low. Distance is always
+        # positive — direction is determined by position sign.
         if not self._trailing_stop_enabled:
             return
         position = self._positions.position_for(bar.symbol)
-        if position.qty <= 0 or position.trailing_distance is None:
+        if position.qty == 0 or position.trailing_distance is None:
             return
-        new_stop = bar.high - position.trailing_distance
-        if position.open_stop is None or new_stop > position.open_stop:
+        if position.qty > 0:
+            new_stop = bar.high - position.trailing_distance
+            ratchet = position.open_stop is None or new_stop > position.open_stop
+        else:
+            new_stop = bar.low + position.trailing_distance
+            ratchet = position.open_stop is None or new_stop < position.open_stop
+        if ratchet:
             updated = self._positions.update_trailing_stop(bar.symbol, new_stop)
             self._refresh_protective_orders(symbol=bar.symbol, timestamp=bar.timestamp, parent_order_id="")
             self._events.append(
@@ -473,6 +695,14 @@ class SimulatedBroker:
                 message="simulated trailing stop updated",
                 details={"stop_price": updated.open_stop},
             )
+
+    def _safe_get_order(self, order_id: str | None) -> SimulatedOrder | None:
+        if not order_id:
+            return None
+        try:
+            return self._orders.get_order(order_id)
+        except SimulationError:
+            return None
 
     def _fill_price(self, order: SimulatedOrder, bar: NormalizedBar | None) -> float:
         if order.order_type == SimulatedOrderType.MARKET:
@@ -501,36 +731,64 @@ class SimulatedBroker:
 
 
 class HistoricalReplayEngine:
+    """Unified research spine: FeatureEngine → SignalEngine → SignalPlanBuilder → RiskResolver → SimulatedBroker.
+
+    RiskPlan belongs to the Account or selected research run. SignalPlan describes
+    the proposed lifecycle action. RiskResolver combines the SignalPlan, RiskPlan,
+    and current account or simulated account state to produce a RiskDecisionCard.
+    No simulated or real order may be created without that RiskDecisionCard.
+    """
+
     def __init__(
         self,
         *,
-        feature_engine: BatchFeatureEngine | None = None,
+        feature_engine: IncrementalFeatureEngine | None = None,
         signal_engine: SignalEngine | None = None,
+        signal_plan_builder: SignalPlanBuilder | None = None,
+        risk_resolver: RiskResolver | None = None,
+        risk_decision_sink: RiskDecisionCardSink | None = None,
+        mode: RiskDecisionMode | str = RiskDecisionMode.SIM_LAB,
         partial_fill_ratio: float = 1.0,
+        evidence_recorder: object | None = None,
     ) -> None:
-        self._feature_engine = feature_engine or BatchFeatureEngine()
+        self._feature_engine = feature_engine or IncrementalFeatureEngine()
         self._signal_engine = signal_engine or SignalEngine()
+        self._signal_plan_builder = signal_plan_builder or SignalPlanBuilder()
+        self._risk_resolver = risk_resolver or RiskResolver()
+        self._risk_decision_sink = risk_decision_sink
+        self._mode = RiskDecisionMode(mode) if isinstance(mode, str) else mode
         self._partial_fill_ratio = partial_fill_ratio
+        self._evidence_recorder = evidence_recorder
+        self._risk_decision_cards: list[RiskDecisionCard] = []
 
     def run(
         self,
         *,
-        components: ResolvedProgramComponents,
+        components: ResolvedDeploymentComponents,
         bars: Sequence[NormalizedBar],
         start: datetime,
         end: datetime,
         initial_cash: float = 100_000,
         session_id: UUID | None = None,
+        run_id: UUID | None = None,
     ) -> SimulationReplayResult:
+        self._risk_decision_cards = []
         session = SimulationSession(
             id=session_id or uuid4(),
             mode=TradingMode.SIM_LAB_HISTORICAL,
-            program_version_id=components.program.id,
+            strategy_version_id=components.strategy.id,
             symbol_count=len(components.universe.symbols),
             start=start,
             end=end,
             initial_cash=initial_cash,
             partial_fill_model_id="deterministic_ratio" if self._partial_fill_ratio != 1 else "none",
+        )
+        self._current_run_id = run_id or session.id
+        self._current_session_id = session.id
+        self._intent_sequence = 0
+        self._deterministic_deployment_id = uuid5(NAMESPACE_URL, f"sim-deployment:{self._current_run_id}")
+        self._deterministic_simulated_account_id = uuid5(
+            NAMESPACE_URL, f"sim-account:{self._current_run_id}"
         )
         plan = build_feature_plan(components, consumer="sim_replay")
         frame_set = self._feature_engine.compute(plan, bars)
@@ -560,6 +818,23 @@ class HistoricalReplayEngine:
         realized_pnl = sum(trade.realized_pnl for trade in trade_ledger.snapshot())
         gross_exposure = equity_curve[-1].gross_exposure if equity_curve else 0
         max_drawdown = max((point.drawdown for point in equity_curve), default=0)
+        evidence = SimulationRunEvidence(
+            run_id=session.id,
+            strategy_id=components.strategy.strategy_id,
+            strategy_version_id=components.strategy.id,
+            scenario_name="historical_replay",
+            start=start,
+            end=end,
+            signal_plan_count=sum(1 for event in event_log.snapshot() if event.event_type == SimulatedEventType.SIGNAL_CANDIDATE),
+            simulated_order_count=len(order_manager.snapshot_orders()),
+            simulated_fill_count=len(order_manager.snapshot_fills()),
+            metrics={
+                "realized_pnl": realized_pnl,
+                "max_drawdown": max_drawdown,
+                "gross_exposure": gross_exposure,
+            },
+        )
+        self._save_evidence(evidence)
         return SimulationReplayResult(
             session=session.model_copy(update={"feature_plan_id": plan.id, "current_timestamp": end}),
             orders=order_manager.snapshot_orders(),
@@ -571,12 +846,17 @@ class HistoricalReplayEngine:
             realized_pnl=realized_pnl,
             max_drawdown=max_drawdown,
             gross_exposure=gross_exposure,
+            evidence=evidence,
         )
+
+    def _save_evidence(self, evidence: SimulationRunEvidence) -> None:
+        if self._evidence_recorder is not None and hasattr(self._evidence_recorder, "save_research_evidence"):
+            self._evidence_recorder.save_research_evidence(evidence)
 
     def _replay(
         self,
         *,
-        components: ResolvedProgramComponents,
+        components: ResolvedDeploymentComponents,
         plan: FeaturePlan,
         frame_set: FeatureFrameSet,
         bars: Sequence[NormalizedBar],
@@ -593,8 +873,11 @@ class HistoricalReplayEngine:
         }
         equity_curve: list[EquityPoint] = []
         peak_equity = initial_cash
+        bar_index_by_symbol: dict[str, int] = {}
         for bar in sorted(bars, key=lambda item: item.timestamp):
             normalized_bar = bar.model_copy(update={"symbol": bar.symbol.upper()})
+            symbol = normalized_bar.symbol
+            bar_index_by_symbol[symbol] = bar_index_by_symbol.get(symbol, -1) + 1
             broker.process_bar(normalized_bar)
             if normalized_bar.timeframe == components.strategy_controls.timeframe:
                 aligned_snapshot = self._aligned_snapshot(
@@ -609,8 +892,10 @@ class HistoricalReplayEngine:
                     position_ledger=position_ledger,
                     event_log=event_log,
                     order_manager=order_manager,
+                    trade_ledger=trade_ledger,
                     bar=normalized_bar,
                     initial_cash=initial_cash,
+                    bar_index_by_symbol=bar_index_by_symbol,
                 )
             realized = sum(trade.realized_pnl for trade in trade_ledger.snapshot())
             equity = initial_cash + realized + self._unrealized_pnl(position_ledger.open_positions(), {normalized_bar.symbol: normalized_bar.close})
@@ -640,14 +925,16 @@ class HistoricalReplayEngine:
     def _evaluate_signals(
         self,
         *,
-        components: ResolvedProgramComponents,
+        components: ResolvedDeploymentComponents,
         snapshot: FeatureSnapshot,
         broker: SimulatedBroker,
         position_ledger: SimulatedPositionLedger,
         event_log: SimulationEventLog,
         order_manager: SimulatedOrderManager,
+        trade_ledger: SimulatedTradeLedger,
         bar: NormalizedBar,
         initial_cash: float,
+        bar_index_by_symbol: dict[str, int],
     ) -> None:
         if not self._controls_allow(components, bar.timestamp):
             event_log.append(
@@ -657,8 +944,25 @@ class HistoricalReplayEngine:
                 message="strategy controls blocked signal evaluation",
             )
             return
+
+        # Build per-symbol PositionContext for exit-rule evaluation.
+        position_contexts: dict[str, PositionContext] = {}
+        for symbol_key, current_index in bar_index_by_symbol.items():
+            position = position_ledger.position_for(symbol_key)
+            position_contexts[symbol_key] = PositionContext(
+                has_position=position.qty > 0,
+                entry_timestamp=position_ledger.entry_timestamp(symbol_key),
+                entry_bar_index=position_ledger.entry_bar_index(symbol_key),
+                current_bar_index=current_index,
+                bar_timestamp=bar.timestamp,
+            )
+
         try:
-            evaluation = self._signal_engine.evaluate(components.strategy, snapshot)
+            evaluation = self._signal_engine.evaluate(
+                components.strategy,
+                snapshot,
+                position_contexts=position_contexts,
+            )
         except SignalEvaluationError as exc:
             event_log.append(
                 timestamp=bar.timestamp,
@@ -668,6 +972,8 @@ class HistoricalReplayEngine:
             )
             return
 
+        rules_by_name = {rule.name: rule for rule in [*components.strategy.entry_rules, *components.strategy.exit_rules]}
+
         for intent in evaluation.intents:
             event_log.append(
                 timestamp=intent.timestamp,
@@ -676,14 +982,49 @@ class HistoricalReplayEngine:
                 message="candidate trade intent emitted",
                 details={"signal_name": intent.signal_name, "side": intent.side.value, "intent_type": intent.intent_type.value},
             )
-            if intent.intent_type != IntentType.ENTRY or intent.side != CandidateSide.LONG:
+
+            if intent.intent_type == IntentType.EXIT:
+                self._handle_exit_intent(
+                    intent=intent,
+                    components=components,
+                    bar=bar,
+                    broker=broker,
+                    position_ledger=position_ledger,
+                    event_log=event_log,
+                    rules_by_name=rules_by_name,
+                    bar_index_by_symbol=bar_index_by_symbol,
+                )
                 continue
-            if position_ledger.position_for(intent.symbol).qty > 0:
+
+            if intent.side not in {CandidateSide.LONG, CandidateSide.SHORT}:
+                continue
+            existing_position = position_ledger.position_for(intent.symbol)
+            same_side = (
+                (intent.side == CandidateSide.LONG and existing_position.qty > 0)
+                or (intent.side == CandidateSide.SHORT and existing_position.qty < 0)
+            )
+            opposite_side = (
+                (intent.side == CandidateSide.LONG and existing_position.qty < 0)
+                or (intent.side == CandidateSide.SHORT and existing_position.qty > 0)
+            )
+            if same_side:
                 event_log.append(
                     timestamp=intent.timestamp,
                     event_type=SimulatedEventType.SIGNAL_BLOCKED,
                     symbol=intent.symbol,
                     message="open position already exists",
+                )
+                continue
+            if opposite_side:
+                # Cross-side flips (long↔short while a position is open)
+                # require a flatten leg the spine doesn't yet emit; reject
+                # with a stable reason code so the operator sees the gap.
+                event_log.append(
+                    timestamp=intent.timestamp,
+                    event_type=SimulatedEventType.SIGNAL_BLOCKED,
+                    symbol=intent.symbol,
+                    message="opposite_side_position_open",
+                    details={"existing_qty": existing_position.qty, "candidate_side": intent.side.value},
                 )
                 continue
             if order_manager.active_open_orders():
@@ -694,16 +1035,242 @@ class HistoricalReplayEngine:
                     message="pending open order already exists",
                 )
                 continue
-            qty = self._size_order(components=components, price=bar.close, initial_cash=initial_cash)
+
+            # Spine: CandidateTradeIntent -> SignalPlan -> RiskResolver -> RiskDecisionCard
+            self._intent_sequence += 1
+            seq = self._intent_sequence
+            deterministic_signal_plan_id = uuid5(
+                NAMESPACE_URL, f"signal-plan:{self._current_run_id}:{seq}"
+            )
+            deterministic_risk_decision_id = uuid5(
+                NAMESPACE_URL, f"risk-decision:{self._current_run_id}:{seq}"
+            )
+            raw_signal_plan = self._signal_plan_builder.build_from_candidate(
+                candidate=intent,
+                deployment_id=self._deterministic_deployment_id,
+                strategy_id=components.strategy.strategy_id,
+                strategy_version_id=components.strategy.id,
+            )
+            signal_plan = raw_signal_plan.model_copy(update={"signal_plan_id": deterministic_signal_plan_id})
+            realized = sum(t.realized_pnl for t in trade_ledger.snapshot())
+            existing = position_ledger.position_for(intent.symbol)
+            existing_abs_qty = abs(existing.qty)
+            account_state = AccountStateSnapshot(
+                account_equity=initial_cash + realized,
+                account_cash=initial_cash + realized,
+                buying_power=initial_cash + realized,
+                existing_position_quantity=existing_abs_qty,
+                existing_position_notional=existing_abs_qty * existing.avg_price,
+                existing_open_orders_count=len(order_manager.active_open_orders()),
+                existing_open_order_notional=0,
+                simulated_account_id=self._deterministic_simulated_account_id,
+            )
+            raw_card = self._risk_resolver.decide(
+                mode=self._mode,
+                run_id=self._current_run_id,
+                signal_plan=signal_plan,
+                risk_plan_version=components.risk_profile,
+                account_state=account_state,
+                current_price=bar.close,
+                stop_candidate=intent.stop_candidate,
+                session_id=self._current_session_id,
+                deployment_id=signal_plan.deployment_id,
+                sink=None,
+            )
+            card = raw_card.model_copy(update={"risk_decision_id": deterministic_risk_decision_id})
+            if self._risk_decision_sink is not None:
+                self._risk_decision_sink.save_risk_decision_card(card)
+            self._risk_decision_cards.append(card)
+
+            if card.decision != RiskDecisionStatus.APPROVED and card.decision not in {
+                RiskDecisionStatus.REDUCED,
+                RiskDecisionStatus.CAPPED,
+            }:
+                event_log.append(
+                    timestamp=intent.timestamp,
+                    event_type=SimulatedEventType.SIGNAL_BLOCKED,
+                    symbol=intent.symbol,
+                    message=f"risk decision: {card.decision.value}",
+                    details={
+                        "risk_decision_id": str(card.risk_decision_id),
+                        "signal_plan_id": str(signal_plan.signal_plan_id),
+                        "violations": list(card.violations),
+                        "reason_codes": list(card.reason_codes),
+                    },
+                )
+                continue
+
             broker.submit_open_order(
                 symbol=intent.symbol,
-                qty=qty,
+                qty=card.final_quantity,
                 timestamp=bar.timestamp,
                 price=bar.close,
                 signal_name=intent.signal_name,
                 stop=intent.stop_candidate,
                 target=intent.target_candidate,
+                side=(
+                    SimulatedOrderSide.SELL
+                    if intent.side == CandidateSide.SHORT
+                    else SimulatedOrderSide.BUY
+                ),
+                risk_decision_id=card.risk_decision_id,
+                signal_plan_id=signal_plan.signal_plan_id,
+                risk_plan_version_id=components.risk_profile.id,
             )
+            position_ledger.record_entry_lineage(
+                symbol=intent.symbol,
+                signal_plan_id=signal_plan.signal_plan_id,
+                bar_index=bar_index_by_symbol.get(intent.symbol.upper(), 0),
+            )
+
+    def _handle_exit_intent(
+        self,
+        *,
+        intent: CandidateTradeIntent,
+        components: ResolvedDeploymentComponents,
+        bar: NormalizedBar,
+        broker: SimulatedBroker,
+        position_ledger: SimulatedPositionLedger,
+        event_log: SimulationEventLog,
+        rules_by_name: dict[str, SignalRule],
+        bar_index_by_symbol: dict[str, int],
+    ) -> None:
+        """Spine: EXIT candidate -> SignalPlan(logical_exit) -> RiskResolver -> broker.submit_close_order.
+
+        Doctrine: ``logical_exit`` is the only exit intent. Time / bar /
+        session / feature / hybrid exits all flow through this single path.
+        """
+        position = position_ledger.position_for(intent.symbol)
+        if position.qty == 0:
+            event_log.append(
+                timestamp=intent.timestamp,
+                event_type=SimulatedEventType.SIGNAL_BLOCKED,
+                symbol=intent.symbol,
+                message="exit candidate ignored: no open position",
+            )
+            return
+
+        source_rule = rules_by_name.get(intent.signal_name)
+        if source_rule is None:
+            event_log.append(
+                timestamp=intent.timestamp,
+                event_type=SimulatedEventType.SIGNAL_BLOCKED,
+                symbol=intent.symbol,
+                message=f"exit candidate references unknown rule '{intent.signal_name}'",
+            )
+            return
+
+        # Build the LogicalExitRule payload for the SignalPlan. Pure
+        # feature-condition exits wrap the rule's condition tree as
+        # FEATURE_CONDITION; structured exits use the rule's own
+        # logical_exit_rule (time / bar / session / hybrid).
+        if source_rule.logical_exit_rule is not None:
+            exit_rule_payload = source_rule.logical_exit_rule
+        elif source_rule.condition is not None:
+            exit_rule_payload = LogicalExitRule(
+                kind=LogicalExitRuleKind.FEATURE_CONDITION,
+                feature_condition=source_rule.condition,
+                label=f"{source_rule.name}_feature_condition",
+            )
+        else:
+            event_log.append(
+                timestamp=intent.timestamp,
+                event_type=SimulatedEventType.SIGNAL_BLOCKED,
+                symbol=intent.symbol,
+                message=f"exit rule '{source_rule.name}' has no condition or logical_exit_rule",
+            )
+            return
+
+        self._intent_sequence += 1
+        seq = self._intent_sequence
+        deterministic_signal_plan_id = uuid5(
+            NAMESPACE_URL, f"signal-plan:{self._current_run_id}:{seq}"
+        )
+        deterministic_risk_decision_id = uuid5(
+            NAMESPACE_URL, f"risk-decision:{self._current_run_id}:{seq}"
+        )
+
+        opening_signal_plan_id = position_ledger.entry_signal_plan_id(intent.symbol)
+        # The SignalPlan validator requires non-OPEN plans to reference an
+        # opening_signal_plan_id or a related_position_lineage_id; for sim
+        # bar-by-bar replay we always have the opener tracked on the ledger.
+        if opening_signal_plan_id is None:
+            opening_signal_plan_id = uuid5(
+                NAMESPACE_URL, f"sim-position-lineage:{self._current_run_id}:{intent.symbol.upper()}"
+            )
+
+        raw_signal_plan = self._signal_plan_builder.build_from_candidate(
+            candidate=intent,
+            deployment_id=self._deterministic_deployment_id,
+            strategy_id=components.strategy.strategy_id,
+            strategy_version_id=components.strategy.id,
+            opening_signal_plan_id=opening_signal_plan_id,
+            logical_exit_rule=exit_rule_payload,
+            logical_exit_action=SignalPlanTargetAction.CLOSE,
+            logical_exit_quantity_pct=None,
+            logical_exit_scope=SignalPlanLogicalExitScope.REMAINING_QUANTITY,
+        )
+        signal_plan = raw_signal_plan.model_copy(update={"signal_plan_id": deterministic_signal_plan_id})
+
+        existing_abs_qty = abs(position.qty)
+        existing_notional = existing_abs_qty * position.avg_price
+        account_state = AccountStateSnapshot(
+            account_equity=existing_notional,
+            account_cash=existing_notional,
+            buying_power=existing_notional,
+            existing_position_quantity=existing_abs_qty,
+            existing_position_notional=existing_notional,
+            existing_open_orders_count=0,
+            existing_open_order_notional=0,
+            simulated_account_id=self._deterministic_simulated_account_id,
+        )
+
+        raw_card = self._risk_resolver.decide(
+            mode=self._mode,
+            run_id=self._current_run_id,
+            signal_plan=signal_plan,
+            risk_plan_version=components.risk_profile,
+            account_state=account_state,
+            current_price=bar.close,
+            stop_candidate=None,
+            session_id=self._current_session_id,
+            deployment_id=signal_plan.deployment_id,
+            sink=None,
+            exit_quantity_pct=None,
+        )
+        card = raw_card.model_copy(update={"risk_decision_id": deterministic_risk_decision_id})
+        if self._risk_decision_sink is not None:
+            self._risk_decision_sink.save_risk_decision_card(card)
+        self._risk_decision_cards.append(card)
+
+        if card.decision == RiskDecisionStatus.SKIPPED or card.final_quantity <= 0:
+            event_log.append(
+                timestamp=intent.timestamp,
+                event_type=SimulatedEventType.SIGNAL_BLOCKED,
+                symbol=intent.symbol,
+                message=f"exit risk decision: {card.decision.value}",
+                details={
+                    "risk_decision_id": str(card.risk_decision_id),
+                    "signal_plan_id": str(signal_plan.signal_plan_id),
+                    "violations": list(card.violations),
+                    "reason_codes": list(card.reason_codes),
+                },
+            )
+            return
+
+        broker.submit_close_order(
+            symbol=intent.symbol,
+            qty=card.final_quantity,
+            timestamp=bar.timestamp,
+            price=bar.close,
+            signal_name=intent.signal_name,
+            risk_decision_id=card.risk_decision_id,
+            signal_plan_id=signal_plan.signal_plan_id,
+            risk_plan_version_id=components.risk_profile.id,
+        )
+        # If the position fully closed, the ledger has already cleared lineage
+        # in apply_close_fill; otherwise (partial reduce) lineage stays so
+        # subsequent exit rules continue to reference the same opener.
 
     def _aligned_snapshot(
         self,
@@ -734,32 +1301,27 @@ class HistoricalReplayEngine:
                 break
         return latest
 
-    def _controls_allow(self, components: ResolvedProgramComponents, timestamp: datetime) -> bool:
+    def _controls_allow(self, components: ResolvedDeploymentComponents, timestamp: datetime) -> bool:
         windows = components.strategy_controls.session_windows
         if not windows:
             return True
         current_time = timestamp.timetz().replace(tzinfo=None)
         return any(window.start <= current_time <= window.end for window in windows)
 
-    def _size_order(self, *, components: ResolvedProgramComponents, price: float, initial_cash: float) -> float:
-        risk_profile = components.risk_profile
-        if risk_profile.sizing_method == PositionSizingMethod.FIXED_SHARES:
-            if risk_profile.fixed_shares is None:
-                raise SimulationError("fixed_shares sizing requires fixed_shares")
-            return float(risk_profile.fixed_shares)
-        if risk_profile.sizing_method == PositionSizingMethod.FIXED_DOLLAR:
-            if risk_profile.fixed_notional is None:
-                raise SimulationError("fixed_dollar sizing requires fixed_notional")
-            return max(risk_profile.fixed_notional / price, 0.000001)
-        if risk_profile.sizing_method == PositionSizingMethod.RISK_PERCENT_EQUITY:
-            if risk_profile.risk_per_trade_pct is None:
-                raise SimulationError("risk_percent_equity sizing requires risk_per_trade_pct")
-            notional = initial_cash * (risk_profile.risk_per_trade_pct / 100)
-            return max(notional / price, 0.000001)
-        raise SimulationError(f"unsupported sizing method '{risk_profile.sizing_method}'")
+    def risk_decision_cards(self) -> tuple[RiskDecisionCard, ...]:
+        return tuple(self._risk_decision_cards)
 
     def _unrealized_pnl(self, positions: Sequence[SimulatedPosition], latest_prices: dict[str, float]) -> float:
-        return sum((latest_prices.get(position.symbol, position.avg_price) - position.avg_price) * position.qty for position in positions)
+        # Signed qty makes this side-correct without a branch: SHORT qty<0
+        # against (price - avg)>0 yields negative PnL (short losing as price
+        # rises); LONG qty>0 against (price - avg)>0 yields positive PnL.
+        return sum(
+            (latest_prices.get(position.symbol, position.avg_price) - position.avg_price) * position.qty
+            for position in positions
+        )
 
     def _gross_exposure(self, positions: Sequence[SimulatedPosition], latest_prices: dict[str, float]) -> float:
-        return sum(abs(latest_prices.get(position.symbol, position.avg_price) * position.qty) for position in positions)
+        return sum(
+            abs(latest_prices.get(position.symbol, position.avg_price)) * abs(position.qty)
+            for position in positions
+        )

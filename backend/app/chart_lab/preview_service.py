@@ -8,18 +8,20 @@ from uuid import uuid4
 from pydantic import BaseModel, ConfigDict, Field
 
 from backend.app.decision import SignalEngine, SignalEvaluationError
-from backend.app.domain import ChartLabSession, TradingMode
+from backend.app.domain import ChartLabPreviewEvidence, ChartLabSession, TradingMode
+from backend.app.domain import StrategyVersion
 from backend.app.features import (
-    BatchFeatureEngine,
     FeatureAvailability,
     FeatureFrame,
     FeatureFrameSet,
     FeaturePlan,
     FeatureSnapshot,
     FeatureValue,
+    IncrementalFeatureEngine,
     NormalizedBar,
-    ResolvedProgramComponents,
+    ResolvedDeploymentComponents,
     build_feature_plan,
+    build_strategy_only_feature_plan,
 )
 
 
@@ -62,22 +64,79 @@ class ChartLabPreviewResponse(BaseModel):
     session: ChartLabSession
     feature_plan: FeaturePlan
     bars: tuple[ChartLabBarPreview, ...]
+    evidence: ChartLabPreviewEvidence | None = None
 
 
 class ChartLabPreviewService:
     def __init__(
         self,
         *,
-        feature_engine: BatchFeatureEngine | None = None,
+        feature_engine: IncrementalFeatureEngine | None = None,
         signal_engine: SignalEngine | None = None,
+        evidence_recorder: object | None = None,
     ) -> None:
-        self._feature_engine = feature_engine or BatchFeatureEngine()
+        self._feature_engine = feature_engine or IncrementalFeatureEngine()
         self._signal_engine = signal_engine or SignalEngine()
+        self._evidence_recorder = evidence_recorder
 
     def preview_program(
         self,
         *,
-        components: ResolvedProgramComponents,
+        components: ResolvedDeploymentComponents,
+        bars: Sequence[NormalizedBar],
+        symbol: str,
+        timeframe: str,
+        start: datetime,
+        end: datetime,
+    ) -> ChartLabPreviewResponse:
+        plan = build_feature_plan(components, consumer="chart_lab")
+        return self._run_preview(
+            strategy=components.strategy,
+            plan=plan,
+            bars=bars,
+            symbol=symbol,
+            timeframe=timeframe,
+            start=start,
+            end=end,
+        )
+
+    def preview_strategy(
+        self,
+        *,
+        strategy: StrategyVersion,
+        bars: Sequence[NormalizedBar],
+        symbol: str,
+        timeframe: str,
+        start: datetime,
+        end: datetime,
+    ) -> ChartLabPreviewResponse:
+        """Preview a saved StrategyVersion with no Deployment binding.
+
+        Auto-derives the strategy's features via
+        ``build_strategy_only_feature_plan`` and replays them over ``bars``.
+        Drafts and frozen versions both work — Chart Lab is research, not
+        deployment, so freeze-gating does not apply.
+        """
+        plan = build_strategy_only_feature_plan(
+            strategy,
+            default_timeframe=timeframe,
+            consumer="chart_lab",
+        )
+        return self._run_preview(
+            strategy=strategy,
+            plan=plan,
+            bars=bars,
+            symbol=symbol,
+            timeframe=timeframe,
+            start=start,
+            end=end,
+        )
+
+    def _run_preview(
+        self,
+        *,
+        strategy: StrategyVersion,
+        plan: FeaturePlan,
         bars: Sequence[NormalizedBar],
         symbol: str,
         timeframe: str,
@@ -91,23 +150,41 @@ class ChartLabPreviewService:
             timeframe=timeframe,
             start=start,
             end=end,
-            program_version_id=components.program.id,
+            strategy_version_id=strategy.id,
         )
-        plan = build_feature_plan(components, consumer="chart_lab")
+        if not plan.symbols:
+            plan = plan.model_copy(update={"symbols": (symbol.upper(),)})
         frame_set = self._feature_engine.compute(plan, bars)
         previews = self._build_previews(
-            components=components,
+            strategy=strategy,
             plan=plan,
             frame_set=frame_set,
             symbol=symbol.upper(),
             base_timeframe=timeframe,
         )
-        return ChartLabPreviewResponse(session=session, feature_plan=plan, bars=tuple(previews))
+        evidence = ChartLabPreviewEvidence(
+            evidence_id=uuid4(),
+            strategy_id=strategy.strategy_id,
+            strategy_version_id=strategy.id,
+            symbol=symbol.upper(),
+            timeframe=timeframe,
+            start=start,
+            end=end,
+            feature_snapshot_count=sum(len(preview.feature_values) for preview in previews),
+            signal_marker_count=sum(len(preview.signal_markers) for preview in previews),
+            metadata={"session_id": str(session.id), "feature_plan_id": str(plan.id)},
+        )
+        self._save_evidence(evidence)
+        return ChartLabPreviewResponse(session=session, feature_plan=plan, bars=tuple(previews), evidence=evidence)
+
+    def _save_evidence(self, evidence: ChartLabPreviewEvidence) -> None:
+        if self._evidence_recorder is not None and hasattr(self._evidence_recorder, "save_research_evidence"):
+            self._evidence_recorder.save_research_evidence(evidence)
 
     def _build_previews(
         self,
         *,
-        components: ResolvedProgramComponents,
+        strategy: StrategyVersion,
         plan: FeaturePlan,
         frame_set: FeatureFrameSet,
         symbol: str,
@@ -130,7 +207,7 @@ class ChartLabPreviewService:
             condition_truth_tree: dict[str, Any] = {}
             non_fire_reasons: tuple[str, ...] = ()
             try:
-                signal_result = self._signal_engine.evaluate(components.strategy, aligned_snapshot)
+                signal_result = self._signal_engine.evaluate(strategy, aligned_snapshot)
                 condition_truth_tree = signal_result.diagnostics
                 signal_markers = tuple(
                     ChartLabSignalMarker(

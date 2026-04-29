@@ -103,11 +103,18 @@ class _StreamResult:
 
 
 class AlpacaMarketDataAdapter:
-    """Alpaca market data adapter.
+    """Alpaca market data adapter (streaming and bar normalization).
 
     This class only maps external market data into NormalizedBar objects. It
     does not compute features, create orders, submit orders, or touch broker
     execution boundaries.
+
+    When ``load_env`` is true (default), ``StockDataStream`` is built from
+    ``ALPACA_API_KEY`` and ``ALPACA_SECRET_KEY`` in the environment (after
+    optional ``python-dotenv``). That is separate from the encrypted broker
+    credential store used for order execution; use keys that match the
+    account you intend to stream for (paper vs live trading accounts each have
+    their own keys on Alpaca).
 
     For weekend / off-hours testing, point ``url_override`` at
     :attr:`TEST_STREAM_URL` and subscribe to :attr:`TEST_SYMBOL`
@@ -131,12 +138,16 @@ class AlpacaMarketDataAdapter:
         load_env: bool = True,
         feed: Any | None = None,
         url_override: str | None = None,
+        api_key: str | None = None,
+        secret_key: str | None = None,
     ) -> None:
         self._stream_client = stream_client
         self._bar_source = tuple(bar_source) if bar_source is not None else None
         self._load_env = load_env
         self._feed = feed
         self._url_override = url_override
+        self._api_key = api_key
+        self._secret_key = secret_key
 
     def normalize_bar(self, bar: object, *, symbol: str | None = None, timeframe: str = "1m") -> NormalizedBar:
         payload = self._response_to_dict(bar)
@@ -215,6 +226,10 @@ class AlpacaMarketDataAdapter:
         stream.subscribe_bars(_handler, *normalized_symbols)
         return stream
 
+    def open_stream(self) -> Any:
+        """Build the live stock stream envelope without subscribing symbols."""
+        return self._stream_client or self._build_stream_client()
+
     async def _collect_from_stream(
         self,
         *,
@@ -258,8 +273,8 @@ class AlpacaMarketDataAdapter:
     def _build_stream_client(self) -> Any:
         if self._load_env:
             load_dotenv()
-        api_key = os.getenv("ALPACA_API_KEY")
-        secret_key = os.getenv("ALPACA_SECRET_KEY")
+        api_key = self._api_key or os.getenv("ALPACA_API_KEY")
+        secret_key = self._secret_key or os.getenv("ALPACA_SECRET_KEY")
         if not api_key or not secret_key:
             raise AlpacaMarketDataError("ALPACA_API_KEY and ALPACA_SECRET_KEY are required")
         if StockDataStream is None:

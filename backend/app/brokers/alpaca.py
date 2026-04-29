@@ -25,11 +25,17 @@ from .models import (
 try:  # pragma: no cover - real SDK is optional in unit tests.
     from alpaca.trading.client import TradingClient
     from alpaca.trading.enums import OrderSide as AlpacaOrderSide
+    from alpaca.trading.enums import QueryOrderStatus
     from alpaca.trading.enums import TimeInForce as AlpacaTimeInForce
-    from alpaca.trading.requests import MarketOrderRequest
+    from alpaca.trading.requests import GetOrdersRequest, LimitOrderRequest, MarketOrderRequest, StopLimitOrderRequest, StopOrderRequest
 except ImportError:  # pragma: no cover
     TradingClient = None  # type: ignore[assignment]
+    QueryOrderStatus = None  # type: ignore[assignment]
+    GetOrdersRequest = None  # type: ignore[assignment]
     MarketOrderRequest = None  # type: ignore[assignment]
+    LimitOrderRequest = None  # type: ignore[assignment]
+    StopOrderRequest = None  # type: ignore[assignment]
+    StopLimitOrderRequest = None  # type: ignore[assignment]
     AlpacaOrderSide = None  # type: ignore[assignment]
     AlpacaTimeInForce = None  # type: ignore[assignment]
 
@@ -71,8 +77,8 @@ class AlpacaBrokerCapabilities(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     supports_market_orders: bool = True
-    supports_limit_orders: bool = False
-    supports_stop_orders: bool = False
+    supports_limit_orders: bool = True
+    supports_stop_orders: bool = True
     supports_brackets: bool = False
     supports_fractional: bool = False
     supports_shorting: bool = False
@@ -81,8 +87,24 @@ class AlpacaBrokerCapabilities(BaseModel):
     supports_broker_live: bool = False
 
 
+_TERMINAL_BROKER_ORDER_STATUSES = {
+    BrokerOrderStatus.FILLED,
+    BrokerOrderStatus.CANCELED,
+    BrokerOrderStatus.REJECTED,
+    BrokerOrderStatus.EXPIRED,
+}
+
+
 class AlpacaBrokerAdapter:
-    """Per-account Alpaca broker adapter (paper or live).
+    """Per-account Alpaca broker adapter (paper or live API host).
+
+    ``TradingMode.BROKER_PAPER`` uses Alpaca's paper trading REST and trade-update
+    stream hosts; ``TradingMode.BROKER_LIVE`` uses live trading hosts. The alpaca-py
+    ``TradingClient``/``TradingStream`` ``paper=`` flag follows that mode.
+
+    Product capabilities still mark ``supports_broker_live`` false until live
+    execution is fully gated; order-type and orchestration limits may be
+    stricter than the underlying SDK.
 
     Translates already-created internal orders and delegates to alpaca-py.
     Never creates internal orders. Mode + credentials are required; the
@@ -131,12 +153,6 @@ class AlpacaBrokerAdapter:
 
     def submit_order(self, order: InternalOrder) -> BrokerOrderResult:
         self._require_internal_order(order)
-        if order.order_type != OrderType.MARKET:
-            raise AlpacaBrokerError(
-                "submit_supports_market_only",
-                "Alpaca BROKER_PAPER execution currently submits market orders only",
-                context={"order_id": str(order.order_id), "order_type": order.order_type.value},
-            )
         existing = self._get_existing_order(order)
         if existing is not None:
             return existing
@@ -194,16 +210,22 @@ class AlpacaBrokerAdapter:
 
     def list_open_orders(self, account_id: UUID) -> tuple[BrokerOpenOrderSnapshot, ...]:
         try:
-            responses = self._client.get_orders()
+            responses = self._client.get_orders(filter=self._open_orders_request())
         except Exception as exc:  # noqa: BLE001
             raise self._normalize_exception(exc) from exc
         results: list[BrokerOpenOrderSnapshot] = []
         for response in responses:
             payload = self._response_to_dict(response)
-            if str(payload.get("status", "")).lower() not in {"new", "accepted", "pending_new", "partially_filled"}:
+            status = self.normalize_status(payload.get("status", ""))
+            if status in _TERMINAL_BROKER_ORDER_STATUSES:
                 continue
             results.append(self.open_order_response_to_snapshot(account_id=account_id, response=payload))
         return tuple(results)
+
+    def _open_orders_request(self) -> object | None:
+        if GetOrdersRequest is None or QueryOrderStatus is None:
+            return None
+        return GetOrdersRequest(status=QueryOrderStatus.OPEN, limit=500, nested=False)
 
     def get_account_snapshot(self, account_id: UUID) -> BrokerAccountSnapshot:
         try:
@@ -230,34 +252,51 @@ class AlpacaBrokerAdapter:
 
     def translate_order_request(self, order: InternalOrder) -> dict[str, object]:
         self._require_internal_order(order)
-        if order.order_type != OrderType.MARKET:
+        if order.order_type in {OrderType.LIMIT, OrderType.STOP_LIMIT} and order.limit_price is None:
             raise AlpacaBrokerError(
-                "submit_supports_market_only",
-                "Alpaca BROKER_PAPER execution currently supports market orders only",
+                "limit_price_required",
+                "limit and stop-limit Alpaca orders require limit_price",
+                context={"order_id": str(order.order_id), "order_type": order.order_type.value},
+            )
+        if order.order_type in {OrderType.STOP, OrderType.STOP_LIMIT} and order.stop_price is None:
+            raise AlpacaBrokerError(
+                "stop_price_required",
+                "stop and stop-limit Alpaca orders require stop_price",
                 context={"order_id": str(order.order_id), "order_type": order.order_type.value},
             )
         request: dict[str, object] = {
             "symbol": order.symbol,
             "qty": order.quantity,
             "side": self._alpaca_side(order.side),
-            "type": "market",
+            "type": order.order_type.value,
             "time_in_force": order.time_in_force.value,
             "client_order_id": order.client_order_id,
         }
+        if order.limit_price is not None:
+            request["limit_price"] = order.limit_price
+        if order.stop_price is not None:
+            request["stop_price"] = order.stop_price
         if order.extended_hours:
             request["extended_hours"] = True
         return request
 
     def to_alpaca_order_request(self, order: InternalOrder) -> Any:
         request = self.translate_order_request(order)
-        self._require_sdk_class(MarketOrderRequest, "MarketOrderRequest")
-        return MarketOrderRequest(  # type: ignore[misc,operator]
-            symbol=request["symbol"],
-            qty=request["qty"],
-            side=self._enum_value(AlpacaOrderSide, str(request["side"])),
-            time_in_force=self._enum_value(AlpacaTimeInForce, str(request["time_in_force"])),
-            client_order_id=request["client_order_id"],
-        )
+        request_class = self._request_class_for_order_type(order.order_type)
+        kwargs = {
+            "symbol": request["symbol"],
+            "qty": request["qty"],
+            "side": self._enum_value(AlpacaOrderSide, str(request["side"])),
+            "time_in_force": self._enum_value(AlpacaTimeInForce, str(request["time_in_force"])),
+            "client_order_id": request["client_order_id"],
+        }
+        if order.extended_hours:
+            kwargs["extended_hours"] = True
+        if order.limit_price is not None:
+            kwargs["limit_price"] = order.limit_price
+        if order.stop_price is not None:
+            kwargs["stop_price"] = order.stop_price
+        return request_class(**kwargs)  # type: ignore[misc,operator]
 
     def normalize_status(self, status: object) -> BrokerOrderStatus:
         normalized = self._status_token(status)
@@ -266,6 +305,7 @@ class AlpacaBrokerAdapter:
             "accepted": BrokerOrderStatus.ACCEPTED,
             "pending_new": BrokerOrderStatus.ACCEPTED,
             "accepted_for_bidding": BrokerOrderStatus.ACCEPTED,
+            "partial_fill": BrokerOrderStatus.PARTIAL_FILL,
             "partially_filled": BrokerOrderStatus.PARTIAL_FILL,
             "filled": BrokerOrderStatus.FILLED,
             "canceled": BrokerOrderStatus.CANCELED,
@@ -326,6 +366,25 @@ class AlpacaBrokerAdapter:
             mode=self.mode,
             buying_power=self._float(response.get("buying_power"), default=0),
             daytrading_buying_power=self._float(response.get("daytrading_buying_power"), default=0),
+            regt_buying_power=self._optional_float(response.get("regt_buying_power")),
+            non_marginable_buying_power=self._optional_float(response.get("non_marginable_buying_power")),
+            multiplier=self._optional_float(response.get("multiplier")),
+            portfolio_value=self._optional_float(response.get("portfolio_value")),
+            long_market_value=self._optional_float(response.get("long_market_value")),
+            short_market_value=self._optional_float(response.get("short_market_value")),
+            initial_margin=self._optional_float(response.get("initial_margin")),
+            maintenance_margin=self._optional_float(response.get("maintenance_margin")),
+            last_maintenance_margin=self._optional_float(response.get("last_maintenance_margin")),
+            last_equity=self._optional_float(response.get("last_equity")),
+            sma=self._optional_float(response.get("sma")),
+            daytrade_count=self._optional_int(response.get("daytrade_count")),
+            trade_suspended_by_user=bool(response.get("trade_suspended_by_user", False)),
+            transfers_blocked=bool(response.get("transfers_blocked", False)),
+            crypto_status=str(response["crypto_status"]) if response.get("crypto_status") is not None else None,
+            currency=str(response["currency"]) if response.get("currency") is not None else None,
+            accrued_fees=self._optional_float(response.get("accrued_fees")),
+            pending_transfer_in=self._optional_float(response.get("pending_transfer_in")),
+            pending_transfer_out=self._optional_float(response.get("pending_transfer_out")),
             cash=self._float(response.get("cash"), default=0),
             equity=self._float(response.get("equity"), default=0),
             trading_blocked=bool(response.get("trading_blocked", False)),
@@ -369,7 +428,7 @@ class AlpacaBrokerAdapter:
 
     def _build_trading_client(self) -> Any:
         if TradingClient is None:
-            raise AlpacaBrokerError("missing_sdk", "alpaca-py is required for Alpaca BROKER_PAPER execution")
+            raise AlpacaBrokerError("missing_sdk", "alpaca-py is required for Alpaca broker execution")
         kwargs: dict[str, object] = {"paper": self.mode == TradingMode.BROKER_PAPER}
         return TradingClient(self._api_key, self._secret_key, **kwargs)  # type: ignore[misc,operator]
 
@@ -378,8 +437,8 @@ class AlpacaBrokerAdapter:
 
         TradingStream is a 24/7 push channel that emits trade-update events
         whenever this account has order activity (accepted, fills, cancels,
-        replacements). It does not depend on equity market hours — paper
-        crypto orders submitted on a Saturday produce events immediately.
+        replacements). It does not depend on equity market hours — paper or
+        live, order lifecycle events can arrive outside regular equity sessions.
         """
         if TradingStream is None:
             raise AlpacaBrokerError("missing_sdk", "alpaca-py is required for streaming")
@@ -416,9 +475,14 @@ class AlpacaBrokerAdapter:
         return float(value)
 
     def _optional_float(self, value: object) -> float | None:
-        if value is None:
+        if value is None or value == "":
             return None
         return float(value)
+
+    def _optional_int(self, value: object) -> int | None:
+        if value is None or value == "":
+            return None
+        return int(value)
 
     def _optional_datetime(self, value: object) -> datetime | None:
         if value is None:
@@ -430,6 +494,20 @@ class AlpacaBrokerAdapter:
     def _require_sdk_class(self, sdk_class: object, name: str) -> None:
         if sdk_class is None:
             raise AlpacaBrokerError("missing_sdk", f"alpaca-py {name} is required")
+
+    def _request_class_for_order_type(self, order_type: OrderType) -> object:
+        mapping = {
+            OrderType.MARKET: (MarketOrderRequest, "MarketOrderRequest"),
+            OrderType.LIMIT: (LimitOrderRequest, "LimitOrderRequest"),
+            OrderType.STOP: (StopOrderRequest, "StopOrderRequest"),
+            OrderType.STOP_LIMIT: (StopLimitOrderRequest, "StopLimitOrderRequest"),
+        }
+        try:
+            request_class, name = mapping[order_type]
+        except KeyError as exc:
+            raise AlpacaBrokerError("unsupported_order_type", f"Unsupported Alpaca order type: {order_type}") from exc
+        self._require_sdk_class(request_class, name)
+        return request_class
 
     def _enum_value(self, enum_class: object, value: str) -> object:
         if enum_class is None:
@@ -463,6 +541,25 @@ class AlpacaBrokerAdapter:
             "cash",
             "equity",
             "daytrading_buying_power",
+            "regt_buying_power",
+            "non_marginable_buying_power",
+            "multiplier",
+            "portfolio_value",
+            "long_market_value",
+            "short_market_value",
+            "initial_margin",
+            "maintenance_margin",
+            "last_maintenance_margin",
+            "last_equity",
+            "sma",
+            "daytrade_count",
+            "trade_suspended_by_user",
+            "transfers_blocked",
+            "crypto_status",
+            "currency",
+            "accrued_fees",
+            "pending_transfer_in",
+            "pending_transfer_out",
             "status",
             "trading_blocked",
             "account_blocked",

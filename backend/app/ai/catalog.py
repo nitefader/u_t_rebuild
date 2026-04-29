@@ -158,6 +158,12 @@ class AIProviderCatalog:
         self._save()
         return updated
 
+    def delete_service(self, service_id: UUID) -> None:
+        """Remove the AI provider record from the catalog (hard delete)."""
+        _known(service_id, self._records, "AI service")
+        del self._records[service_id]
+        self._save()
+
     def _load(self) -> None:
         if self._store_path is None or not self._store_path.exists():
             return

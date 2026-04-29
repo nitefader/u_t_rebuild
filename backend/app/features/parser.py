@@ -48,11 +48,18 @@ def parse_params(raw: str | None) -> dict[str, Any]:
     return params
 
 
-def parse_feature_expression(expression: str, feature_registry: FeatureRegistry = registry) -> FeatureSpec:
+def parse_feature_expression(
+    expression: str,
+    feature_registry: FeatureRegistry = registry,
+    *,
+    default_timeframe: str | None = None,
+) -> FeatureSpec:
     """Parse canonical feature syntax into a registry-validated FeatureSpec."""
 
     if expression.strip() != expression or not expression:
         raise FeatureParseError("feature expression must be non-empty and contain no surrounding whitespace")
+    if default_timeframe is not None and "." not in expression:
+        expression = f"{default_timeframe}.{expression}"
     match = _FEATURE_EXPR_RE.fullmatch(expression)
     if not match:
         raise FeatureParseError(f"invalid feature expression syntax '{expression}'")

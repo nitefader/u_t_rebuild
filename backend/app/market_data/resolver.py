@@ -139,7 +139,7 @@ class ResolverRejectionCode(StrEnum):
 class InvocationContext(StrEnum):
     CHART_LAB = "chart_lab"
     SIM_LAB = "sim_lab"
-    BROKER_RUNTIME = "broker_runtime"
+    ACCOUNT_TRADING = "account_trading"
     BACKTEST = "backtest"
     OPERATIONS_PREVIEW = "operations_preview"
 
@@ -538,7 +538,7 @@ def _auto_score(intent: DataIntent, service: MarketDataServiceConfig) -> tuple[i
     caps = service.capabilities
     if service.is_default:
         score -= 5
-    if intent.consumer == DataConsumer.BROKER_RUNTIME or intent.purpose.value == "runtime_trading":
+    if intent.consumer == DataConsumer.ACCOUNT_TRADING or intent.purpose.value == "runtime_trading":
         if caps.supports_streaming:
             score -= 30
         if caps.latency_class == LatencyClass.LOW:
@@ -574,8 +574,8 @@ def _selected_explanation(
         return f"Selected {service.service_name} because it is the default Market Data Service and satisfies the detected intent."
     if selection_code == ResolverSelectionCode.SELECTED_MANUAL_OVERRIDE:
         return f"Selected {service.service_name} because it was manually chosen and satisfies the detected intent."
-    if intent.consumer == DataConsumer.BROKER_RUNTIME:
-        return f"Selected {service.service_name} because Broker Runtime requires realtime intraday streaming."
+    if intent.consumer == DataConsumer.ACCOUNT_TRADING:
+        return f"Selected {service.service_name} because Account trading requires realtime intraday streaming."
     if intent.is_long_range_historical and not intent.requires_streaming:
         return f"Selected {service.service_name} because the request uses long-range historical data and does not require streaming."
     return f"Selected {service.service_name} because its capabilities satisfy the detected data intent."

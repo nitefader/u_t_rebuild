@@ -80,7 +80,7 @@ class BrokerCredentialStore:
     """Encrypted credential store keyed by ``account_id``.
 
     Designed for the operator's directive: per-account credentials persist
-    across restarts so the broker runtime can make calls for any account
+    across restarts so the shared runtime can make calls for any account
     without env-var fallback. Per the production-grade principles:
     ``schema_version`` carries the file's shape; atomic writes; no silent
     failure modes.

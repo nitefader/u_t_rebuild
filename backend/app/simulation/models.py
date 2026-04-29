@@ -6,7 +6,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from backend.app.domain import SimulationSession
+from backend.app.domain import SimulationRunEvidence, SimulationSession
 
 
 class SimulationError(ValueError):
@@ -65,6 +65,9 @@ class SimulatedFill(BaseModel):
     qty: float = Field(gt=0)
     price: float = Field(gt=0)
     timestamp: datetime
+    risk_decision_id: UUID | None = None
+    signal_plan_id: UUID | None = None
+    risk_plan_version_id: UUID | None = None
 
 
 class SimulatedOrder(BaseModel):
@@ -84,6 +87,9 @@ class SimulatedOrder(BaseModel):
     created_at: datetime
     updated_at: datetime
     signal_name: str | None = None
+    risk_decision_id: UUID | None = None
+    signal_plan_id: UUID | None = None
+    risk_plan_version_id: UUID | None = None
 
     @model_validator(mode="after")
     def validate_filled_qty(self) -> "SimulatedOrder":
@@ -119,6 +125,9 @@ class SimulatedTrade(BaseModel):
     closed_at: datetime
     realized_pnl: float
     exit_reason: SimulatedOrderIntent
+    risk_decision_id: UUID | None = None
+    signal_plan_id: UUID | None = None
+    risk_plan_version_id: UUID | None = None
 
 
 class EquityPoint(BaseModel):
@@ -157,6 +166,7 @@ class SimulationReplayResult(BaseModel):
     realized_pnl: float
     max_drawdown: float
     gross_exposure: float
+    evidence: SimulationRunEvidence | None = None
 
     @model_validator(mode="before")
     @classmethod

@@ -17,6 +17,7 @@ from .models import (
     CreateBrokerAccountRequest,
     DeleteBrokerAccountRequest,
     ReplaceBrokerAccountCredentialsRequest,
+    UpdateBrokerAccountDetailsRequest,
 )
 
 _SERVICE_EXPORTS = {
@@ -51,5 +52,6 @@ __all__ = [
     "CredentialStoreError",
     "DeleteBrokerAccountRequest",
     "ReplaceBrokerAccountCredentialsRequest",
+    "UpdateBrokerAccountDetailsRequest",
     "create_broker_credential_store_from_environment",
 ]

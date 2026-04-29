@@ -14,11 +14,13 @@ from .providers import (
     AICapabilityLabel,
     AIProvider,
     AIProviderStatus,
+    AIServiceDeletionResponse,
     AIServiceList,
     AIServiceRecord,
     AIServiceType,
     AIServiceWrite,
     AIValidationStatus,
+    DeleteAIServiceRequest,
 )
 from .runtime import create_ai_provider_catalog_from_environment
 from .validation import AIProviderValidator, AIValidationResult
@@ -30,12 +32,14 @@ __all__ = [
     "AIProviderCatalogError",
     "AIProviderCatalogSnapshot",
     "AIProviderStatus",
+    "AIServiceDeletionResponse",
     "AIProviderValidator",
     "AIServiceList",
     "AIServiceRecord",
     "AIServiceType",
     "AIServiceWrite",
     "AIValidationResult",
+    "DeleteAIServiceRequest",
     "AIValidationStatus",
     "MASKED_SECRET",
     "create_ai_provider_catalog_from_environment",

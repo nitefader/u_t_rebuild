@@ -16,20 +16,23 @@ from backend.app.brokers import (
 )
 from backend.app.broker_accounts import BrokerAccount, BrokerAccountValidationStatus
 from backend.app.control_plane import ControlPlane
-from backend.app.domain import CandidateSide, IntentType, OrderType, ProgramVersion, TimeInForce, TradingMode
+from backend.app.deployments import Deployment
+from backend.app.domain import BacktestRun, CandidateSide, IntentType, OrderType, ProgramVersion, TimeInForce, TradingMode
 from backend.app.governor import GovernorDecision, GovernorPolicy
 from backend.app.operations import OperationsCenterService
 import backend.app.operations.service as operations_service_module
-from backend.app.orders import InternalOrder, InternalOrderStatus, OrderManager
+from backend.app.orders import InternalOrder, InternalOrderIntent, InternalOrderStatus, OrderManager, OrderOrigin
 from backend.app.persistence import SQLiteRuntimeStore
 from backend.app.pipeline import PipelineEvent, PipelineEventType
-from backend.app.runtime import DeploymentContext, ExecutionIntent, RuntimeState, RuntimeStatus
+from backend.app.runtime import DeploymentContext, RuntimeState, RuntimeStatus
+from backend.tests.fixtures.legacy_intent import LegacyExecutionIntent as ExecutionIntent
 
 
 ACCOUNT_ID = UUID("11111111-2222-3333-4444-555555555555")
 DEPLOYMENT_ID = UUID("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
 RECOVERED_DEPLOYMENT_ID = UUID("bbbbbbbb-cccc-dddd-eeee-ffffffffffff")
 PROGRAM_ID = UUID("99999999-8888-7777-6666-555555555555")
+STRATEGY_VERSION_ID = UUID("88888888-7777-6666-5555-444444444444")
 NOW = datetime(2026, 1, 2, 14, 35, tzinfo=timezone.utc)
 
 
@@ -84,13 +87,21 @@ class RecordingControlPlane(ControlPlane):
         super().clear_global_kill()
 
 
+class StaticDeploymentReader:
+    def __init__(self, deployments: tuple[Deployment, ...]) -> None:
+        self._deployments = deployments
+
+    def list_deployments(self) -> tuple[Deployment, ...]:
+        return self._deployments
+
+
 def _program(version: int = 3) -> ProgramVersion:
     return ProgramVersion(
         id=PROGRAM_ID,
         program_id=uuid4(),
-        name="Paper Runtime Program",
+        name="Runtime Strategy Version",
         version=version,
-        strategy_version_id=uuid4(),
+        strategy_version_id=STRATEGY_VERSION_ID,
         strategy_controls_version_id=uuid4(),
         risk_profile_version_id=uuid4(),
         execution_style_version_id=uuid4(),
@@ -100,6 +111,19 @@ def _program(version: int = 3) -> ProgramVersion:
 
 def _deployment(deployment_id: UUID = DEPLOYMENT_ID) -> DeploymentContext:
     return DeploymentContext(deployment_id=deployment_id, program=_program())
+
+
+def _backtest_evidence() -> BacktestRun:
+    return BacktestRun(
+        run_id=uuid4(),
+        strategy_id=uuid4(),
+        strategy_version_id=uuid4(),
+        start=NOW - timedelta(days=30),
+        end=NOW,
+        bar_count=100,
+        signal_plan_count=5,
+        simulated_trade_count=3,
+    )
 
 
 def _intent(deployment_id: UUID = DEPLOYMENT_ID) -> ExecutionIntent:
@@ -166,6 +190,57 @@ def _open_broker_order(order: InternalOrder) -> BrokerOpenOrderSnapshot:
     )
 
 
+def _manual_order() -> InternalOrder:
+    manager = OrderManager()
+    order = manager.create_manual_order(
+        account_id=ACCOUNT_ID,
+        symbol="MRNA",
+        side=CandidateSide.LONG,
+        quantity=20,
+        order_type=OrderType.MARKET,
+        time_in_force=TimeInForce.DAY,
+        reason="operator smoke order",
+    )
+    return manager.ledger.update_status(order_id=order.order_id, status=InternalOrderStatus.FILLED)
+
+
+def _signal_plan_order(
+    *,
+    account_id: UUID = ACCOUNT_ID,
+    deployment_id: UUID = DEPLOYMENT_ID,
+    signal_plan_id: UUID | None = None,
+    created_at: datetime = NOW,
+) -> InternalOrder:
+    current_signal_plan_id = signal_plan_id or uuid4()
+    return InternalOrder(
+        order_id=uuid4(),
+        client_order_id=f"signal-plan:{account_id}:{current_signal_plan_id}",
+        account_id=account_id,
+        origin=OrderOrigin.SIGNAL_PLAN,
+        deployment_id=deployment_id,
+        strategy_id=PROGRAM_ID,
+        strategy_version_id=STRATEGY_VERSION_ID,
+        signal_plan_id=current_signal_plan_id,
+        opening_signal_plan_id=current_signal_plan_id,
+        current_signal_plan_id=current_signal_plan_id,
+        position_lineage_id=current_signal_plan_id,
+        account_evaluation_id=uuid4(),
+        governor_decision_id=uuid4(),
+        lifecycle_intent=InternalOrderIntent.OPEN.value,
+        symbol="SPY",
+        side=CandidateSide.LONG,
+        quantity=10,
+        order_type=OrderType.MARKET,
+        time_in_force=TimeInForce.DAY,
+        intent=InternalOrderIntent.OPEN,
+        status=InternalOrderStatus.CREATED,
+        created_at=created_at,
+        updated_at=created_at,
+        signal_name="entry",
+        reason="signal_condition_true",
+    )
+
+
 def _sync_state(*, stale: bool = False) -> BrokerSyncState:
     synced = NOW - timedelta(minutes=5) if stale else NOW
     return BrokerSyncState(
@@ -220,12 +295,13 @@ def _store(tmp_path, *, stale: bool = False) -> tuple[SQLiteRuntimeStore, Intern
     store.save_broker_account_snapshot(_snapshot())
     store.save_broker_sync_freshness(_sync_state(stale=stale))
     store.save_broker_open_order_snapshot(_open_broker_order(order))
+    store.save_broker_position_snapshot(_position())
     store.save_deployment_runtime_state(
         RuntimeState(
             deployment_id=DEPLOYMENT_ID,
             status=RuntimeStatus.BLOCKED_RECOVERY if stale else RuntimeStatus.RUNNING,
             last_bar_timestamp_by_symbol_timeframe={"SPY:5m": NOW - timedelta(minutes=5)},
-            last_execution_intent_timestamp=NOW,
+            last_signal_plan_timestamp=NOW,
         )
     )
     store.save_deployment_runtime_state(
@@ -301,6 +377,51 @@ def test_stale_and_recovery_deployments_are_visible_with_recovered_ready_not_run
     assert recovered.is_running is False
 
 
+def test_runtime_overview_summarizes_research_evidence_without_trading_authority(tmp_path) -> None:
+    store, _ = _store(tmp_path)
+    evidence = _backtest_evidence()
+    store.save_research_evidence(evidence)
+
+    overview = OperationsCenterService(
+        control_plane=ControlPlane(state_store=store),
+        runtime_store=store,
+    ).get_runtime_overview()
+
+    assert len(overview.research_evidence_summary) == 1
+    assert overview.research_evidence_summary[0].evidence_type == "backtest_run"
+    assert overview.research_evidence_summary[0].count == 1
+    assert overview.research_evidence_summary[0].latest_created_at == evidence.created_at
+
+
+def test_research_evidence_detail_and_filter_queries_are_operations_read_only(tmp_path) -> None:
+    store, _ = _store(tmp_path)
+    evidence = _backtest_evidence()
+    other_evidence = BacktestRun(
+        run_id=uuid4(),
+        strategy_id=uuid4(),
+        strategy_version_id=uuid4(),
+        start=NOW - timedelta(days=10),
+        end=NOW,
+        bar_count=50,
+        signal_plan_count=2,
+        simulated_trade_count=1,
+    )
+    store.save_research_evidence(evidence)
+    store.save_research_evidence(other_evidence)
+
+    service = OperationsCenterService(
+        control_plane=ControlPlane(state_store=store),
+        runtime_store=store,
+    )
+
+    assert service.get_research_evidence(evidence.run_id) == evidence
+    assert service.list_research_evidence(strategy_id=evidence.strategy_id) == (evidence,)
+    assert {item.run_id for item in service.list_research_evidence(evidence_type="backtest_run")} == {
+        evidence.run_id,
+        other_evidence.run_id,
+    }
+
+
 def test_account_operations_shows_broker_snapshot_positions_and_control_state(tmp_path) -> None:
     service, store, _ = _service(tmp_path)
     ControlPlane(state_store=store).pause_account(ACCOUNT_ID)
@@ -321,14 +442,153 @@ def test_account_operations_shows_broker_snapshot_positions_and_control_state(tm
     assert operations.is_paused is True
 
 
+def test_account_operations_open_orders_count_matches_visible_broker_orders(tmp_path) -> None:
+    service, _, _ = _service(tmp_path)
+
+    overview = service.get_runtime_overview()
+    account_summary = next(account for account in overview.broker_accounts if account.account_id == ACCOUNT_ID)
+    operations = service.get_account_operations(ACCOUNT_ID)
+
+    assert account_summary.open_orders_count == len(operations.open_broker_orders) == 1
+
+
+def test_runtime_overview_open_orders_count_includes_external_broker_orders(tmp_path) -> None:
+    service, store, _ = _service(tmp_path)
+    store.save_broker_open_order_snapshot(
+        BrokerOpenOrderSnapshot(
+            account_id=ACCOUNT_ID,
+            broker_order_id="external-broker-1",
+            client_order_id="external-client-order",
+            symbol="NVDA",
+            side="buy",
+            qty=1,
+            status=BrokerOrderStatus.ACCEPTED,
+            order_type="limit",
+            timestamp=NOW,
+        )
+    )
+
+    overview = service.get_runtime_overview()
+    account_summary = next(account for account in overview.broker_accounts if account.account_id == ACCOUNT_ID)
+
+    assert account_summary.open_orders_count == 2
+    assert overview.open_orders_count == 2
+
+
+def test_manual_operator_order_without_deployment_lineage_does_not_break_operations_projection() -> None:
+    ledger = OrderManager().ledger
+    ledger.add(_manual_order())
+    service = OperationsCenterService(control_plane=ControlPlane(), order_ledger=ledger)
+
+    overview = service.get_runtime_overview()
+    account = service.get_account_operations(ACCOUNT_ID)
+
+    assert overview.deployments == ()
+    assert account.deployments == ()
+    assert account.internal_order_ledger_summary.total_count == 1
+
+
+def test_runtime_overview_does_not_count_historical_order_or_event_deployment_lineage() -> None:
+    ledger = OrderManager().ledger
+    historical_order = _signal_plan_order()
+    ledger.add(historical_order)
+    service = OperationsCenterService(
+        control_plane=ControlPlane(),
+        order_ledger=ledger,
+        latest_pipeline_events=(_pipeline_event(PipelineEventType.GOVERNOR_DECISION, NOW),),
+    )
+
+    overview = service.get_runtime_overview()
+    account = service.get_account_operations(ACCOUNT_ID)
+
+    assert overview.deployments == ()
+    assert account.deployments[0].deployment_id == DEPLOYMENT_ID
+    assert account.internal_order_ledger_summary.total_count == 1
+
+
+def test_runtime_overview_counts_real_deployment_records_without_order_lineage() -> None:
+    service = OperationsCenterService(
+        control_plane=ControlPlane(),
+        deployment_reader=StaticDeploymentReader(
+            (
+                Deployment(
+                    deployment_id=DEPLOYMENT_ID,
+                    name="Mean Reversion Deployment",
+                    strategy_version_id=STRATEGY_VERSION_ID,
+                    watchlist_ids=(uuid4(),),
+                    subscribed_account_ids=(ACCOUNT_ID,),
+                ),
+            )
+        ),
+    )
+
+    overview = service.get_runtime_overview()
+
+    assert [deployment.deployment_id for deployment in overview.deployments] == [DEPLOYMENT_ID]
+    assert overview.deployments[0].account_id == ACCOUNT_ID
+    assert overview.deployments[0].strategy_version_id == STRATEGY_VERSION_ID
+
+
+def test_account_signal_plan_evaluations_project_from_signal_plan_orders(tmp_path) -> None:
+    store, _ = _store(tmp_path)
+    older_order = _signal_plan_order(created_at=NOW - timedelta(minutes=2))
+    newer_order = _signal_plan_order(created_at=NOW)
+    store.save_order(older_order)
+    store.save_order(newer_order)
+    service = OperationsCenterService(control_plane=ControlPlane(state_store=store), runtime_store=store)
+
+    evaluations = service.list_account_signal_plan_evaluations(account_id=ACCOUNT_ID, limit=1)
+
+    assert len(evaluations) == 1
+    assert evaluations[0].evaluation_id == newer_order.account_evaluation_id
+    assert evaluations[0].account_id == ACCOUNT_ID
+    assert evaluations[0].signal_plan_id == newer_order.signal_plan_id
+    assert evaluations[0].deployment_id == DEPLOYMENT_ID
+    assert evaluations[0].strategy_id == PROGRAM_ID
+    assert evaluations[0].status.value == "accepted"
+    assert evaluations[0].participation_decision.value == "participate"
+    assert evaluations[0].governor_decision is not None
+    assert evaluations[0].governor_decision.governor_decision_id == newer_order.governor_decision_id
+
+
+def test_account_signal_plan_evaluations_filter_by_deployment_and_signal_plan(tmp_path) -> None:
+    store, _ = _store(tmp_path)
+    target_signal_plan_id = uuid4()
+    target_order = _signal_plan_order(signal_plan_id=target_signal_plan_id)
+    other_order = _signal_plan_order(deployment_id=RECOVERED_DEPLOYMENT_ID)
+    store.save_order(target_order)
+    store.save_order(other_order)
+    service = OperationsCenterService(control_plane=ControlPlane(state_store=store), runtime_store=store)
+
+    evaluations = service.list_account_signal_plan_evaluations(
+        deployment_id=DEPLOYMENT_ID,
+        signal_plan_id=target_signal_plan_id,
+    )
+
+    assert [evaluation.evaluation_id for evaluation in evaluations] == [target_order.account_evaluation_id]
+
+
+def test_runtime_overview_counts_persisted_broker_positions_without_live_reader(tmp_path) -> None:
+    store, _ = _store(tmp_path)
+
+    overview = OperationsCenterService(
+        control_plane=ControlPlane(state_store=store),
+        runtime_store=store,
+    ).get_runtime_overview()
+
+    account_summary = next(account for account in overview.broker_accounts if account.account_id == ACCOUNT_ID)
+    assert account_summary.positions_count == 1
+    assert overview.open_positions_count == 1
+
+
 def test_deployment_operations_shows_orders_trades_timestamps_and_governor_state(tmp_path) -> None:
     service, _, order = _service(tmp_path)
 
     operations = service.get_deployment_operations(DEPLOYMENT_ID)
 
     assert operations.runtime_status == RuntimeStatus.RUNNING
-    assert operations.program_id == PROGRAM_ID
-    assert operations.program_version == 3
+    assert operations.strategy_version_id == STRATEGY_VERSION_ID
+    assert operations.strategy_version == 3
     assert operations.broker_account_id == ACCOUNT_ID
     assert operations.governor_state == GovernorPolicy(max_open_positions=5)
     assert operations.last_market_data_timestamp == NOW - timedelta(minutes=5)
@@ -444,6 +704,57 @@ def test_order_detail_returns_internal_truth_mapping_and_fill_summary(tmp_path) 
     assert detail.trade_summary["fill_count"] == 1
     assert detail.trade_summary["filled_quantity"] == 1
     assert "raw" not in detail.model_dump_json().lower()
+
+
+def test_order_detail_can_be_loaded_by_broker_order_id(tmp_path) -> None:
+    service, store, order = _service(tmp_path)
+    store.save_broker_order_mapping(
+        BrokerOrderMapping(
+            order_id=order.order_id,
+            client_order_id=order.client_order_id,
+            broker_order_id="broker-1",
+            provider="alpaca",
+            account_id=ACCOUNT_ID,
+            created_at=NOW,
+            last_synced_at=NOW,
+        )
+    )
+
+    detail = service.get_order_detail_by_broker_order_id("broker-1")
+
+    assert detail.internal_order.order_id == order.order_id
+    assert detail.broker_account_id == ACCOUNT_ID
+    assert detail.deployment_id == DEPLOYMENT_ID
+    assert detail.broker_order_id == "broker-1"
+
+
+def test_manual_order_detail_allows_null_deployment_and_signal_plan_lineage(tmp_path) -> None:
+    db_path = tmp_path / "utos.db"
+    store = SQLiteRuntimeStore(db_path)
+    manual_order = _manual_order()
+    store.save_order(manual_order)
+    store.save_broker_sync_freshness(_sync_state())
+    store.save_broker_order_mapping(
+        BrokerOrderMapping(
+            order_id=manual_order.order_id,
+            client_order_id=manual_order.client_order_id,
+            broker_order_id="manual-broker-1",
+            provider="alpaca",
+            account_id=ACCOUNT_ID,
+            created_at=NOW,
+            last_synced_at=NOW,
+        )
+    )
+    service = OperationsCenterService(control_plane=ControlPlane(state_store=store), runtime_store=store)
+
+    detail = service.get_order_detail_by_broker_order_id("manual-broker-1")
+
+    assert detail.internal_order.origin.value == "manual_operator"
+    assert detail.broker_account_id == ACCOUNT_ID
+    assert detail.deployment_id is None
+    assert detail.internal_order.signal_plan_id is None
+    assert detail.internal_order.position_lineage_id is None
+    assert detail.broker_status == InternalOrderStatus.FILLED.value
 
 
 def test_order_detail_unknown_broker_state_renders_unknown_stale(tmp_path) -> None:

@@ -18,6 +18,14 @@ from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
 from backend.app.broker_accounts.models import BrokerAccount
+from backend.app.brokers import (
+    AlpacaBrokerPreflightService,
+    BrokerOrderResult,
+    BrokerOrderStatus,
+    MarketRulePreflightService,
+    build_broker_order_preflight_request,
+    build_market_rule_preflight_request,
+)
 from backend.app.domain import CandidateSide, OrderType, TimeInForce, TradingMode
 from backend.app.orders.models import (
     InternalOrder,
@@ -124,11 +132,13 @@ _ERRORS: dict[str, tuple[str, str]] = {
     "unknown_broker_account": ("Broker account was not found.", "Refresh broker accounts and pick an active account."),
     "manual_trade_blocked_live_account": ("Live account confirmation is required.", "Type the exact account display name to confirm."),
     "manual_trade_live_confirmation_name_mismatch": ("Live account confirmation did not match.", "Retry with the exact account display name."),
-    "manual_trade_composition_root_not_initialized": ("Manual trade runtime is not ready.", "Verify credentials and restart or re-bootstrap broker runtime."),
+    "manual_trade_composition_root_not_initialized": ("Manual trade runtime is not ready.", "Verify credentials and restart or re-bootstrap account trading."),
     "manual_trade_broker_wiring_incomplete": ("Manual trade broker wiring is incomplete.", "Check broker credentials and runtime bootstrap logs."),
     "idempotency_key_in_flight": ("An identical order request is already in flight.", "Wait, then refresh recent orders before retrying."),
     "idempotency_key_conflict": ("Idempotency key was reused for a different request.", "Generate a new idempotency key for the changed order."),
     "broker_sync_stale": ("Broker sync is stale.", "Wait for broker sync to become fresh before opening a new order."),
+    "broker_preflight_rejected": ("Broker preflight rejected the order.", "Review order type, time in force, price fields, and session eligibility."),
+    "market_preflight_rejected": ("Market rule preflight rejected the order.", "Review session, asset state, shortability, and buying power before retrying."),
     "unknown_order": ("Order was not found.", "Refresh recent orders for this account."),
     "order_account_mismatch": ("Order does not belong to this account.", "Refresh the selected account before retrying."),
     "order_already_filled": ("Order filled before it could be canceled.", "Refresh orders and positions; broker truth already shows the fill."),
@@ -252,6 +262,62 @@ def _runtime_store_from_entry(entry: dict[str, Any], fallback: Any) -> Any:
     return entry.get("runtime_store") or fallback or get_runtime_store()
 
 
+def _manual_preflight_result(
+    *,
+    account: BrokerAccount,
+    order: InternalOrder,
+    broker_adapter: Any,
+) -> BrokerOrderResult | None:
+    if account.provider.lower() != "alpaca":
+        return None
+    broker_preflight = AlpacaBrokerPreflightService().preflight_order(
+        build_broker_order_preflight_request(
+            order=order,
+            provider=account.provider,
+            broker_mode=account.mode,
+        )
+    )
+    if not broker_preflight.allowed:
+        return _manual_preflight_rejection(
+            order,
+            reason=f"broker_preflight:{broker_preflight.violations[0].code.value}",
+        )
+    buying_power = _manual_buying_power(account=account, broker_adapter=broker_adapter)
+    market_preflight = MarketRulePreflightService().preflight_market_rules(
+        build_market_rule_preflight_request(
+            order=order,
+            provider=account.provider,
+            broker_mode=account.mode,
+            buying_power=buying_power,
+        )
+    )
+    if not market_preflight.allowed:
+        return _manual_preflight_rejection(
+            order,
+            reason=f"market_preflight:{market_preflight.violations[0].code.value}",
+        )
+    return None
+
+
+def _manual_buying_power(*, account: BrokerAccount, broker_adapter: Any) -> float:
+    _ = broker_adapter
+    if account.last_account_snapshot is not None:
+        return account.last_account_snapshot.buying_power
+    return 0
+
+
+def _manual_preflight_rejection(order: InternalOrder, *, reason: str) -> BrokerOrderResult:
+    return BrokerOrderResult(
+        order_id=order.order_id,
+        client_order_id=order.client_order_id,
+        status=BrokerOrderStatus.REJECTED,
+        filled_quantity=0,
+        remaining_quantity=order.quantity,
+        reason=reason,
+        raw_status="preflight_rejected",
+    )
+
+
 @router.post("/{account_id}/orders", response_model=ManualOrderResponse)
 def submit_manual_order(
     account_id: UUID,
@@ -304,12 +370,31 @@ def submit_manual_order(
             time_in_force=request.time_in_force,
             reason=request.reason,
         )
-        broker_result = broker_adapter.submit_order(created)
-        submitted = broker_sync.apply_result(broker_result)
-        _record_freshness(broker_sync_service, account_id)
+        broker_result = _manual_preflight_result(account=account, order=created, broker_adapter=broker_adapter)
+        if broker_result is not None:
+            submitted = order_manager.update_status(
+                order_id=created.order_id,
+                status=InternalOrderStatus.REJECTED,
+                reason=broker_result.reason,
+            )
+            if str(broker_result.reason or "").startswith("broker_preflight:"):
+                raise OrderManagerError(broker_result.reason)
+            if str(broker_result.reason or "").startswith("market_preflight:"):
+                raise OrderManagerError(broker_result.reason)
+        else:
+            broker_result = broker_adapter.submit_order(created)
+            submitted = broker_sync.apply_result(broker_result)
+            _record_freshness(broker_sync_service, account_id)
     except OrderManagerError as exc:
         runtime_store.release_manual_idempotency_key(account_id=account_id, idempotency_key=request.idempotency_key)
-        code = "broker_sync_stale" if "broker_sync_stale" in str(exc) else "manual_submit_failed"
+        if "broker_sync_stale" in str(exc):
+            code = "broker_sync_stale"
+        elif "broker_preflight:" in str(exc):
+            code = "broker_preflight_rejected"
+        elif "market_preflight:" in str(exc):
+            code = "market_preflight_rejected"
+        else:
+            code = "manual_submit_failed"
         _audit(
             runtime_store,
             "manual_submit_failed",
@@ -322,7 +407,11 @@ def submit_manual_order(
             reason=str(exc),
             idempotency_key=request.idempotency_key,
         )
-        raise _operator_error(code, status_code=409 if code == "broker_sync_stale" else 400, message=str(exc)) from exc
+        raise _operator_error(
+            code,
+            status_code=409 if code in {"broker_sync_stale", "broker_preflight_rejected", "market_preflight_rejected"} else 400,
+            message=str(exc),
+        ) from exc
     except Exception:
         runtime_store.release_manual_idempotency_key(account_id=account_id, idempotency_key=request.idempotency_key)
         raise
