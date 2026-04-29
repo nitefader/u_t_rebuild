@@ -1,6 +1,6 @@
 # Operation Turtle Shell Status
 
-Last updated: 2026-04-29 13:43:29 -04:00
+Last updated: 2026-04-29 13:44:32 -04:00
 
 ## Date And Time Syntax
 
@@ -26,17 +26,17 @@ drawer). It does not add trading, broker submit, or a second runtime root.
 
 ## Executive Briefing
 
-Work session status: release_cleanup_commit_push_in_progress
+Work session status: release_cleanup_pushed
 
 Agent role: Codex - Operation Turtle Shell backend doctrine spine
 
 Started at: 2026-04-27 22:28:16 -04:00
 
-Last heartbeat: 2026-04-29 13:43:29 -04:00
+Last heartbeat: 2026-04-29 13:44:32 -04:00
 
-Ended at: pending git push
+Ended at: 2026-04-29 13:44:32 -04:00
 
-Expected next checkpoint: Push `master` to `origin`, then confirm the working tree is clean.
+Expected next checkpoint: Fix Account Detail deployment projection so persisted subscribed Deployments appear there; then commit/push that separate slice.
 
 Operator urgency:
 
@@ -54,11 +54,11 @@ briefing at start, heartbeat, and handoff.
 
 ## Current Phase
 
-Account Detail Risk Card backend route and bulk delete UX slice shipped; local backend/frontend restarted and verified live; release cleanup underway.
+Account Detail Risk Card backend route and bulk delete UX slice shipped; local backend/frontend restarted and verified live; release cleanup pushed.
 
 ## Current Task
 
-Operator-requested Account Detail Risk Card route gap and easier bulk deletion for Deployments/Watchlists completed; local dev servers refreshed; verification clean; release commit/push requested by operator.
+Operator-requested Account Detail Risk Card route gap and easier bulk deletion for Deployments/Watchlists completed; local dev servers refreshed; verification clean; release commit pushed to `origin/master`.
 
 ## Current Owner
 
@@ -72,6 +72,22 @@ Codex
 - Codex doctrine reviewer
 
 ## Latest Completed Action
+
+Release push complete:
+
+- Completed at: 2026-04-29 13:44:32 -04:00
+- Commit:
+  - `3c5505a` - `Ship account risk routes and screener UX polish`
+- Pushed:
+  - `origin/master`
+- Included:
+  - Account risk config/restrictions backend routes and persistence.
+  - Risk Card live-route wiring.
+  - Deployment bulk delete and Watchlist bulk archive/delete UX.
+  - Screener/Watchlist UX clarity pass and tests.
+  - Coordination/status closeout.
+- Remaining known follow-up:
+  - Account Detail deployment projection currently does not include persisted subscribed Deployments unless order/runtime lineage exists. Canonical `/api/v1/deployments` records are valid and include `strategy_version_id`; this is a separate Operations projection fix.
 
 Release cleanup before commit:
 
