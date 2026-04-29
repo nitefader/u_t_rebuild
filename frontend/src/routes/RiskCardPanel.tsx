@@ -5,16 +5,14 @@ import type { AccountRestrictions, AccountRiskConfig } from "@/api/schemas/risk"
 import { Card, CardBody, CardHeader, CardTitle } from "@/components/ui/Card";
 import { StatusBadge } from "@/components/badges/StatusBadge";
 import { LoadingState } from "@/components/empty/LoadingState";
-import { AwaitingApiOrError } from "@/components/empty/AwaitingApi";
+import { ErrorState } from "@/components/empty/ErrorState";
 import { formatCurrency, formatPercent, formatTimestamp } from "@/lib/format";
 
 /**
  * RiskCardPanel — operator's risk posture for a single Account.
  *
  * Reads `/api/v1/broker-accounts/{id}/risk-config` and
- * `/api/v1/broker-accounts/{id}/restrictions`. Both routes are
- * pending in Operation Turtle Shell's queue. The panel renders
- * `awaiting backend` honestly until they ship.
+ * `/api/v1/broker-accounts/{id}/restrictions`.
  */
 export function RiskCardPanel({ accountId }: { accountId: string }): JSX.Element {
   const config = useQuery({
@@ -45,11 +43,9 @@ export function RiskCardPanel({ accountId }: { accountId: string }): JSX.Element
         ) : null}
 
         {config.isError ? (
-          <AwaitingApiOrError
+          <ErrorState
             title="Risk config"
-            endpoint={`GET /api/v1/broker-accounts/${accountId}/risk-config`}
-            awaitingMessage="AccountRiskConfig persistence + route are in Operation Turtle Shell's queue. The Risk Card lights up the moment the route is registered."
-            error={config.error}
+            detail={(config.error as Error)?.message}
             onRetry={() => config.refetch()}
           />
         ) : config.data ? (
@@ -57,11 +53,9 @@ export function RiskCardPanel({ accountId }: { accountId: string }): JSX.Element
         ) : null}
 
         {restrictions.isError ? (
-          <AwaitingApiOrError
+          <ErrorState
             title="Account restrictions"
-            endpoint={`GET /api/v1/broker-accounts/${accountId}/restrictions`}
-            awaitingMessage="AccountRestrictions persistence + route are in Operation Turtle Shell's queue."
-            error={restrictions.error}
+            detail={(restrictions.error as Error)?.message}
             onRetry={() => restrictions.refetch()}
           />
         ) : restrictions.data ? (

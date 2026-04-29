@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useSearchParams } from "react-router-dom";
 import { Archive, Camera, Pencil, Plus, RefreshCw, Trash2 } from "lucide-react";
 import { ApiError } from "@/api/client";
 import { WatchlistsApi } from "@/api/watchlists";
@@ -27,6 +28,7 @@ import { PageHeader } from "./PageHeader";
 import { relativeTime } from "@/lib/format";
 
 export function Watchlists(): JSX.Element {
+  const qc = useQueryClient();
   const list = useQuery({
     queryKey: ["watchlists", "list"],
     queryFn: () => WatchlistsApi.list(),
@@ -34,6 +36,82 @@ export function Watchlists(): JSX.Element {
   });
   const [createOpen, setCreateOpen] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [bulkArchiveOpen, setBulkArchiveOpen] = useState(false);
+  const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
+  const [bulkMessage, setBulkMessage] = useState<string | null>(null);
+  const [searchParams, setSearchParams] = useSearchParams();
+
+  const watchlists = list.data?.watchlists ?? [];
+  const selectedWatchlists = watchlists.filter((w) => selectedIds.includes(w.watchlist_id));
+
+  useEffect(() => {
+    const requestedWatchlist = searchParams.get("watchlist");
+    if (requestedWatchlist) setSelectedId(requestedWatchlist);
+  }, [searchParams]);
+
+  useEffect(() => {
+    if (!list.data) return;
+    const available = new Set(list.data.watchlists.map((w) => w.watchlist_id));
+    setSelectedIds((prev) => prev.filter((id) => available.has(id)));
+  }, [list.data]);
+
+  const bulkArchive = useMutation({
+    mutationFn: async () => {
+      const targets = selectedWatchlists;
+      const results = await Promise.allSettled(targets.map((w) => WatchlistsApi.archive(w.watchlist_id)));
+      return targets.map((watchlist, index) => ({ watchlist, result: results[index] }));
+    },
+    onSuccess: (results) => handleBulkResult("Archived", results),
+  });
+
+  const bulkDelete = useMutation({
+    mutationFn: async () => {
+      const targets = selectedWatchlists;
+      const results = await Promise.allSettled(targets.map((w) => WatchlistsApi.delete(w.watchlist_id)));
+      return targets.map((watchlist, index) => ({ watchlist, result: results[index] }));
+    },
+    onSuccess: (results) => handleBulkResult("Deleted", results),
+  });
+
+  function handleBulkResult(
+    verb: "Archived" | "Deleted",
+    results: Array<{ watchlist: Watchlist; result: PromiseSettledResult<unknown> }>,
+  ): void {
+    const succeeded = results.filter(
+      (item): item is { watchlist: Watchlist; result: PromiseFulfilledResult<unknown> } =>
+        item.result.status === "fulfilled",
+    );
+    const failed = results.filter(
+      (item): item is { watchlist: Watchlist; result: PromiseRejectedResult } =>
+        item.result.status === "rejected",
+    );
+    if (verb === "Deleted") {
+      setSelectedIds((prev) =>
+        prev.filter((id) => !succeeded.some((item) => item.watchlist.watchlist_id === id)),
+      );
+    }
+    setBulkMessage(
+      failed.length === 0
+        ? `${verb} ${succeeded.length} Watchlist${succeeded.length === 1 ? "" : "s"}.`
+        : `${verb} ${succeeded.length}; ${failed.length} blocked. ${failed
+            .map((item) => `${item.watchlist.name}: ${errorText(item.result.reason)}`)
+            .join(" ")}`,
+    );
+    void qc.invalidateQueries({ queryKey: ["watchlists", "list"] });
+  }
+
+  function toggleSelected(id: string, checked: boolean): void {
+    setBulkMessage(null);
+    setSelectedIds((prev) =>
+      checked ? Array.from(new Set([...prev, id])) : prev.filter((existing) => existing !== id),
+    );
+  }
+
+  function setAllSelected(checked: boolean): void {
+    setBulkMessage(null);
+    setSelectedIds(checked ? watchlists.map((w) => w.watchlist_id) : []);
+  }
 
   return (
     <div className="space-y-4">
@@ -58,6 +136,7 @@ export function Watchlists(): JSX.Element {
         title="Entries only"
         message="Refreshing a dynamic Watchlist reruns discovery evidence. It does not close, manage, or sync open broker Positions."
       />
+      {bulkMessage ? <Banner severity="info" title="Bulk action result" message={bulkMessage} /> : null}
 
       {list.isLoading ? (
         <LoadingState title="Loading watchlists" />
@@ -78,29 +157,157 @@ export function Watchlists(): JSX.Element {
           }
         />
       ) : (
-        <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
-          {list.data?.watchlists.map((w) => (
-            <WatchlistCard key={w.watchlist_id} w={w} onOpen={() => setSelectedId(w.watchlist_id)} />
+        <>
+          <BulkWatchlistBar
+            selectedCount={selectedIds.length}
+            totalCount={watchlists.length}
+            allSelected={selectedIds.length > 0 && selectedIds.length === watchlists.length}
+            onSelectAll={setAllSelected}
+            onClear={() => setAllSelected(false)}
+            onArchive={() => setBulkArchiveOpen(true)}
+            onDelete={() => setBulkDeleteOpen(true)}
+            busy={bulkArchive.isPending || bulkDelete.isPending}
+          />
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
+          {watchlists.map((w) => (
+            <WatchlistCard
+              key={w.watchlist_id}
+              w={w}
+              onOpen={() => setSelectedId(w.watchlist_id)}
+              selected={selectedIds.includes(w.watchlist_id)}
+              onSelectedChange={(checked) => toggleSelected(w.watchlist_id, checked)}
+            />
           ))}
-        </div>
+          </div>
+        </>
       )}
 
       <CreateWatchlistDrawer open={createOpen} onOpenChange={setCreateOpen} />
       <WatchlistDetailDrawer
         watchlistId={selectedId}
         onOpenChange={(open) => {
-          if (!open) setSelectedId(null);
+          if (!open) {
+            setSelectedId(null);
+            if (searchParams.has("watchlist")) setSearchParams({}, { replace: true });
+          }
+        }}
+      />
+      <DangerConfirm
+        open={bulkArchiveOpen}
+        onOpenChange={setBulkArchiveOpen}
+        title={`Archive ${selectedWatchlists.length} selected Watchlist${selectedWatchlists.length === 1 ? "" : "s"}?`}
+        message={
+          <span>
+            Archive preserves Watchlist and snapshot history. Active Deployment references remain protected.
+            Type <strong>ARCHIVE {selectedWatchlists.length}</strong> to confirm.
+          </span>
+        }
+        expected={`ARCHIVE ${selectedWatchlists.length}`}
+        actionLabel="Archive Selected"
+        tone="danger"
+        busy={bulkArchive.isPending}
+        onConfirm={async () => {
+          await bulkArchive.mutateAsync();
+          setBulkArchiveOpen(false);
+        }}
+      />
+      <DangerConfirm
+        open={bulkDeleteOpen}
+        onOpenChange={setBulkDeleteOpen}
+        title={`Delete ${selectedWatchlists.length} selected Watchlist${selectedWatchlists.length === 1 ? "" : "s"}?`}
+        message={
+          <span>
+            Delete is allowed only when the backend confirms no active Deployment reference and no snapshot audit history.
+            Type <strong>DELETE {selectedWatchlists.length}</strong> to confirm.
+          </span>
+        }
+        expected={`DELETE ${selectedWatchlists.length}`}
+        actionLabel="Delete Selected"
+        tone="danger"
+        busy={bulkDelete.isPending}
+        onConfirm={async () => {
+          await bulkDelete.mutateAsync();
+          setBulkDeleteOpen(false);
         }}
       />
     </div>
   );
 }
 
-function WatchlistCard({ w, onOpen }: { w: Watchlist; onOpen: () => void }): JSX.Element {
+function BulkWatchlistBar({
+  selectedCount,
+  totalCount,
+  allSelected,
+  onSelectAll,
+  onClear,
+  onArchive,
+  onDelete,
+  busy,
+}: {
+  selectedCount: number;
+  totalCount: number;
+  allSelected: boolean;
+  onSelectAll: (checked: boolean) => void;
+  onClear: () => void;
+  onArchive: () => void;
+  onDelete: () => void;
+  busy: boolean;
+}): JSX.Element {
+  return (
+    <div className="flex flex-wrap items-center gap-2 rounded border border-border bg-bg-raised px-3 py-2 text-xs">
+      <label className="flex items-center gap-2">
+        <input
+          type="checkbox"
+          checked={allSelected}
+          onChange={(event) => onSelectAll(event.target.checked)}
+          aria-label="Select all watchlists"
+        />
+        <span>Select all</span>
+      </label>
+      <span className="text-fg-muted">
+        {selectedCount} of {totalCount} selected
+      </span>
+      <Button size="sm" variant="secondary" disabled={selectedCount === 0} loading={busy} onClick={onArchive}>
+        Archive selected
+      </Button>
+      <Button size="sm" variant="danger" disabled={selectedCount === 0} loading={busy} onClick={onDelete}>
+        Bulk delete
+      </Button>
+      {selectedCount > 0 ? (
+        <Button size="sm" variant="ghost" onClick={onClear}>
+          Clear
+        </Button>
+      ) : null}
+      <span className="ml-auto text-[11px] text-fg-subtle">
+        Snapshot history and active Deployment references stay protected.
+      </span>
+    </div>
+  );
+}
+
+function WatchlistCard({
+  w,
+  onOpen,
+  selected,
+  onSelectedChange,
+}: {
+  w: Watchlist;
+  onOpen: () => void;
+  selected: boolean;
+  onSelectedChange: (checked: boolean) => void;
+}): JSX.Element {
   return (
     <Card>
       <div className="flex items-start justify-between gap-3 px-4 pt-3">
-        <div className="min-w-0">
+        <label className="mt-1 flex items-center" title={`Select ${w.name}`}>
+          <input
+            type="checkbox"
+            checked={selected}
+            onChange={(event) => onSelectedChange(event.target.checked)}
+            aria-label={`Select watchlist ${w.name}`}
+          />
+        </label>
+        <div className="min-w-0 flex-1">
           <div className="font-semibold tracking-tight">{w.name}</div>
           <div className="mt-1 flex flex-wrap items-center gap-1.5">
             <StatusBadge tone={w.kind === "dynamic" ? "info" : "neutral"}>{w.kind}</StatusBadge>

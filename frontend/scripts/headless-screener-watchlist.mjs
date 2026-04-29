@@ -653,11 +653,11 @@ async function createScheduleFromVisibleControls(session, { name, cadence = "dai
 
 async function exerciseVisibleSchedule(session, name) {
   const visible = await bodyText(session);
-  assert(visible.includes("Run now") && visible.includes("Edit") && visible.includes("Pause"), `Schedule controls not visible for ${name}`);
+  assert(visible.includes("Run schedule now") && visible.includes("Edit") && visible.includes("Pause"), `Schedule controls not visible for ${name}`);
   const schedules = await browserApi(session, "/api/v1/discovery-schedules");
   const schedule = schedules.schedules.find((item) => item.name === name);
   assert(schedule, `Schedule not found: ${name}`);
-  await clickScheduleButton(session, name, "Run now");
+  await clickScheduleButton(session, name, "Run schedule now");
   const execution = await waitFor(
     `schedule run-now completed ${name}`,
     async () => {
@@ -899,7 +899,7 @@ try {
 
   await navigate(session, `/screeners/${screenerId}`);
   await waitForText(session, "Results:");
-  await waitForText(session, "Save as Watchlist");
+  await waitForText(session, "Save selected matches");
   pass("Run detail UI shows results and save action");
 
   await waitForText(session, "Schedules");
@@ -1008,7 +1008,7 @@ try {
   assert(deploymentDom.includes(deployment.deployment.name), "Deployment DOM did not include created deployment");
   assert(deploymentDom.includes(dynamicWatchlist.name), "Deployment DOM did not include readable Watchlist name");
   assert(
-    deploymentDom.includes("Entries come from Watchlists. Exits come from Account Positions scoped by this deployment."),
+    deploymentDom.includes("Entries come from Watchlists. Exits come from Account-owned Positions scoped to this Deployment."),
     "Deployment DOM did not include entry/exit doctrine copy",
   );
   pass("Deployment UI confirms entry/exit doctrine");

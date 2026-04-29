@@ -6,6 +6,10 @@ from .credential_store import (
     create_broker_credential_store_from_environment,
 )
 from .models import (
+    AccountRestrictions,
+    AccountRestrictionsUpdateRequest,
+    AccountRiskConfig,
+    AccountRiskConfigUpdateRequest,
     BrokerAccount,
     BrokerAccountCredentialUpdateResponse,
     BrokerAccountCredentialValidationStatus,
@@ -36,6 +40,10 @@ def __getattr__(name: str):
 
 
 __all__ = [
+    "AccountRestrictions",
+    "AccountRestrictionsUpdateRequest",
+    "AccountRiskConfig",
+    "AccountRiskConfigUpdateRequest",
     "BrokerAccount",
     "BrokerAccountCredentialUpdateResponse",
     "BrokerAccountCredentialValidationStatus",

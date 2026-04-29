@@ -16,7 +16,7 @@ from backend.app.brokers import (
     BrokerPositionSnapshot,
     BrokerSyncState,
 )
-from backend.app.broker_accounts.models import BrokerAccount
+from backend.app.broker_accounts.models import AccountRestrictions, AccountRiskConfig, BrokerAccount
 from backend.app.control_plane.service import ControlPlaneState
 from backend.app.domain import (
     BacktestRun,
@@ -599,6 +599,8 @@ class SQLiteRuntimeStore:
     def delete_broker_account(self, account_id: UUID) -> None:
         with self._connect() as connection:
             connection.execute("DELETE FROM broker_accounts WHERE account_id = ?", (str(account_id),))
+            connection.execute("DELETE FROM account_risk_configs WHERE account_id = ?", (str(account_id),))
+            connection.execute("DELETE FROM account_restrictions WHERE account_id = ?", (str(account_id),))
             connection.execute("DELETE FROM broker_account_snapshots WHERE account_id = ?", (str(account_id),))
             connection.execute("DELETE FROM broker_sync_freshness WHERE account_id = ?", (str(account_id),))
             connection.execute("DELETE FROM broker_position_snapshots WHERE account_id = ?", (str(account_id),))
@@ -610,6 +612,58 @@ class SQLiteRuntimeStore:
         if include_archived:
             return accounts
         return tuple(account for account in accounts if not account.is_archived)
+
+    def save_account_risk_config(self, config: AccountRiskConfig) -> AccountRiskConfig:
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO account_risk_configs (account_id, version, updated_at, payload)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(account_id) DO UPDATE SET
+                    version = excluded.version,
+                    updated_at = excluded.updated_at,
+                    payload = excluded.payload
+                """,
+                (
+                    str(config.account_id),
+                    config.version,
+                    config.updated_at.isoformat(),
+                    _dump_model(config),
+                ),
+            )
+        return config
+
+    def load_account_risk_config(self, account_id: UUID) -> AccountRiskConfig:
+        row = self._fetch_one("SELECT payload FROM account_risk_configs WHERE account_id = ?", (str(account_id),))
+        if row is None:
+            raise KeyError(f"unknown account risk config: {account_id}")
+        return _load_model(AccountRiskConfig, row["payload"])
+
+    def save_account_restrictions(self, restrictions: AccountRestrictions) -> AccountRestrictions:
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO account_restrictions (account_id, version, updated_at, payload)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(account_id) DO UPDATE SET
+                    version = excluded.version,
+                    updated_at = excluded.updated_at,
+                    payload = excluded.payload
+                """,
+                (
+                    str(restrictions.account_id),
+                    restrictions.version,
+                    restrictions.updated_at.isoformat(),
+                    _dump_model(restrictions),
+                ),
+            )
+        return restrictions
+
+    def load_account_restrictions(self, account_id: UUID) -> AccountRestrictions:
+        row = self._fetch_one("SELECT payload FROM account_restrictions WHERE account_id = ?", (str(account_id),))
+        if row is None:
+            raise KeyError(f"unknown account restrictions: {account_id}")
+        return _load_model(AccountRestrictions, row["payload"])
 
     def save_broker_account_snapshot(self, snapshot: BrokerAccountSnapshot) -> BrokerAccountSnapshot:
         with self._connect() as connection:

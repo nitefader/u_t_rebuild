@@ -15,7 +15,12 @@ from backend.app.brokers import (
     BrokerSync,
     BrokerSyncService,
 )
-from backend.app.broker_accounts.models import BrokerAccount, BrokerAccountValidationStatus
+from backend.app.broker_accounts.models import (
+    AccountRestrictions,
+    AccountRiskConfig,
+    BrokerAccount,
+    BrokerAccountValidationStatus,
+)
 from backend.app.control_plane import ControlPlane
 from backend.app.domain import (
     BacktestRun,
@@ -268,6 +273,42 @@ def test_existing_broker_accounts_table_migrates_default_risk_plan_columns(tmp_p
     assert "default_risk_plan_id" in columns
     assert "default_risk_plan_version_id" in columns
     assert "ix_broker_accounts_default_risk_plan" in indexes
+
+
+def test_account_risk_config_and_restrictions_persist(tmp_path) -> None:
+    db_path = tmp_path / "utos.db"
+    store = SQLiteRuntimeStore(db_path)
+    config = AccountRiskConfig(
+        account_id=ACCOUNT_ID,
+        sizing_method="fixed_shares",
+        fixed_shares=10,
+        risk_per_trade_pct=None,
+        max_open_positions=3,
+    )
+    restrictions = AccountRestrictions(
+        account_id=ACCOUNT_ID,
+        symbol_blocklist=("TSLA", "GME"),
+        long_only=True,
+        notes="operator blocklist",
+    )
+
+    store.save_account_risk_config(config)
+    store.save_account_restrictions(restrictions)
+    restarted = SQLiteRuntimeStore(db_path)
+
+    assert restarted.load_account_risk_config(ACCOUNT_ID) == config
+    assert restarted.load_account_restrictions(ACCOUNT_ID) == restrictions
+
+    with sqlite3.connect(db_path) as connection:
+        tables = {
+            row[0]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            ).fetchall()
+        }
+
+    assert "account_risk_configs" in tables
+    assert "account_restrictions" in tables
 
 
 def test_trade_persists(tmp_path) -> None:  # type: ignore[no-untyped-def]

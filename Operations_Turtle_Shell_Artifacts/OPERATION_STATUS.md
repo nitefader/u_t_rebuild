@@ -1,6 +1,6 @@
 # Operation Turtle Shell Status
 
-Last updated: 2026-04-29 07:28:47 -04:00
+Last updated: 2026-04-29 13:43:29 -04:00
 
 ## Date And Time Syntax
 
@@ -26,17 +26,17 @@ drawer). It does not add trading, broker submit, or a second runtime root.
 
 ## Executive Briefing
 
-Work session status: local_git_checkpoint_created
+Work session status: release_cleanup_commit_push_in_progress
 
 Agent role: Codex - Operation Turtle Shell backend doctrine spine
 
 Started at: 2026-04-27 22:28:16 -04:00
 
-Last heartbeat: 2026-04-29 07:28:47 -04:00
+Last heartbeat: 2026-04-29 13:43:29 -04:00
 
-Ended at: 2026-04-29 07:28:47 -04:00
+Ended at: pending git push
 
-Expected next checkpoint: Local and GitHub `master` should stay clean except ignored local-only files.
+Expected next checkpoint: Push `master` to `origin`, then confirm the working tree is clean.
 
 Operator urgency:
 
@@ -54,11 +54,11 @@ briefing at start, heartbeat, and handoff.
 
 ## Current Phase
 
-Local Git checkpoint created after Alpaca-first Screener/Watchlist persona journey and headless browser verification.
+Account Detail Risk Card backend route and bulk delete UX slice shipped; local backend/frontend restarted and verified live; release cleanup underway.
 
 ## Current Task
 
-Commit/push handoff: local and GitHub `master` pushed through `0b738a8`; generated/secret artifacts are ignored.
+Operator-requested Account Detail Risk Card route gap and easier bulk deletion for Deployments/Watchlists completed; local dev servers refreshed; verification clean; release commit/push requested by operator.
 
 ## Current Owner
 
@@ -66,12 +66,111 @@ Codex
 
 ## Reviewers
 
-- Angry Architect
-- Full Stack Developer
-- Product Manager
-- Alpaca Agent
+- UX/front-end engineer
+- Nanyel/product owner
+- User/test mapper
+- Codex doctrine reviewer
 
 ## Latest Completed Action
+
+Release cleanup before commit:
+
+- Started at: 2026-04-29 13:36:00 -04:00
+- Completed verification at: 2026-04-29 13:43:29 -04:00
+- Verification:
+  - `git diff --check` -> clean, CRLF warnings only.
+  - `npm.cmd run typecheck` in `frontend/` -> passed.
+  - Initial full `npm.cmd test` hit two 5-second timeout-only frontend tests under whole-suite load; both failed tests passed focused.
+  - `npx.cmd vitest run --testTimeout=15000` in `frontend/` -> 48 files / 336 tests passed.
+  - `npm.cmd run lint:names` in `frontend/` -> clean.
+  - `python -m pytest backend/tests/unit -q` -> 1395 passed, 6 warnings.
+- Next action:
+  - Stage all dirty/untracked work, commit, and push to `origin/master`.
+
+Local dev server refresh:
+
+- Started at: 2026-04-29 13:20:00 -04:00
+- Completed at: 2026-04-29 13:31:19 -04:00
+- Completed:
+  - Stopped stale duplicate uvicorn/Vite processes.
+  - Restarted backend on `127.0.0.1:8000`.
+  - Restarted frontend Vite on `127.0.0.1:5173`.
+  - Verified direct backend HTTP 200 for Account Risk Card routes on account `e43733eb-4d90-473b-af46-6aaac06e85f7`.
+  - Verified Vite-proxied HTTP 200 for the same Risk Card routes through `127.0.0.1:5173/api/...`.
+- Active listeners:
+  - Backend: `python.exe` uvicorn on `127.0.0.1:8000`
+  - Frontend: Vite on `127.0.0.1:5173`
+- Blockers:
+  - None. Browser may need a hard refresh if it still has the old failed query cached.
+
+Account Risk Card routes and bulk delete UX:
+
+- Started at: 2026-04-29 12:50:17 -04:00
+- Completed at: 2026-04-29 13:00:42 -04:00
+- Completed:
+  - Added durable `AccountRiskConfig` and `AccountRestrictions` models plus SQLite persistence on the runtime store.
+  - Added `GET/PUT /api/v1/broker-accounts/{account_id}/risk-config`.
+  - Added `GET/PUT /api/v1/broker-accounts/{account_id}/restrictions`.
+  - Account Detail Risk Card now consumes live routes and no longer says Operation Turtle Shell route/persistence work is pending.
+  - Deployment list now supports select-all and bulk delete through the existing guarded delete route.
+  - Watchlist list now supports select-all, bulk archive, and guarded bulk hard delete; archive remains the safer history-preserving path.
+  - Per-row failure reporting keeps blocked rows understandable by readable name.
+- Files touched:
+  - `backend/app/api/routes/broker_accounts.py`
+  - `backend/app/broker_accounts/{__init__.py,models.py}`
+  - `backend/app/persistence/{models.py,runtime_store.py}`
+  - `backend/tests/unit/api/{test_broker_accounts_routes.py,test_frontend_api_contract.py}`
+  - `backend/tests/unit/persistence/test_sqlite_persistence.py`
+  - `frontend/src/api/schemas/risk.ts`
+  - `frontend/src/routes/{RiskCardPanel,Deployments,Watchlists}.tsx`
+  - `frontend/src/routes/{RiskCardPanel,Deployments,Watchlists}.test.tsx`
+  - `frontend/src/routes/explainerContent.ts`
+  - `COORDINATION/{LOCKS.md,LEDGER.md,INBOX_CLAUDE.md}`
+  - `Operations_Turtle_Shell_Artifacts/OPERATION_STATUS.md`
+- Tests run:
+  - `python -m pytest backend/tests/unit/api/test_broker_accounts_routes.py backend/tests/unit/persistence/test_sqlite_persistence.py backend/tests/unit/api/test_frontend_api_contract.py -q` -> 41 passed, 5 warnings.
+  - `npm.cmd run typecheck` in `frontend/` -> passed.
+  - `npx.cmd vitest run src/routes/Deployments.test.tsx src/routes/Watchlists.test.tsx src/routes/RiskCardPanel.test.tsx` in `frontend/` -> 12 passed.
+- Blockers:
+  - None for this slice.
+  - Existing unrelated Strategy Builder/roadmap dirty files remain outside this slice and were not reverted.
+- Nanyel approval:
+  - Approved. The Account Risk Card is account-owned policy data, not broker truth; Deployment bulk delete still uses the existing lifecycle guard; Watchlist delete/archive keeps Watchlists entry-only and preserves audit/deployment protections. No SignalPlan, Governor, BrokerAdapter, BrokerSync, order, or position-truth path changed.
+
+Screener/Watchlist UX clarity slice:
+
+- Started at: 2026-04-29 07:47:00 -04:00
+- Completed at: 2026-04-29 08:06:58 -04:00
+- Completed:
+  - Added `Operations_Turtle_Shell_Artifacts/SCREENER_WATCHLIST_UX_FIX_PLAN.md` with MAP understanding, system areas, current behavior, problem/gap, proposed solution, implementation plan, validation checklist, and expert findings.
+  - Scoped Screener detail actions so operators can distinguish latest-version actions from selected-run actions: `Run latest version`, `Rerun selected run`, `Compare with previous run`, and `Save selected matches`.
+  - Added readable criterion/result formatting, including boolean Yes/No labels, readable metric labels, ResultsTable presets, and `Decision reason`.
+  - Added template search/show-all and collapsed advanced Screener run settings.
+  - Replaced schedule weekday numeric text entry with weekday chips and made schedule execution labels human-readable, with raw IDs relegated to debug title text.
+  - Synced `UniverseSourcePicker` explicit-symbol draft state from the controlled value.
+  - Added Watchlist deep-link open-after-save behavior.
+  - Updated Deployment and explainer copy: entries come from Watchlists; exits come from Account-owned Positions scoped to the Deployment.
+  - Final UX/front-end engineer, Nanyel/product owner, and test-mapper reviews all approved.
+- Files touched:
+  - `Operations_Turtle_Shell_Artifacts/SCREENER_WATCHLIST_UX_FIX_PLAN.md`
+  - `frontend/src/components/screener/{CriteriaEditor.tsx,DiscoveryScheduleControls.tsx,ExpressionPreview.tsx,ResultsTable.tsx,UniverseSourcePicker.tsx,criterionFormat.ts}`
+  - `frontend/src/components/screener/{DiscoveryScheduleControls.test.tsx,ExpressionPreview.test.tsx,ResultsTable.test.tsx,UniverseSourcePicker.test.tsx}`
+  - `frontend/src/routes/{Screeners.tsx,ScreenerDetail.tsx,Watchlists.tsx,Deployments.tsx,explainerContent.ts}`
+  - `frontend/src/routes/{Screeners.test.tsx,ScreenerDetail.test.tsx}`
+  - `frontend/scripts/headless-screener-watchlist.mjs`
+  - `COORDINATION/{LOCKS.md,LEDGER.md,INBOX_CLAUDE.md}`
+  - `Operations_Turtle_Shell_Artifacts/OPERATION_STATUS.md`
+- Tests run:
+  - `npx.cmd vitest run src/routes/Screeners.test.tsx src/routes/ScreenerDetail.test.tsx src/routes/Watchlists.test.tsx src/routes/Deployments.test.tsx src/components/screener/DiscoveryScheduleControls.test.tsx src/components/screener/ResultsTable.test.tsx src/components/screener/UniverseSourcePicker.test.tsx src/components/screener/ExpressionPreview.test.tsx` in `frontend/` -> 24 passed.
+  - `npm.cmd test` in `frontend/` -> 44 files / 308 tests passed plus banned-name lint clean.
+  - `npm.cmd run typecheck` in `frontend/` -> passed.
+  - `node --check scripts/headless-screener-watchlist.mjs` in `frontend/` -> passed.
+  - `git diff --check` -> passed with CRLF warnings only.
+- Blockers:
+  - None for this slice.
+  - Existing unrelated Strategy Builder/roadmap dirty files remain outside this slice and were not reverted.
+- Nanyel approval:
+  - Approved. Screeners remain discovery-only, Watchlists remain entry-only, Strategy remains symbol-agnostic, Deployment remains a SignalPlan publisher, exits remain Account/Position scoped, BrokerSync remains the only broker truth writer, and raw IDs are not primary operator-facing labels.
 
 Local Git hygiene cleanup:
 

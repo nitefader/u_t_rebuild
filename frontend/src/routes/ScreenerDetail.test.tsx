@@ -240,13 +240,14 @@ describe("<ScreenerDetail />", () => {
     mount();
 
     await screen.findByText("Alpaca Fractionable Movers");
-    await user.click(screen.getByRole("button", { name: /^Compare$/i }));
+    expect(screen.getByRole("button", { name: /Run latest version/i })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /^Compare with previous run$/i }));
     await waitFor(() => {
       expect(screen.getByText("Added")).toBeInTheDocument();
       expect(screen.getAllByText("AMD").length).toBeGreaterThanOrEqual(1);
     });
 
-    await user.click(screen.getByRole("button", { name: /^Rerun$/i }));
+    await user.click(screen.getByRole("button", { name: /^Rerun selected run$/i }));
     await waitFor(() => {
       expect(fetch).toHaveBeenCalledWith(
         expect.stringContaining(`/api/v1/screeners/runs/${RUN_NEW}/rerun`),
@@ -262,7 +263,7 @@ describe("<ScreenerDetail />", () => {
       );
     });
 
-    await user.click(screen.getByRole("button", { name: /Save as Watchlist/i }));
+    await user.click(screen.getByRole("button", { name: /Save selected matches/i }));
     await user.selectOptions(screen.getByLabelText(/Watchlist kind/i), "dynamic");
     await user.clear(screen.getByLabelText(/Watchlist name/i));
     await user.type(screen.getByLabelText(/Watchlist name/i), "Dynamic movers");
@@ -282,13 +283,13 @@ describe("<ScreenerDetail />", () => {
     mount();
 
     await screen.findByText("Alpaca Fractionable Movers");
-    await user.click(screen.getByRole("button", { name: /New version/i }));
+    await user.click(screen.getByRole("button", { name: /Duplicate version/i }));
     await waitFor(() => {
       expect(screen.getByText(/Preserved boolean tree/i)).toBeInTheDocument();
       expect(screen.getByText("ALL")).toBeInTheDocument();
       expect(screen.getByText("ANY")).toBeInTheDocument();
     });
-    await user.click(screen.getByRole("button", { name: /Save new version/i }));
+    await user.click(screen.getByRole("button", { name: /Save duplicate version/i }));
 
     await waitFor(() => {
       const versionCall = vi.mocked(fetch).mock.calls.find(([url]) =>

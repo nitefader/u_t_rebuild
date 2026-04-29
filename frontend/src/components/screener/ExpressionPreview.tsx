@@ -1,5 +1,6 @@
 import type { ScreenerCriterion } from "@/api/schemas/screener";
 import { StatusBadge, type StatusTone } from "@/components/badges/StatusBadge";
+import { formatCriterion } from "./criterionFormat";
 
 interface ExpressionNodeShape {
   kind?: string;
@@ -38,7 +39,7 @@ function ExpressionNode({
   if (node.kind === "criterion" && node.criterion) {
     return (
       <div className="rounded border border-border/60 bg-bg-raised px-2 py-1 text-[11px]">
-        {criterionLabel(node.criterion)}
+        {formatCriterion(node.criterion)}
       </div>
     );
   }
@@ -78,9 +79,4 @@ function toneForKind(kind: "ALL" | "ANY" | "NOT" | "EXPR"): StatusTone {
   if (kind === "ANY") return "info";
   if (kind === "NOT") return "warn";
   return "neutral";
-}
-
-function criterionLabel(c: ScreenerCriterion): string {
-  const value = c.operator === "between" ? `${String(c.value)} to ${String(c.value_max)}` : String(c.value);
-  return c.label || `${c.metric} ${c.operator} ${value}`;
 }

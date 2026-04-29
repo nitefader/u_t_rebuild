@@ -5,6 +5,35 @@ Newest at top. Schema and rules: `COORDINATION/PROTOCOL.md`.
 
 ---
 
+### 2026-04-29 13:00:42 -04:00 - heads-up - Account Risk Card routes and bulk delete UX shipped
+
+- from: Codex
+- to: Claude
+- ref: `backend/app/api/routes/broker_accounts.py`, `backend/app/broker_accounts/models.py`, `backend/app/persistence/{models.py,runtime_store.py}`, `frontend/src/routes/{RiskCardPanel,Deployments,Watchlists}.tsx`, `frontend/src/routes/{Deployments,Watchlists,RiskCardPanel}.test.tsx`
+- needs: awareness
+- expires: 2026-05-06 13:00:42 -04:00
+
+Operator asked what the Account Detail Risk Card placeholder meant and requested easier bulk deletion for Deployments and Watchlists. Shipped the missing backend Account policy routes and the frontend consume:
+
+- `GET /api/v1/broker-accounts/{account_id}/risk-config` returns persisted AccountRiskConfig or a default for an existing account.
+- `PUT /api/v1/broker-accounts/{account_id}/risk-config` persists the full account-scoped config, increments version after the first write, and returns `AccountRiskConfig`.
+- `GET /api/v1/broker-accounts/{account_id}/restrictions` returns persisted AccountRestrictions or a default for an existing account.
+- `PUT /api/v1/broker-accounts/{account_id}/restrictions` persists symbol/asset/time restrictions, increments version after the first write, and returns `AccountRestrictions`.
+
+Frontend: Risk Card no longer renders "Operation Turtle Shell's queue"; it shows live account risk/restriction data or a normal error state. Deployments now have list-level select-all/bulk-delete using the existing guarded delete route. Watchlists now have list-level select-all, archive selected, and guarded hard-delete selected; archive remains the safer history-preserving path. Doctrine unchanged: these are account policy and UI convenience changes only; no SignalPlan, Deployment state, broker truth, or order path changed.
+
+Verification: backend focused route/persistence/contract tests 41 passed; frontend `npm.cmd run typecheck` passed; focused vitest for Deployments, Watchlists, and RiskCardPanel 12 passed. Leases released.
+
+### 2026-04-29 08:06:58 -04:00 - heads-up - Screener/Watchlist UX clarity slice shipped
+
+- from: Codex
+- to: Claude
+- ref: `Operations_Turtle_Shell_Artifacts/SCREENER_WATCHLIST_UX_FIX_PLAN.md`, `frontend/src/components/screener/`, `frontend/src/routes/{Screeners,ScreenerDetail,Watchlists,Deployments}.tsx`, `frontend/src/routes/explainerContent.ts`, `frontend/scripts/headless-screener-watchlist.mjs`
+- needs: awareness
+- expires: 2026-05-06 08:06:58 -04:00
+
+Operator asked for a UX/front-end engineer, Nanyel/product owner, and user/test-mapper pass on Screeners and Watchlists, then a MAP fix plan and execution. I shipped a frontend-only readability pass: scoped run actions (`Run latest version`, `Rerun selected run`, `Compare with previous run`, `Save selected matches`), weekday chips, readable schedule execution labels, readable criterion/result formatting, ResultsTable presets, template search/show-all, collapsed advanced run settings, Watchlist open-after-save deep link, and doctrine copy saying entries come from Watchlists while exits come from Account-owned Positions scoped to the Deployment. Verification: focused frontend gate 24 passed, full frontend `npm.cmd test` 308 passed plus `lint:names` clean, `npm.cmd run typecheck` passed, `node --check scripts/headless-screener-watchlist.mjs` passed, and `git diff --check` passed with CRLF warnings only. UX, Nanyel/product, and test-mapper experts approved; leases released. No backend/trading-spine path changed.
+
 ### 2026-04-29 04:35:37 -04:00 - heads-up - Screener/Watchlist persona journey and headless verifier passed
 
 - from: Codex

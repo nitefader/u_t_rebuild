@@ -15,6 +15,8 @@ import pytest
 from backend.app.api.routes import broker_accounts
 from backend.app.broker_accounts import BrokerAccount, BrokerAccountValidationStatus
 from backend.app.broker_accounts.models import (
+    AccountRestrictions,
+    AccountRiskConfig,
     BrokerAccountCredentialUpdateResponse,
     BrokerAccountCredentialValidationStatus,
     BrokerAccountDeletionResponse,
@@ -23,6 +25,7 @@ from backend.app.broker_accounts.models import (
 )
 from backend.app.broker_accounts.service import BrokerAccountCreationResult
 from backend.app.domain import TradingMode
+from backend.app.persistence import SQLiteRuntimeStore
 
 
 ACCOUNT_ID = UUID("11111111-2222-3333-4444-555555555555")
@@ -82,6 +85,11 @@ class RecordingBrokerAccountService:
         )
 
 
+class RuntimeStoreBackedService:
+    def __init__(self, store: SQLiteRuntimeStore) -> None:
+        self._runtime_store = store
+
+
 def test_broker_account_routes_registered_with_unified_paths() -> None:
     registered = {(route.method, route.path): route.response_model for route in broker_accounts.router.routes}
 
@@ -89,6 +97,10 @@ def test_broker_account_routes_registered_with_unified_paths() -> None:
     assert registered[("PATCH", "/api/v1/broker-accounts/{account_id}")] is broker_accounts.BrokerAccountResponse
     assert registered[("PUT", "/api/v1/broker-accounts/{account_id}/credentials")] is BrokerAccountCredentialUpdateResponse
     assert registered[("POST", "/api/v1/broker-accounts/{account_id}/delete")] is BrokerAccountDeletionResponse
+    assert registered[("GET", "/api/v1/broker-accounts/{account_id}/risk-config")] is AccountRiskConfig
+    assert registered[("PUT", "/api/v1/broker-accounts/{account_id}/risk-config")] is AccountRiskConfig
+    assert registered[("GET", "/api/v1/broker-accounts/{account_id}/restrictions")] is AccountRestrictions
+    assert registered[("PUT", "/api/v1/broker-accounts/{account_id}/restrictions")] is AccountRestrictions
     # Paper-specific URLs must not exist.
     assert ("POST", "/api/v1/broker-accounts/alpaca-paper") not in registered
     assert ("PUT", "/api/v1/broker-accounts/{account_id}/alpaca-paper/credentials") not in registered
@@ -190,3 +202,82 @@ def test_delete_account_route_delegates_with_explicit_confirmation() -> None:
 
     assert response.status == BrokerAccountDeletionStatus.HARD_DELETED
     assert service.calls[-1] == ("delete", ACCOUNT_ID, "Paper", TradingMode.BROKER_PAPER)
+
+
+def test_account_risk_config_routes_default_and_persist(tmp_path) -> None:
+    store = SQLiteRuntimeStore(tmp_path / "runtime.db")
+    store.save_broker_account(
+        BrokerAccount(
+            id=ACCOUNT_ID,
+            display_name="Paper",
+            provider="alpaca",
+            mode=TradingMode.BROKER_PAPER,
+            credentials_ref="alpaca-paper:test",
+            validation_status=BrokerAccountValidationStatus.VALID,
+        )
+    )
+    service = RuntimeStoreBackedService(store)
+
+    default = broker_accounts.get_account_risk_config(ACCOUNT_ID, service=service)
+    assert default.account_id == ACCOUNT_ID
+    assert default.version == 1
+    assert default.sizing_method == "risk_percent_equity"
+
+    updated = broker_accounts.put_account_risk_config(
+        ACCOUNT_ID,
+        broker_accounts.AccountRiskConfigUpdateRequest(
+            sizing_method="fixed_shares",
+            fixed_shares=3,
+            risk_per_trade_pct=None,
+            max_open_positions=2,
+        ),
+        service=service,
+    )
+
+    assert updated.version == 1
+    assert updated.fixed_shares == 3
+    assert store.load_account_risk_config(ACCOUNT_ID).fixed_shares == 3
+
+    updated_again = broker_accounts.put_account_risk_config(
+        ACCOUNT_ID,
+        broker_accounts.AccountRiskConfigUpdateRequest(
+            sizing_method="fixed_shares",
+            fixed_shares=4,
+            risk_per_trade_pct=None,
+        ),
+        service=service,
+    )
+    assert updated_again.version == 2
+
+
+def test_account_restriction_routes_default_and_persist(tmp_path) -> None:
+    store = SQLiteRuntimeStore(tmp_path / "runtime.db")
+    store.save_broker_account(
+        BrokerAccount(
+            id=ACCOUNT_ID,
+            display_name="Paper",
+            provider="alpaca",
+            mode=TradingMode.BROKER_PAPER,
+            credentials_ref="alpaca-paper:test",
+            validation_status=BrokerAccountValidationStatus.VALID,
+        )
+    )
+    service = RuntimeStoreBackedService(store)
+
+    default = broker_accounts.get_account_restrictions(ACCOUNT_ID, service=service)
+    assert default.symbol_blocklist == ()
+    assert default.long_only is False
+
+    updated = broker_accounts.put_account_restrictions(
+        ACCOUNT_ID,
+        broker_accounts.AccountRestrictionsUpdateRequest(
+            symbol_blocklist=("TSLA", "GME"),
+            long_only=True,
+            notes="operator block",
+        ),
+        service=service,
+    )
+
+    assert updated.version == 1
+    assert updated.symbol_blocklist == ("TSLA", "GME")
+    assert store.load_account_restrictions(ACCOUNT_ID).notes == "operator block"

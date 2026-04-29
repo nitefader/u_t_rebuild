@@ -3,11 +3,9 @@ import { z } from "zod";
 /**
  * Account risk config + restrictions schemas.
  *
- * Routes are not yet registered. Once Operation Turtle Shell ships
- * `/api/v1/broker-accounts/{id}/risk-config` and
- * `/api/v1/broker-accounts/{id}/restrictions`, the typed clients +
- * Risk Card panel become live without code change. The schemas use
- * `passthrough` so additive backend fields don't break the UI.
+ * Backed by `/api/v1/broker-accounts/{id}/risk-config` and
+ * `/api/v1/broker-accounts/{id}/restrictions`. The schemas use
+ * `passthrough` so additive backend fields do not break the UI.
  */
 
 export const PositionSizingMethodSchema = z.enum([

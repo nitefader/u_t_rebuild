@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Pause, Play, Plus, Square, Trash2 } from "lucide-react";
 import { EditDeploymentDrawer } from "./EditDeploymentDrawer";
@@ -49,12 +49,66 @@ export function Deployments(): JSX.Element {
     staleTime: 60_000,
   });
   const [createOpen, setCreateOpen] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
+  const [bulkMessage, setBulkMessage] = useState<string | null>(null);
+  const qc = useQueryClient();
+
+  const deployments = list.data?.deployments ?? [];
+  const selectedDeployments = deployments.filter((d) => selectedIds.includes(d.deployment_id));
+
+  useEffect(() => {
+    if (!list.data) return;
+    const available = new Set(list.data.deployments.map((d) => d.deployment_id));
+    setSelectedIds((prev) => prev.filter((id) => available.has(id)));
+  }, [list.data]);
+
+  const bulkDelete = useMutation({
+    mutationFn: async () => {
+      const targets = selectedDeployments;
+      const results = await Promise.allSettled(targets.map((d) => DeploymentsApi.delete(d.deployment_id)));
+      return targets.map((deployment, index) => ({ deployment, result: results[index] }));
+    },
+    onSuccess: (results) => {
+      const deleted = results.filter(
+        (item): item is { deployment: Deployment; result: PromiseFulfilledResult<unknown> } =>
+          item.result.status === "fulfilled",
+      );
+      const failed = results.filter(
+        (item): item is { deployment: Deployment; result: PromiseRejectedResult } =>
+          item.result.status === "rejected",
+      );
+      setSelectedIds((prev) =>
+        prev.filter((id) => !deleted.some((item) => item.deployment.deployment_id === id)),
+      );
+      setBulkMessage(
+        failed.length === 0
+          ? `Deleted ${deleted.length} deployment${deleted.length === 1 ? "" : "s"}.`
+          : `Deleted ${deleted.length}; ${failed.length} blocked. ${failed
+              .map((item) => `${item.deployment.name}: ${errorText(item.result.reason)}`)
+              .join(" ")}`,
+      );
+      void qc.invalidateQueries({ queryKey: ["deployments", "list"] });
+    },
+  });
+
+  function toggleSelected(id: string, checked: boolean): void {
+    setBulkMessage(null);
+    setSelectedIds((prev) =>
+      checked ? Array.from(new Set([...prev, id])) : prev.filter((existing) => existing !== id),
+    );
+  }
+
+  function setAllSelected(checked: boolean): void {
+    setBulkMessage(null);
+    setSelectedIds(checked ? deployments.map((d) => d.deployment_id) : []);
+  }
 
   return (
     <div className="space-y-4">
       <PageHeader
         title="Deployments"
-        subtitle="Running Strategy publishers. Entries from Watchlist, exits from Account-owned Positions filtered by deployment_id."
+        subtitle="Running Strategy publishers. Entries come from Watchlists. Exits come from Account-owned Positions scoped to this Deployment."
         explainSlug="deployments"
         actions={
           <Button
@@ -68,6 +122,8 @@ export function Deployments(): JSX.Element {
         }
       />
 
+      {bulkMessage ? <Banner severity="info" title="Bulk delete result" message={bulkMessage} /> : null}
+
       {list.isLoading ? (
         <LoadingState title="Loading deployments" />
       ) : list.isError ? (
@@ -79,7 +135,7 @@ export function Deployments(): JSX.Element {
       ) : (list.data?.deployments.length ?? 0) === 0 ? (
         <EmptyState
           title="No deployments yet"
-          message="Create a Deployment from a Strategy version, one or more Watchlists, and the Accounts that should subscribe."
+          message="Create a Deployment from a Strategy version, one or more Entry Watchlists, and the Accounts that should subscribe."
           action={
             <Button size="sm" variant="primary" onClick={() => setCreateOpen(true)}>
               New Deployment
@@ -87,19 +143,97 @@ export function Deployments(): JSX.Element {
           }
         />
       ) : (
-        <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
-          {list.data?.deployments.map((d) => (
+        <>
+          <BulkDeploymentBar
+            selectedCount={selectedIds.length}
+            totalCount={deployments.length}
+            allSelected={selectedIds.length > 0 && selectedIds.length === deployments.length}
+            onSelectAll={setAllSelected}
+            onClear={() => setAllSelected(false)}
+            onDelete={() => setBulkDeleteOpen(true)}
+            busy={bulkDelete.isPending}
+          />
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
+          {deployments.map((d) => (
             <DeploymentCard
               key={d.deployment_id}
               d={d}
               watchlists={watchlists.data?.watchlists ?? []}
               strategies={strategies.data?.strategies ?? []}
+              selected={selectedIds.includes(d.deployment_id)}
+              onSelectedChange={(checked) => toggleSelected(d.deployment_id, checked)}
             />
           ))}
-        </div>
+          </div>
+        </>
       )}
 
       <CreateDeploymentDrawer open={createOpen} onOpenChange={setCreateOpen} />
+      <DangerConfirm
+        open={bulkDeleteOpen}
+        onOpenChange={setBulkDeleteOpen}
+        title={`Delete ${selectedDeployments.length} selected deployment${selectedDeployments.length === 1 ? "" : "s"}?`}
+        message={
+          <span>
+            Bulk delete uses the same guard as single delete. Only draft or stopped Deployments can be deleted;
+            active or paused rows are reported as blocked. Type <strong>DELETE {selectedDeployments.length}</strong> to confirm.
+          </span>
+        }
+        expected={`DELETE ${selectedDeployments.length}`}
+        actionLabel="Delete Selected"
+        tone="danger"
+        busy={bulkDelete.isPending}
+        onConfirm={async () => {
+          await bulkDelete.mutateAsync();
+          setBulkDeleteOpen(false);
+        }}
+      />
+    </div>
+  );
+}
+
+function BulkDeploymentBar({
+  selectedCount,
+  totalCount,
+  allSelected,
+  onSelectAll,
+  onClear,
+  onDelete,
+  busy,
+}: {
+  selectedCount: number;
+  totalCount: number;
+  allSelected: boolean;
+  onSelectAll: (checked: boolean) => void;
+  onClear: () => void;
+  onDelete: () => void;
+  busy: boolean;
+}): JSX.Element {
+  return (
+    <div className="flex flex-wrap items-center gap-2 rounded border border-border bg-bg-raised px-3 py-2 text-xs">
+      <label className="flex items-center gap-2">
+        <input
+          type="checkbox"
+          checked={allSelected}
+          onChange={(event) => onSelectAll(event.target.checked)}
+          aria-label="Select all deployments"
+        />
+        <span>Select all</span>
+      </label>
+      <span className="text-fg-muted">
+        {selectedCount} of {totalCount} selected
+      </span>
+      <Button size="sm" variant="danger" disabled={selectedCount === 0} loading={busy} onClick={onDelete}>
+        Bulk delete
+      </Button>
+      {selectedCount > 0 ? (
+        <Button size="sm" variant="ghost" onClick={onClear}>
+          Clear
+        </Button>
+      ) : null}
+      <span className="ml-auto text-[11px] text-fg-subtle">
+        Active and paused Deployments stay protected.
+      </span>
     </div>
   );
 }
@@ -121,10 +255,14 @@ function DeploymentCard({
   d,
   watchlists,
   strategies,
+  selected,
+  onSelectedChange,
 }: {
   d: Deployment;
   watchlists: { watchlist_id: string; name: string; kind: string }[];
   strategies: Strategy[];
+  selected: boolean;
+  onSelectedChange: (checked: boolean) => void;
 }): JSX.Element {
   const qc = useQueryClient();
   const [deleteOpen, setDeleteOpen] = useState(false);
@@ -165,7 +303,15 @@ function DeploymentCard({
   return (
     <Card>
       <div className="flex items-start justify-between gap-3 px-4 pt-3">
-        <div className="min-w-0">
+        <label className="mt-1 flex items-center" title={`Select ${d.name}`}>
+          <input
+            type="checkbox"
+            checked={selected}
+            onChange={(event) => onSelectedChange(event.target.checked)}
+            aria-label={`Select deployment ${d.name}`}
+          />
+        </label>
+        <div className="min-w-0 flex-1">
           <div className="font-semibold tracking-tight">{d.name}</div>
           <div className="mt-1 flex flex-wrap items-center gap-1.5">
             <StatusBadge tone={tone}>{d.lifecycle_status}</StatusBadge>
@@ -206,7 +352,7 @@ function DeploymentCard({
           ) : null}
         </div>
         <div className="mt-1 text-[11px] text-fg-muted">
-          Entries come from Watchlists. Exits come from Account Positions scoped by this deployment.
+          Entries come from Watchlists. Exits come from Account-owned Positions scoped to this Deployment.
         </div>
       </div>
       <div className="flex flex-wrap gap-1 border-t border-border/70 px-4 py-2">
@@ -377,7 +523,7 @@ function CreateDeploymentDrawer({
         <DrawerHeader>
           <DrawerTitle>New Deployment</DrawerTitle>
           <DrawerDescription>
-            Pick a Strategy version, one or more Watchlists, and the Accounts that should subscribe.
+            Pick a Strategy version, one or more Entry Watchlists, and the Accounts that should subscribe.
             The Deployment publishes SignalPlans; each Account decides independently.
           </DrawerDescription>
         </DrawerHeader>
@@ -421,7 +567,7 @@ function CreateDeploymentDrawer({
           ) : null}
 
           <div>
-            <div className="text-xs text-fg-muted">Watchlists</div>
+            <div className="text-xs text-fg-muted">Entry Watchlists</div>
             <div className="mt-1 grid max-h-32 grid-cols-1 gap-1 overflow-y-auto rounded border border-border bg-bg-inset p-2 text-sm">
               {(watchlists.data?.watchlists ?? []).map((w) => (
                 <label key={w.watchlist_id} className="flex items-center gap-2">
@@ -489,4 +635,8 @@ function CreateDeploymentDrawer({
       </DrawerContent>
     </Drawer>
   );
+}
+
+function errorText(e: unknown): string {
+  return e instanceof ApiError ? e.detail || e.message : e instanceof Error ? e.message : String(e);
 }

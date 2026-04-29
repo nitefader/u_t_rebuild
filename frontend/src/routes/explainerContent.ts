@@ -72,7 +72,7 @@ export const EXPLAINERS: Record<string, ExplainerEntry> = {
       },
       {
         heading: "What this page reads",
-        body: "GET /api/v1/broker-accounts and per-Account /api/v1/operations/accounts/{id} every 8s. The Risk Card pulls /api/v1/broker-accounts/{id}/risk-config and /restrictions when those routes ship.",
+        body: "GET /api/v1/broker-accounts and per-Account /api/v1/operations/accounts/{id} every 8s. The Risk Card pulls /api/v1/broker-accounts/{id}/risk-config and /restrictions for Account-scoped sizing posture and operator restrictions.",
       },
       {
         heading: "Before trusting balances",
@@ -152,11 +152,11 @@ export const EXPLAINERS: Record<string, ExplainerEntry> = {
     sections: [
       {
         heading: "Static vs Dynamic",
-        body: "Static is an explicit symbol list. Dynamic carries rules evaluated at snapshot time (V1 dynamic resolver pending — falls back to the static base).",
+        body: "Static is an explicit symbol list. Dynamic Watchlists refresh from saved Screener/template lineage and create auditable snapshots. Refresh changes future entry candidates only; existing Positions remain managed by Accounts.",
       },
       {
         heading: "Snapshots",
-        body: "A snapshot freezes the symbol set used by a Deployment at a moment in time. Deployments reference a snapshot via watchlist_snapshot_id.",
+        body: "A snapshot freezes the symbol set used by a Deployment at a moment in time. Deployments use the approved/current Watchlist snapshot as entry evidence.",
       },
     ],
   },
@@ -165,7 +165,7 @@ export const EXPLAINERS: Record<string, ExplainerEntry> = {
     pageSlug: "deployments",
     pageTitle: "Deployments",
     oneLiner:
-      "Running Strategy publishers. Entries from Watchlist; exits from Account-owned Positions filtered by deployment_id.",
+      "Running Strategy publishers. Entries come from Watchlists. Exits come from Account-owned Positions scoped to this Deployment.",
     sections: [
       {
         heading: "Lifecycle",

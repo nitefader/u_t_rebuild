@@ -104,9 +104,11 @@ describe("<DiscoveryScheduleControls />", () => {
 
     expect(await screen.findByText("Premarket movers")).toBeInTheDocument();
     expect(await screen.findByText("Execution history")).toBeInTheDocument();
-    expect(screen.getByText(/Watchlist snapshot 77777777/i)).toBeInTheDocument();
+    expect(screen.getByText(/Watchlist snapshot recorded/i)).toBeInTheDocument();
+    expect(screen.getByTitle(/Watchlist snapshot id: 77777777/i)).toBeInTheDocument();
     expect(screen.getByText(/\+2 \/ -1 \/ =5/)).toBeInTheDocument();
     expect(screen.getByText(/America\/New_York \(market time\)/)).toBeInTheDocument();
+    expect(screen.getByText(/Days: Mon-Fri/i)).toBeInTheDocument();
   });
 
   it("creates a watchlist refresh schedule through visible controls", async () => {
@@ -147,6 +149,7 @@ describe("<DiscoveryScheduleControls />", () => {
     fireEvent.change(screen.getByLabelText(/Interval minutes/i), { target: { value: "15" } });
     await user.type(screen.getByLabelText(/Session start/i), "09:30");
     await user.type(screen.getByLabelText(/Session end/i), "10:30");
+    await user.click(screen.getByRole("button", { name: /^Sat$/i }));
     await user.selectOptions(screen.getByLabelText(/Approval policy/i), "auto_snapshot");
     await user.click(screen.getByRole("button", { name: /Save schedule/i }));
 
@@ -163,6 +166,7 @@ describe("<DiscoveryScheduleControls />", () => {
         interval_minutes: 15,
         session_start: "09:30",
         session_end: "10:30",
+        weekdays: [0, 1, 2, 3, 4, 5],
         timezone_name: "America/New_York",
         approval_policy: "auto_snapshot",
       });
@@ -220,7 +224,7 @@ describe("<DiscoveryScheduleControls />", () => {
       />,
     );
 
-    await user.click(await screen.findByRole("button", { name: /Run now/i }));
+    await user.click(await screen.findByRole("button", { name: /Run schedule now/i }));
     await user.click(screen.getByRole("button", { name: /Pause/i }));
     await user.click(screen.getByRole("button", { name: /Archive/i }));
 

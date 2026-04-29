@@ -14,6 +14,7 @@ import type {
 import { Banner } from "@/components/ui/Banner";
 import { Button } from "@/components/ui/Button";
 import { Card, CardBody, CardHeader, CardTitle } from "@/components/ui/Card";
+import { Select } from "@/components/ui/Select";
 import {
   Drawer,
   DrawerBody,
@@ -215,6 +216,16 @@ function TemplateLibrary({
   const navigate = useNavigate();
   const qc = useQueryClient();
   const [error, setError] = useState<string | null>(null);
+  const [query, setQuery] = useState("");
+  const [showAll, setShowAll] = useState(false);
+  const filteredTemplates = useMemo(() => {
+    const text = query.trim().toLowerCase();
+    if (!text) return templates;
+    return templates.filter((t) =>
+      [t.label, t.description, t.category, ...t.tags].join(" ").toLowerCase().includes(text),
+    );
+  }, [query, templates]);
+  const visibleTemplates = showAll || query.trim() ? filteredTemplates : filteredTemplates.slice(0, 6);
   const create = useMutation({
     mutationFn: (templateKey: string) =>
       ScreenerApi.createFromTemplate({ template_key: templateKey, name: null, tags: [] }),
@@ -238,7 +249,13 @@ function TemplateLibrary({
       <CardBody className="space-y-2">
         {error ? <Banner severity="danger" title="Template create failed" message={error} /> : null}
         {loading ? <LoadingState title="Loading templates" /> : null}
-        {templates.slice(0, 6).map((t) => (
+        <TextField
+          label="Search templates"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="fractionable, momentum, gap"
+        />
+        {visibleTemplates.map((t) => (
           <div key={t.key} className="flex items-start justify-between gap-2 rounded border border-border bg-bg-inset/40 px-3 py-2">
             <div className="min-w-0">
               <div className="font-medium">{t.label}</div>
@@ -264,6 +281,11 @@ function TemplateLibrary({
             </Button>
           </div>
         ))}
+        {!query.trim() && templates.length > 6 ? (
+          <Button size="sm" variant="ghost" onClick={() => setShowAll((current) => !current)}>
+            {showAll ? "Show fewer templates" : `Show all ${templates.length} templates`}
+          </Button>
+        ) : null}
       </CardBody>
     </Card>
   );
@@ -331,10 +353,14 @@ function CreateScreenerDrawer({
   });
 
   const [form, setForm] = useState<ScreenerCreateRequest>(() => emptyCreateForm());
+  const [tagsDraft, setTagsDraft] = useState("");
+  const [maxResultsDraft, setMaxResultsDraft] = useState(String(emptyCreateForm().max_results));
   const [error, setError] = useState<string | null>(null);
 
   function reset(): void {
     setForm(emptyCreateForm());
+    setTagsDraft("");
+    setMaxResultsDraft(String(emptyCreateForm().max_results));
     setError(null);
   }
 
@@ -386,6 +412,82 @@ function CreateScreenerDrawer({
             onChange={(next) => setForm({ ...form, criteria: next, expression: null })}
             metrics={fields.data?.fields ?? []}
           />
+          <details className="rounded border border-border bg-bg-inset/40 p-2">
+            <summary className="cursor-pointer text-[10px] font-semibold uppercase tracking-wide text-fg-muted">
+              Advanced run settings
+            </summary>
+            <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2">
+              <Select
+                label="Timeframe"
+                value={form.timeframe}
+                onChange={(e) => setForm({ ...form, timeframe: e.target.value })}
+              >
+                <option value="1m">1 minute</option>
+                <option value="5m">5 minutes</option>
+                <option value="15m">15 minutes</option>
+                <option value="1h">1 hour</option>
+                <option value="1d">1 day</option>
+              </Select>
+              <Select
+                label="Source preference"
+                value={form.source_preference}
+                onChange={(e) =>
+                  setForm({
+                    ...form,
+                    source_preference: e.target.value as ScreenerCreateRequest["source_preference"],
+                  })
+                }
+              >
+                <option value="auto">Auto: Alpaca first, Data Center fallback</option>
+                <option value="alpaca">Alpaca provider evidence</option>
+                <option value="data_center">Data Center cache only</option>
+              </Select>
+              <Select
+                label="Sort metric"
+                value={form.sort_metric ?? ""}
+                onChange={(e) =>
+                  setForm({
+                    ...form,
+                    sort_metric: (e.target.value || null) as ScreenerCreateRequest["sort_metric"],
+                  })
+                }
+              >
+                <option value="">Matched first</option>
+                {(fields.data?.fields ?? []).map((field) => (
+                  <option key={field.key} value={field.key}>
+                    {field.label}
+                  </option>
+                ))}
+              </Select>
+              <Select
+                label="Sort direction"
+                value={form.sort_descending ? "desc" : "asc"}
+                onChange={(e) => setForm({ ...form, sort_descending: e.target.value === "desc" })}
+              >
+                <option value="desc">High to low</option>
+                <option value="asc">Low to high</option>
+              </Select>
+              <TextField
+                label="Max results"
+                type="number"
+                value={maxResultsDraft}
+                onChange={(e) => {
+                  const value = e.target.value;
+                  setMaxResultsDraft(value);
+                  if (value.trim()) setForm({ ...form, max_results: Math.max(1, Number(value)) });
+                }}
+              />
+              <TextField
+                label="Tags"
+                value={tagsDraft}
+                onChange={(e) => {
+                  setTagsDraft(e.target.value);
+                  setForm({ ...form, tags: parseTags(e.target.value) });
+                }}
+                placeholder="intraday, alpaca"
+              />
+            </div>
+          </details>
         </DrawerBody>
         <DrawerFooter>
           <Button variant="ghost" size="sm" onClick={() => onOpenChange(false)}>
@@ -587,4 +689,15 @@ function prettyKey(key: string): string {
     .split("_")
     .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
     .join(" ");
+}
+
+function parseTags(value: string): string[] {
+  return Array.from(
+    new Set(
+      value
+        .split(/[,\s]+/)
+        .map((tag) => tag.trim())
+        .filter(Boolean),
+    ),
+  );
 }

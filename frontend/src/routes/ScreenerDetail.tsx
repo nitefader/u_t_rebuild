@@ -166,7 +166,7 @@ export function ScreenerDetail(): JSX.Element {
               </Button>
             </Link>
             <Button size="sm" variant="secondary" onClick={() => setEditOpen(true)} disabled={!latestVersion}>
-              New version
+              Duplicate version
             </Button>
             <Button
               size="sm"
@@ -186,7 +186,7 @@ export function ScreenerDetail(): JSX.Element {
               loading={run.isPending}
               disabled={!latestVersion || screener?.status === "archived"}
             >
-              Run now
+              Run latest version
             </Button>
           </div>
         }
@@ -238,7 +238,7 @@ export function ScreenerDetail(): JSX.Element {
                   loading={run.isPending}
                   leftIcon={<Play className="h-3.5 w-3.5" aria-hidden="true" />}
                 >
-                  Run now
+                  Run latest version
                 </Button>
               }
             />
@@ -256,6 +256,9 @@ export function ScreenerDetail(): JSX.Element {
               {activeRun.matched_count === 1 ? "" : "es"} of {activeRun.universe_size}
             </CardTitle>
             <span className="flex flex-wrap items-center gap-2">
+              <span className="text-[11px] text-fg-muted">
+                Selected run: {relativeTime(activeRun.started_at)}
+              </span>
               <StatusBadge tone="neutral">{activeRun.run_kind}</StatusBadge>
               {activeRun.cache_hit_rate !== null && activeRun.cache_hit_rate !== undefined ? (
                 <StatusBadge tone="info">cache {(activeRun.cache_hit_rate * 100).toFixed(0)}%</StatusBadge>
@@ -267,7 +270,7 @@ export function ScreenerDetail(): JSX.Element {
                 onClick={() => rerun.mutate(activeRun.id)}
                 loading={rerun.isPending}
               >
-                Rerun
+                Rerun selected run
               </Button>
               <Button
                 size="sm"
@@ -277,7 +280,7 @@ export function ScreenerDetail(): JSX.Element {
                 loading={diffMutation.isPending}
                 disabled={!previousRun}
               >
-                Compare
+                Compare with previous run
               </Button>
               <Button
                 size="sm"
@@ -286,7 +289,7 @@ export function ScreenerDetail(): JSX.Element {
                 onClick={() => setSaveOpen(true)}
                 disabled={activeRun.matched_count === 0}
               >
-                Save as Watchlist
+                Save selected matches
               </Button>
             </span>
           </CardHeader>
@@ -547,9 +550,9 @@ function NewVersionDrawer({
     <Drawer open={open} onOpenChange={onOpenChange}>
       <DrawerContent className="max-w-3xl">
         <DrawerHeader>
-          <DrawerTitle>New version: {screenerName}</DrawerTitle>
+            <DrawerTitle>Duplicate version: {screenerName}</DrawerTitle>
           <DrawerDescription>
-            Versions are immutable. Expression-backed versions preserve their compiled boolean tree.
+            Versions are immutable. Duplicates preserve the latest boolean tree and let you adjust readable metadata or universe source.
           </DrawerDescription>
         </DrawerHeader>
         <DrawerBody className="space-y-3">
@@ -560,8 +563,8 @@ function NewVersionDrawer({
             <div className="space-y-2">
               <Banner
                 severity="info"
-                title="Expression preserved"
-                message="This version was created from a compiled expression. The new version keeps the ALL/ANY/NOT tree intact; edit universe and name here, or compose a new grouped expression from AI/templates."
+                title="Compiled logic preserved"
+                message="This version keeps the ALL/ANY/NOT tree intact. Use AI Composer or a template when you need to change grouped logic."
               />
               <ExpressionPreview expression={baseVersion.expression} title="Preserved boolean tree" />
             </div>
@@ -580,7 +583,7 @@ function NewVersionDrawer({
             loading={create.isPending}
             onClick={() => create.mutate()}
           >
-            Save new version
+            Save duplicate version
           </Button>
         </DrawerFooter>
       </DrawerContent>
@@ -644,8 +647,8 @@ function SaveAsWatchlistDrawer({
               message={
                 <span>
                   {run.matched_count} matched symbols saved.{" "}
-                  <button className="underline" onClick={() => navigate("/watchlists")}>
-                    Open Watchlists
+                  <button className="underline" onClick={() => navigate(`/watchlists?watchlist=${savedId}`)}>
+                    Open created Watchlist
                   </button>
                 </span>
               }

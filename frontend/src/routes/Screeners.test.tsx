@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -130,6 +130,44 @@ describe("<Screeners />", () => {
         },
       },
       { url: "/api/v1/watchlists", body: { watchlists: [] } },
+      {
+        url: "/api/v1/screeners",
+        method: "POST",
+        body: {
+          screener: {
+            id: "44444444-4444-4444-4444-444444444444",
+            name: "Alpaca Fractionable Movers",
+            description: "Day gainers with broker capability gates",
+            tags: ["intraday", "alpaca"],
+            status: "active",
+            created_at: "2026-04-29T10:00:00Z",
+            last_run_at: null,
+            last_run_id: null,
+            version_count: 1,
+            latest_version_id: "55555555-5555-5555-5555-555555555555",
+          },
+          versions: [
+            {
+              id: "55555555-5555-5555-5555-555555555555",
+              screener_id: "44444444-4444-4444-4444-444444444444",
+              version: 1,
+              name: "Alpaca Fractionable Movers",
+              description: null,
+              universe_source: { kind: "market_list", symbols: [], market_list_key: "day_gainers" },
+              criteria: [],
+              expression: null,
+              timeframe: "5m",
+              source_preference: "alpaca",
+              sort_metric: "relative_volume",
+              sort_descending: false,
+              max_results: 25,
+              tags: ["intraday", "alpaca"],
+              created_at: "2026-04-29T10:00:00Z",
+            },
+          ],
+          last_run: null,
+        },
+      },
       { url: "/api/v1/screeners", body: { screeners: [] } },
     ]);
     mount();
@@ -145,6 +183,33 @@ describe("<Screeners />", () => {
     // Doctrine guard: the form never asks the operator for a Watchlist UUID
     // — the picker either lists watchlists by name or shows the empty-state.
     expect(screen.queryByText(/UUID/i)).not.toBeInTheDocument();
+    await user.click(screen.getByText(/Advanced run settings/i));
+    expect(screen.queryByText(/yahoo/i)).not.toBeInTheDocument();
+    await user.clear(screen.getByLabelText(/Display name/i));
+    await user.type(screen.getByLabelText(/Display name/i), "Alpaca Fractionable Movers");
+    await user.selectOptions(screen.getByLabelText(/Timeframe/i), "5m");
+    await user.selectOptions(screen.getByLabelText(/Source preference/i), "alpaca");
+    await user.selectOptions(screen.getByLabelText(/Sort metric/i), "relative_volume");
+    await user.selectOptions(screen.getByLabelText(/Sort direction/i), "asc");
+    await user.clear(screen.getByLabelText(/Max results/i));
+    await user.type(screen.getByLabelText(/Max results/i), "25");
+    await user.type(screen.getByLabelText(/Tags/i), "intraday, alpaca");
+    await user.click(screen.getByRole("button", { name: /^Create Screener$/i }));
+    await waitFor(() => {
+      const createCall = vi.mocked(fetch).mock.calls.find(
+        ([url, init]) => String(url).endsWith("/api/v1/screeners") && init?.method === "POST",
+      );
+      expect(createCall).toBeTruthy();
+      expect(JSON.parse(String(createCall?.[1]?.body))).toMatchObject({
+        name: "Alpaca Fractionable Movers",
+        timeframe: "5m",
+        source_preference: "alpaca",
+        sort_metric: "relative_volume",
+        sort_descending: false,
+        max_results: 25,
+        tags: ["intraday", "alpaca"],
+      });
+    });
   });
 
   it("compiles AI advisory text into visible typed rules before create", async () => {

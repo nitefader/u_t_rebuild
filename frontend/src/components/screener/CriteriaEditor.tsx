@@ -8,6 +8,7 @@ import type {
 } from "@/api/schemas/screener";
 import { Button } from "@/components/ui/Button";
 import { cn } from "@/lib/cn";
+import { metricLabel } from "./criterionFormat";
 
 /**
  * CriteriaEditor — pill-row editor for ScreenerCriterion list.
@@ -154,7 +155,7 @@ function CriterionRow({
       >
         {metrics.map((m) => (
           <option key={m.key} value={m.key}>
-            {m.label}
+            {metricLabel(m.key, m)}
           </option>
         ))}
       </select>
@@ -177,8 +178,8 @@ function CriterionRow({
           onChange={(e) => setValue(e.target.value === "true")}
           className="rounded border border-border bg-bg-inset px-1.5 py-0.5 text-[11px] focus:border-accent focus:outline-none"
         >
-          <option value="true">true</option>
-          <option value="false">false</option>
+          <option value="true">Yes</option>
+          <option value="false">No</option>
         </select>
       ) : field?.value_type === "string" ? (
         <input

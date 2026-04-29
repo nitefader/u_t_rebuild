@@ -163,6 +163,9 @@ export function DiscoveryScheduleControls(props: Target): JSX.Element {
                   <div className="mt-1 text-[11px] text-fg-muted">
                     Timezone: {readableTimezone(schedule.timezone_name)}
                   </div>
+                  <div className="mt-1 text-[11px] text-fg-muted">
+                    Days: {weekdaysText(schedule.weekdays)}
+                  </div>
                   {schedule.last_error ? (
                     <div className="mt-1 text-[11px] text-danger">{schedule.last_error}</div>
                   ) : null}
@@ -176,7 +179,7 @@ export function DiscoveryScheduleControls(props: Target): JSX.Element {
                     onClick={() => runNow.mutate(schedule.schedule_id)}
                     disabled={schedule.status === "archived"}
                   >
-                    Run now
+                    Run schedule now
                   </Button>
                   <Button
                     size="sm"
@@ -368,11 +371,9 @@ function ScheduleDrawer({
             onChange={(e) => setForm((prev) => ({ ...prev, timezone_name: e.target.value || "America/New_York" }))}
             placeholder="America/New_York"
           />
-          <TextField
-            label="Weekdays"
-            value={form.weekdays.join(",")}
-            onChange={(e) => setForm((prev) => ({ ...prev, weekdays: parseWeekdays(e.target.value) }))}
-            placeholder="0,1,2,3,4"
+          <WeekdayPicker
+            value={form.weekdays}
+            onChange={(weekdays) => setForm((prev) => ({ ...prev, weekdays }))}
           />
           {target.targetKind === "watchlist_refresh" ? (
             <Select
@@ -451,7 +452,9 @@ function ExecutionRow({ execution }: { execution: DiscoveryScheduleExecution }):
             {execution.trigger === "run_now" ? "Run now" : "Scheduled"} at {formatTimestamp(execution.started_at)}
           </span>
         </div>
-        <span className="text-fg-subtle">{executionTargetLabel(execution)}</span>
+        <span className="text-fg-subtle" title={executionDebugId(execution)}>
+          {executionTargetLabel(execution)}
+        </span>
       </div>
       {execution.watchlist_snapshot_id ? (
         <div className="mt-1 text-fg-muted">
@@ -520,6 +523,67 @@ function cadenceText(schedule: DiscoverySchedule): string {
   return `daily ${schedule.time_of_day ?? ""}`;
 }
 
+const WEEKDAYS = [
+  { value: 0, label: "Mon" },
+  { value: 1, label: "Tue" },
+  { value: 2, label: "Wed" },
+  { value: 3, label: "Thu" },
+  { value: 4, label: "Fri" },
+  { value: 5, label: "Sat" },
+  { value: 6, label: "Sun" },
+];
+
+function WeekdayPicker({
+  value,
+  onChange,
+}: {
+  value: number[];
+  onChange: (weekdays: number[]) => void;
+}): JSX.Element {
+  const selected = new Set(value);
+  function toggle(day: number): void {
+    const next = selected.has(day)
+      ? value.filter((item) => item !== day)
+      : [...value, day].sort((a, b) => a - b);
+    onChange(next.length ? next : [day]);
+  }
+  return (
+    <div>
+      <div className="mb-1 text-xs text-fg-muted">Weekdays</div>
+      <div className="flex flex-wrap gap-1">
+        {WEEKDAYS.map((day) => {
+          const active = selected.has(day.value);
+          return (
+            <button
+              key={day.value}
+              type="button"
+              onClick={() => toggle(day.value)}
+              className={
+                active
+                  ? "rounded border border-accent bg-accent/20 px-2 py-1 text-xs text-accent"
+                  : "rounded border border-border bg-bg-raised px-2 py-1 text-xs text-fg-muted hover:text-fg"
+              }
+            >
+              {day.label}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function weekdaysText(value: number[]): string {
+  const normalized = [...new Set(value)].sort((a, b) => a - b);
+  const key = normalized.join(",");
+  if (key === "0,1,2,3,4") return "Mon-Fri";
+  if (key === "0,1,2,3,4,5,6") return "Every day";
+  return normalized
+    .map((day) => WEEKDAYS.find((item) => item.value === day)?.label)
+    .filter(Boolean)
+    .join(", ");
+}
+
 function executionTone(status: DiscoveryScheduleExecution["status"]): "ok" | "warn" | "danger" | "info" | "muted" {
   if (status === "completed") return "ok";
   if (status === "blocked") return "warn";
@@ -528,25 +592,19 @@ function executionTone(status: DiscoveryScheduleExecution["status"]): "ok" | "wa
 }
 
 function executionTargetLabel(execution: DiscoveryScheduleExecution): string {
-  if (execution.screener_run_id) return `Screener run evidence ${shortId(execution.screener_run_id)}`;
-  if (execution.watchlist_snapshot_id) return `Watchlist snapshot ${shortId(execution.watchlist_snapshot_id)}`;
+  if (execution.screener_run_id) return "Screener run evidence recorded";
+  if (execution.watchlist_snapshot_id) return "Watchlist snapshot recorded";
   return execution.target_kind === "screener_run" ? "Screener run evidence pending" : "Watchlist snapshot pending";
 }
 
-function shortId(value: string): string {
-  return value.slice(0, 8);
+function executionDebugId(execution: DiscoveryScheduleExecution): string | undefined {
+  if (execution.screener_run_id) return `Screener run id: ${execution.screener_run_id}`;
+  if (execution.watchlist_snapshot_id) return `Watchlist snapshot id: ${execution.watchlist_snapshot_id}`;
+  return undefined;
 }
 
 function readableTimezone(value: string): string {
   return value === "America/New_York" ? "America/New_York (market time)" : value;
-}
-
-function parseWeekdays(value: string): number[] {
-  const parsed = value
-    .split(/[,\s]+/)
-    .map((item) => Number(item))
-    .filter((item) => Number.isInteger(item) && item >= 0 && item <= 6);
-  return parsed.length ? Array.from(new Set(parsed)) : [0, 1, 2, 3, 4];
 }
 
 function invalidate(qc: ReturnType<typeof useQueryClient>): void {

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { fireEvent, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { Deployments } from "./Deployments";
 import { installFetchMock, renderRoute } from "@/test/renderRoute";
 
@@ -220,5 +221,112 @@ describe("<Deployments />", () => {
     await waitFor(() => {
       expect(screen.getByText(/Could not load deployments/i)).toBeInTheDocument();
     });
+  });
+
+  it("bulk deletes selected deployments and reports blocked rows", async () => {
+    const user = userEvent.setup();
+    const now = new Date().toISOString();
+    restore = installFetchMock([
+      {
+        url: "/api/v1/deployments",
+        method: "GET",
+        body: {
+          deployments: [
+            {
+              deployment_id: "33333333-3333-3333-3333-333333333333",
+              name: "Draft Deployment",
+              description: null,
+              strategy_version_id: "44444444-4444-4444-4444-444444444444",
+              watchlist_ids: ["55555555-5555-5555-5555-555555555555"],
+              subscribed_account_ids: ["66666666-6666-6666-6666-666666666666"],
+              lifecycle_status: "draft",
+              runtime_overrides: {},
+              created_at: now,
+              updated_at: now,
+              started_at: null,
+              stopped_at: null,
+            },
+            {
+              deployment_id: "99999999-9999-9999-9999-999999999999",
+              name: "Active Deployment",
+              description: null,
+              strategy_version_id: "44444444-4444-4444-4444-444444444444",
+              watchlist_ids: ["55555555-5555-5555-5555-555555555555"],
+              subscribed_account_ids: ["66666666-6666-6666-6666-666666666666"],
+              lifecycle_status: "active",
+              runtime_overrides: {},
+              created_at: now,
+              updated_at: now,
+              started_at: now,
+              stopped_at: null,
+            },
+          ],
+        },
+      },
+      {
+        url: "/api/v1/watchlists",
+        body: {
+          watchlists: [
+            {
+              watchlist_id: "55555555-5555-5555-5555-555555555555",
+              name: "Entry List",
+              description: null,
+              kind: "static",
+              static_symbols: ["SPY"],
+              dynamic_rules: null,
+              created_at: now,
+              updated_at: now,
+              latest_snapshot_id: null,
+              snapshot_count: 0,
+              status: "active",
+              archived_at: null,
+            },
+          ],
+        },
+      },
+      {
+        url: "/api/v1/strategies",
+        body: {
+          strategies: [
+            {
+              strategy_id: "77777777-7777-7777-7777-777777777777",
+              name: "Opening Range Strategy",
+              description: null,
+              tags: [],
+              status: "active",
+              created_at: now,
+              latest_version_id: "44444444-4444-4444-4444-444444444444",
+              frozen_version_ids: ["44444444-4444-4444-4444-444444444444"],
+              version_count: 1,
+            },
+          ],
+        },
+      },
+      { url: "/api/v1/system/status", body: STATUS_OK },
+      {
+        url: "/api/v1/deployments/33333333-3333-3333-3333-333333333333/delete",
+        method: "POST",
+        body: "",
+        status: 204,
+      },
+      {
+        url: "/api/v1/deployments/99999999-9999-9999-9999-999999999999/delete",
+        method: "POST",
+        body: { detail: "deployment must be DRAFT or STOPPED to delete; pause/stop it first" },
+        status: 400,
+      },
+    ]);
+    renderRoute(<Deployments />);
+    await screen.findByText("Draft Deployment");
+
+    await user.click(screen.getByLabelText(/Select deployment Draft Deployment/i));
+    await user.click(screen.getByLabelText(/Select deployment Active Deployment/i));
+    await user.click(screen.getByRole("button", { name: /Bulk delete/i }));
+    await user.type(screen.getByLabelText(/Type "DELETE 2" to confirm/i), "DELETE 2");
+    await user.type(screen.getByLabelText(/Reason/i), "bulk cleanup");
+    await user.click(screen.getByRole("button", { name: /Delete Selected/i }));
+
+    expect(await screen.findByText(/Deleted 1; 1 blocked/i)).toBeInTheDocument();
+    expect(screen.getByText(/Active Deployment:/i)).toBeInTheDocument();
   });
 });

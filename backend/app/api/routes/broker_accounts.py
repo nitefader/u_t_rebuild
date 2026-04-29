@@ -15,6 +15,10 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException
 
 from backend.app.broker_accounts.models import (
+    AccountRestrictions,
+    AccountRestrictionsUpdateRequest,
+    AccountRiskConfig,
+    AccountRiskConfigUpdateRequest,
     BrokerAccount,
     BrokerAccountCredentialUpdateResponse,
     BrokerAccountDeletionResponse,
@@ -26,6 +30,7 @@ from backend.app.broker_accounts.models import (
     UpdateBrokerAccountDetailsRequest,
 )
 from backend.app.broker_accounts.service import BrokerAccountCreationError
+from backend.app.domain._base import utc_now
 
 if TYPE_CHECKING:
     from backend.app.broker_accounts import BrokerAccountService
@@ -180,6 +185,90 @@ def delete_broker_account(
         )
     except BrokerAccountCreationError as exc:
         raise _operator_error(str(exc)) from exc
+
+
+@router.get("/{account_id}/risk-config", response_model=AccountRiskConfig)
+def get_account_risk_config(
+    account_id: UUID,
+    service: BrokerAccountServiceDependency,
+) -> AccountRiskConfig:
+    store = _runtime_store(service)
+    _load_account_or_404(store, account_id)
+    try:
+        return store.load_account_risk_config(account_id)
+    except KeyError:
+        return AccountRiskConfig(account_id=account_id)
+
+
+@router.put("/{account_id}/risk-config", response_model=AccountRiskConfig)
+def put_account_risk_config(
+    account_id: UUID,
+    request: AccountRiskConfigUpdateRequest,
+    service: BrokerAccountServiceDependency,
+) -> AccountRiskConfig:
+    store = _runtime_store(service)
+    _load_account_or_404(store, account_id)
+    try:
+        existing = store.load_account_risk_config(account_id)
+        version = existing.version + 1
+    except KeyError:
+        version = 1
+    config = AccountRiskConfig(
+        account_id=account_id,
+        version=version,
+        updated_at=utc_now(),
+        **request.model_dump(),
+    )
+    return store.save_account_risk_config(config)
+
+
+@router.get("/{account_id}/restrictions", response_model=AccountRestrictions)
+def get_account_restrictions(
+    account_id: UUID,
+    service: BrokerAccountServiceDependency,
+) -> AccountRestrictions:
+    store = _runtime_store(service)
+    _load_account_or_404(store, account_id)
+    try:
+        return store.load_account_restrictions(account_id)
+    except KeyError:
+        return AccountRestrictions(account_id=account_id)
+
+
+@router.put("/{account_id}/restrictions", response_model=AccountRestrictions)
+def put_account_restrictions(
+    account_id: UUID,
+    request: AccountRestrictionsUpdateRequest,
+    service: BrokerAccountServiceDependency,
+) -> AccountRestrictions:
+    store = _runtime_store(service)
+    _load_account_or_404(store, account_id)
+    try:
+        existing = store.load_account_restrictions(account_id)
+        version = existing.version + 1
+    except KeyError:
+        version = 1
+    restrictions = AccountRestrictions(
+        account_id=account_id,
+        version=version,
+        updated_at=utc_now(),
+        **request.model_dump(),
+    )
+    return store.save_account_restrictions(restrictions)
+
+
+def _runtime_store(service: Any) -> Any:
+    runtime_store = getattr(service, "_runtime_store", None)
+    if runtime_store is not None:
+        return runtime_store
+    raise HTTPException(status_code=503, detail="broker account runtime store is not configured")
+
+
+def _load_account_or_404(store: Any, account_id: UUID) -> BrokerAccount:
+    try:
+        return store.load_broker_account(account_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=f"unknown broker account: {account_id}") from exc
 
 
 def _operator_error(message: str) -> Exception:

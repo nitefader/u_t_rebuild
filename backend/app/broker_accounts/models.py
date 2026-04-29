@@ -2,9 +2,10 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import StrEnum
+from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from backend.app.brokers import BrokerAccountSnapshot, BrokerSyncState
 from backend.app.domain import TradingMode
@@ -132,3 +133,109 @@ class BrokerAccountDeletionResponse(BaseModel):
     message: str
     blockers: tuple[str, ...] = ()
     archived_account: BrokerAccount | None = None
+
+
+class AccountRiskConfig(BaseModel):
+    """Account-scoped risk posture used by the operator Risk Card.
+
+    This is persisted configuration evidence. It does not execute sizing by
+    itself and does not replace the RiskResolver/Governor path.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    account_id: UUID
+    version: int = Field(default=1, ge=1)
+    sizing_method: Literal["fixed_shares", "fixed_dollar", "risk_percent_equity"] = "risk_percent_equity"
+    fixed_shares: float | None = Field(default=None, gt=0)
+    fixed_notional: float | None = Field(default=None, gt=0)
+    risk_per_trade_pct: float | None = Field(default=1.0, gt=0, le=100)
+    max_position_notional: float | None = Field(default=None, gt=0)
+    max_open_positions: int | None = Field(default=5, gt=0)
+    max_symbol_concentration_pct: float | None = Field(default=None, gt=0, le=100)
+    max_gross_exposure_pct: float | None = Field(default=None, gt=0)
+    max_net_exposure_pct: float | None = Field(default=None, gt=0)
+    max_daily_loss_pct: float | None = Field(default=None, gt=0, le=100)
+    max_drawdown_pct: float | None = Field(default=None, gt=0, le=100)
+    fractional_quantity_allowed: bool = True
+    whole_share_rounding: Literal["floor", "round", "ceil"] = "floor"
+    updated_at: datetime = Field(default_factory=utc_now)
+
+    @model_validator(mode="after")
+    def validate_sizing_input(self) -> "AccountRiskConfig":
+        if self.sizing_method == "fixed_shares" and self.fixed_shares is None:
+            raise ValueError("fixed_shares is required when sizing_method is fixed_shares")
+        if self.sizing_method == "fixed_dollar" and self.fixed_notional is None:
+            raise ValueError("fixed_notional is required when sizing_method is fixed_dollar")
+        if self.sizing_method == "risk_percent_equity" and self.risk_per_trade_pct is None:
+            raise ValueError("risk_per_trade_pct is required when sizing_method is risk_percent_equity")
+        return self
+
+
+class AccountRiskConfigUpdateRequest(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    sizing_method: Literal["fixed_shares", "fixed_dollar", "risk_percent_equity"] = "risk_percent_equity"
+    fixed_shares: float | None = Field(default=None, gt=0)
+    fixed_notional: float | None = Field(default=None, gt=0)
+    risk_per_trade_pct: float | None = Field(default=1.0, gt=0, le=100)
+    max_position_notional: float | None = Field(default=None, gt=0)
+    max_open_positions: int | None = Field(default=5, gt=0)
+    max_symbol_concentration_pct: float | None = Field(default=None, gt=0, le=100)
+    max_gross_exposure_pct: float | None = Field(default=None, gt=0)
+    max_net_exposure_pct: float | None = Field(default=None, gt=0)
+    max_daily_loss_pct: float | None = Field(default=None, gt=0, le=100)
+    max_drawdown_pct: float | None = Field(default=None, gt=0, le=100)
+    fractional_quantity_allowed: bool = True
+    whole_share_rounding: Literal["floor", "round", "ceil"] = "floor"
+
+    @model_validator(mode="after")
+    def validate_sizing_input(self) -> "AccountRiskConfigUpdateRequest":
+        if self.sizing_method == "fixed_shares" and self.fixed_shares is None:
+            raise ValueError("fixed_shares is required when sizing_method is fixed_shares")
+        if self.sizing_method == "fixed_dollar" and self.fixed_notional is None:
+            raise ValueError("fixed_notional is required when sizing_method is fixed_dollar")
+        if self.sizing_method == "risk_percent_equity" and self.risk_per_trade_pct is None:
+            raise ValueError("risk_per_trade_pct is required when sizing_method is risk_percent_equity")
+        return self
+
+
+class AccountRestrictions(BaseModel):
+    """Account-scoped allow/block posture surfaced on the Risk Card."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    account_id: UUID
+    version: int = Field(default=1, ge=1)
+    symbol_blocklist: tuple[str, ...] = ()
+    asset_class_blocklist: tuple[str, ...] = ()
+    long_only: bool = False
+    short_only: bool = False
+    extended_hours_allowed: bool = False
+    time_of_day_windows: tuple[dict[str, object], ...] = ()
+    notes: str | None = None
+    updated_at: datetime = Field(default_factory=utc_now)
+
+    @model_validator(mode="after")
+    def validate_direction_flags(self) -> "AccountRestrictions":
+        if self.long_only and self.short_only:
+            raise ValueError("long_only and short_only cannot both be true")
+        return self
+
+
+class AccountRestrictionsUpdateRequest(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    symbol_blocklist: tuple[str, ...] = ()
+    asset_class_blocklist: tuple[str, ...] = ()
+    long_only: bool = False
+    short_only: bool = False
+    extended_hours_allowed: bool = False
+    time_of_day_windows: tuple[dict[str, object], ...] = ()
+    notes: str | None = None
+
+    @model_validator(mode="after")
+    def validate_direction_flags(self) -> "AccountRestrictionsUpdateRequest":
+        if self.long_only and self.short_only:
+            raise ValueError("long_only and short_only cannot both be true")
+        return self

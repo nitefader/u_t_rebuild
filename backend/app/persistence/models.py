@@ -61,6 +61,18 @@ CREATE TABLE IF NOT EXISTS broker_accounts (
     created_at TEXT NOT NULL,
     payload TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS account_risk_configs (
+    account_id TEXT PRIMARY KEY,
+    version INTEGER NOT NULL,
+    updated_at TEXT NOT NULL,
+    payload TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS account_restrictions (
+    account_id TEXT PRIMARY KEY,
+    version INTEGER NOT NULL,
+    updated_at TEXT NOT NULL,
+    payload TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS risk_plans (
     risk_plan_id TEXT PRIMARY KEY,
     name TEXT NOT NULL,

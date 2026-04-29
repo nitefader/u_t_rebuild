@@ -155,4 +155,133 @@ describe("<Watchlists />", () => {
       expect(screen.getByText(/Could not load watchlists/i)).toBeInTheDocument();
     });
   });
+
+  it("bulk deletes selected watchlists and reports audit-history blockers", async () => {
+    const user = userEvent.setup();
+    const now = new Date().toISOString();
+    restore = installFetchMock([
+      {
+        url: "/api/v1/watchlists",
+        method: "GET",
+        body: {
+          watchlists: [
+            {
+              watchlist_id: "22222222-2222-2222-2222-222222222222",
+              name: "Disposable List",
+              description: null,
+              kind: "static",
+              static_symbols: ["AAPL"],
+              dynamic_rules: null,
+              created_at: now,
+              updated_at: now,
+              latest_snapshot_id: null,
+              snapshot_count: 0,
+              status: "active",
+              archived_at: null,
+            },
+            {
+              watchlist_id: "33333333-3333-3333-3333-333333333333",
+              name: "Audited Dynamic List",
+              description: null,
+              kind: "dynamic",
+              static_symbols: [],
+              dynamic_rules: { source_type: "screener_version" },
+              created_at: now,
+              updated_at: now,
+              latest_snapshot_id: "snap-1",
+              snapshot_count: 1,
+              status: "active",
+              archived_at: null,
+            },
+          ],
+        },
+      },
+      { url: "/api/v1/system/status", body: STATUS_OK },
+      {
+        url: "/api/v1/watchlists/22222222-2222-2222-2222-222222222222/delete",
+        method: "POST",
+        body: "",
+        status: 204,
+      },
+      {
+        url: "/api/v1/watchlists/33333333-3333-3333-3333-333333333333/delete",
+        method: "POST",
+        body: { detail: "watchlist has snapshot history; archive it instead of deleting audit evidence" },
+        status: 400,
+      },
+    ]);
+    renderRoute(<Watchlists />);
+    await screen.findByText("Disposable List");
+
+    await user.click(screen.getByLabelText(/Select watchlist Disposable List/i));
+    await user.click(screen.getByLabelText(/Select watchlist Audited Dynamic List/i));
+    await user.click(screen.getByRole("button", { name: /Bulk delete/i }));
+    await user.type(screen.getByLabelText(/Type "DELETE 2" to confirm/i), "DELETE 2");
+    await user.type(screen.getByLabelText(/Reason/i), "bulk cleanup");
+    await user.click(screen.getByRole("button", { name: /Delete Selected/i }));
+
+    expect(await screen.findByText(/Deleted 1; 1 blocked/i)).toBeInTheDocument();
+    expect(screen.getByText(/Audited Dynamic List:/i)).toBeInTheDocument();
+  });
+
+  it("bulk archives selected watchlists through the safe history-preserving path", async () => {
+    const user = userEvent.setup();
+    const now = new Date().toISOString();
+    restore = installFetchMock([
+      {
+        url: "/api/v1/watchlists",
+        method: "GET",
+        body: {
+          watchlists: [
+            {
+              watchlist_id: "22222222-2222-2222-2222-222222222222",
+              name: "Archive Me",
+              description: null,
+              kind: "static",
+              static_symbols: ["AAPL"],
+              dynamic_rules: null,
+              created_at: now,
+              updated_at: now,
+              latest_snapshot_id: null,
+              snapshot_count: 0,
+              status: "active",
+              archived_at: null,
+            },
+          ],
+        },
+      },
+      { url: "/api/v1/system/status", body: STATUS_OK },
+      {
+        url: "/api/v1/watchlists/22222222-2222-2222-2222-222222222222/archive",
+        method: "POST",
+        body: {
+          watchlist: {
+            watchlist_id: "22222222-2222-2222-2222-222222222222",
+            name: "Archive Me",
+            description: null,
+            kind: "static",
+            static_symbols: ["AAPL"],
+            dynamic_rules: null,
+            created_at: now,
+            updated_at: now,
+            latest_snapshot_id: null,
+            snapshot_count: 0,
+            status: "archived",
+            archived_at: now,
+          },
+          snapshots: [],
+        },
+      },
+    ]);
+    renderRoute(<Watchlists />);
+    await screen.findByText("Archive Me");
+
+    await user.click(screen.getByLabelText(/Select watchlist Archive Me/i));
+    await user.click(screen.getByRole("button", { name: /Archive selected/i }));
+    await user.type(screen.getByLabelText(/Type "ARCHIVE 1" to confirm/i), "ARCHIVE 1");
+    await user.type(screen.getByLabelText(/Reason/i), "bulk archive");
+    await user.click(screen.getByRole("button", { name: /Archive Selected/i }));
+
+    expect(await screen.findByText(/Archived 1 Watchlist/i)).toBeInTheDocument();
+  });
 });

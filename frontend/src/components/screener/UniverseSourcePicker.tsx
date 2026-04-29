@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { ScreenerApi } from "@/api/screener";
 import { WatchlistsApi } from "@/api/watchlists";
@@ -59,9 +59,15 @@ export function UniverseSourcePicker(props: UniverseSourcePickerProps): JSX.Elem
     }
   }
 
-  const [explicitDraft, setExplicitDraft] = useState<string>(
-    value.kind === "explicit" ? (value.symbols ?? []).join(", ") : "",
+  const explicitValue = useMemo(
+    () => (value.kind === "explicit" ? (value.symbols ?? []).join(", ") : ""),
+    [value.kind, value.symbols],
   );
+  const [explicitDraft, setExplicitDraft] = useState<string>(explicitValue);
+
+  useEffect(() => {
+    setExplicitDraft(explicitValue);
+  }, [explicitValue]);
 
   function commitExplicit(text: string): void {
     setExplicitDraft(text);

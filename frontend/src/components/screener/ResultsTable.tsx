@@ -7,6 +7,7 @@ import type {
 import { StatusBadge, type StatusTone } from "@/components/badges/StatusBadge";
 import { Sparkline } from "./Sparkline";
 import { cn } from "@/lib/cn";
+import { formatFieldValue } from "./criterionFormat";
 
 /**
  * ResultsTable: chart-first Screener result grid.
@@ -23,6 +24,8 @@ export interface ResultsTableProps {
 
 export function ResultsTable(props: ResultsTableProps): JSX.Element {
   const { results, metrics } = props;
+  const [metricPreset, setMetricPreset] = useState<"trader" | "audit" | "all">("trader");
+  const [matchedOnly, setMatchedOnly] = useState(false);
 
   const visibleMetricKeys: ScreenerMetric[] = useMemo(() => {
     if (props.shownMetrics?.length) return props.shownMetrics;
@@ -34,16 +37,23 @@ export function ResultsTable(props: ResultsTableProps): JSX.Element {
         }
       }
     }
-    return metrics
+    const allVisible = metrics
       .map((m) => m.key as ScreenerMetric)
       .filter((k) => seen.has(k));
-  }, [props.shownMetrics, results, metrics]);
+    if (metricPreset === "all") return allVisible;
+    const preset = metricPreset === "audit" ? AUDIT_METRICS : TRADER_METRICS;
+    return preset.filter((key) => allVisible.includes(key));
+  }, [props.shownMetrics, results, metrics, metricPreset]);
 
   const [sortColumn, setSortColumn] = useState<"symbol" | "matched" | ScreenerMetric>("matched");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
+  const displayedResults = useMemo(
+    () => (matchedOnly ? results.filter((row) => row.matched) : results),
+    [matchedOnly, results],
+  );
 
   const sorted = useMemo(() => {
-    const arr = [...results];
+    const arr = [...displayedResults];
     arr.sort((a, b) => {
       const aV = sortValue(a, sortColumn);
       const bV = sortValue(b, sortColumn);
@@ -51,7 +61,7 @@ export function ResultsTable(props: ResultsTableProps): JSX.Element {
       return sortDir === "asc" ? cmp : -cmp;
     });
     return arr;
-  }, [results, sortColumn, sortDir]);
+  }, [displayedResults, sortColumn, sortDir]);
 
   function header(key: typeof sortColumn, label: string, align: "left" | "right" = "left"): JSX.Element {
     const active = sortColumn === key;
@@ -85,72 +95,126 @@ export function ResultsTable(props: ResultsTableProps): JSX.Element {
   }
 
   return (
-    <div className="overflow-x-auto rounded border border-border">
-      <table className="ut-table">
-        <thead>
-          <tr>
-            {header("matched", "Match")}
-            {header("symbol", "Symbol")}
-            <th className="px-2 py-1 text-left text-[10px] font-semibold uppercase tracking-wide text-fg-muted">
-              Company / capability
-            </th>
-            <th className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-fg-muted">
-              30-bar trail
-            </th>
-            {visibleMetricKeys.map((k) => {
-              const def = metrics.find((m) => m.key === k);
-              return header(k, def?.label ?? k, "right");
-            })}
-            <th className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-fg-muted">
-              Why blocked
-            </th>
-          </tr>
-        </thead>
-        <tbody>
-          {sorted.map((row) => (
-            <tr key={row.symbol} className={row.matched ? "" : "opacity-60"}>
-              <td className="px-2 py-1">
-                {row.matched ? (
-                  <StatusBadge tone="ok">match</StatusBadge>
-                ) : (
-                  <StatusBadge tone="muted">no</StatusBadge>
-                )}
-              </td>
-              <td className="px-2 py-1 font-medium">{row.symbol}</td>
-              <td className="px-2 py-1 text-[11px]">
-                <div className="max-w-48 truncate text-fg">
-                  {typeof row.metrics["broker.name"] === "string" && row.metrics["broker.name"]
-                    ? row.metrics["broker.name"]
-                    : "-"}
-                </div>
-                <div className="mt-0.5 flex flex-wrap gap-1">
-                  {capabilityBadges(row).map((badge) => (
-                    <StatusBadge key={badge.label} tone={badge.tone} size="sm">
-                      {badge.label}
-                    </StatusBadge>
-                  ))}
-                </div>
-              </td>
-              <td className="px-2 py-1">
-                <Sparkline values={row.sparkline ?? []} />
-              </td>
-              {visibleMetricKeys.map((k) => {
-                const value = row.metrics[k] ?? null;
-                const unit = metrics.find((m) => m.key === k)?.unit ?? "";
-                return (
-                  <td key={k} className="px-2 py-1 text-right font-mono text-[11px]">
-                    {value === null ? "-" : formatValue(value, unit)}
-                  </td>
-                );
-              })}
-              <td className="px-2 py-1 text-[11px] text-fg-muted">{whyBlocked(row)}</td>
-            </tr>
+    <div className="space-y-2">
+      <div className="flex flex-wrap items-center justify-between gap-2 text-[11px]">
+        <div className="flex flex-wrap items-center gap-1">
+          <span className="text-fg-muted">Columns</span>
+          {(["trader", "audit", "all"] as const).map((preset) => (
+            <button
+              key={preset}
+              type="button"
+              onClick={() => setMetricPreset(preset)}
+              className={
+                metricPreset === preset
+                  ? "rounded border border-accent bg-accent/20 px-2 py-0.5 text-accent"
+                  : "rounded border border-border bg-bg-raised px-2 py-0.5 text-fg-muted hover:text-fg"
+              }
+            >
+              {preset === "trader" ? "Trader" : preset === "audit" ? "Audit" : "All"}
+            </button>
           ))}
-        </tbody>
-      </table>
+        </div>
+        <button
+          type="button"
+          onClick={() => setMatchedOnly((current) => !current)}
+          className={
+            matchedOnly
+              ? "rounded border border-accent bg-accent/20 px-2 py-0.5 text-accent"
+              : "rounded border border-border bg-bg-raised px-2 py-0.5 text-fg-muted hover:text-fg"
+          }
+        >
+          {matchedOnly ? "Matched only" : "All rows"}
+        </button>
+      </div>
+      <div className="overflow-x-auto rounded border border-border">
+        <table className="ut-table">
+          <thead>
+            <tr>
+              {header("matched", "Match")}
+              {header("symbol", "Symbol")}
+              <th className="px-2 py-1 text-left text-[10px] font-semibold uppercase tracking-wide text-fg-muted">
+                Company / capability
+              </th>
+              <th className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-fg-muted">
+                30-bar trail
+              </th>
+              {visibleMetricKeys.map((k) => {
+                const def = metrics.find((m) => m.key === k);
+                return header(k, def?.label ?? k, "right");
+              })}
+              <th className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-fg-muted">
+                Decision reason
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            {sorted.map((row) => (
+              <tr key={row.symbol} className={row.matched ? "" : "opacity-60"}>
+                <td className="px-2 py-1">
+                  {row.matched ? (
+                    <StatusBadge tone="ok">match</StatusBadge>
+                  ) : (
+                    <StatusBadge tone="muted">no</StatusBadge>
+                  )}
+                </td>
+                <td className="px-2 py-1 font-medium">{row.symbol}</td>
+                <td className="px-2 py-1 text-[11px]">
+                  <div className="max-w-48 truncate text-fg">
+                    {typeof row.metrics["broker.name"] === "string" && row.metrics["broker.name"]
+                      ? row.metrics["broker.name"]
+                      : "-"}
+                  </div>
+                  <div className="mt-0.5 flex flex-wrap gap-1">
+                    {capabilityBadges(row).map((badge) => (
+                      <StatusBadge key={badge.label} tone={badge.tone} size="sm">
+                        {badge.label}
+                      </StatusBadge>
+                    ))}
+                  </div>
+                </td>
+                <td className="px-2 py-1">
+                  <Sparkline values={row.sparkline ?? []} />
+                </td>
+                {visibleMetricKeys.map((k) => {
+                  const value = row.metrics[k] ?? null;
+                  const unit = metrics.find((m) => m.key === k)?.unit ?? "";
+                  return (
+                    <td key={k} className="px-2 py-1 text-right font-mono text-[11px]">
+                      {value === null ? "-" : formatValue(value, unit)}
+                    </td>
+                  );
+                })}
+                <td className="px-2 py-1 text-[11px] text-fg-muted">{decisionReason(row)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }
+
+const TRADER_METRICS: ScreenerMetric[] = [
+  "price",
+  "change_pct",
+  "gap_pct",
+  "relative_volume",
+  "avg_volume_20d",
+  "rsi_14",
+  "atr_14_pct",
+];
+
+const AUDIT_METRICS: ScreenerMetric[] = [
+  "price",
+  "relative_volume",
+  "broker.tradable",
+  "broker.fractionable",
+  "broker.shortable",
+  "broker.easy_to_borrow",
+  "broker.active",
+  "broker.exchange",
+  "broker.asset_class",
+];
 
 function sortValue(row: ScreenerResultRow, col: "symbol" | "matched" | ScreenerMetric): number | string {
   if (col === "symbol") return row.symbol;
@@ -169,21 +233,9 @@ function compare(a: number | string, b: number | string): number {
 }
 
 function formatValue(value: number | string | boolean, unit: string): string {
-  if (typeof value === "boolean") return value ? "yes" : "no";
-  if (typeof value === "string") return value || "-";
-  if (unit === "$") return `$${value.toFixed(2)}`;
-  if (unit === "%") {
-    const sign = value > 0 ? "+" : "";
-    return `${sign}${value.toFixed(2)}%`;
-  }
-  if (unit === "x") return `${value.toFixed(2)}x`;
-  if (unit === "shares") {
-    if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`;
-    if (value >= 1_000) return `${(value / 1_000).toFixed(1)}K`;
-    return value.toFixed(0);
-  }
-  if (unit === "0..100") return value.toFixed(1);
-  return value.toFixed(2);
+  const formatted = formatFieldValue(value, unit);
+  if (typeof value === "number" && unit === "%" && value > 0) return `+${formatted}`;
+  return formatted;
 }
 
 function capabilityBadges(row: ScreenerResultRow): { label: string; tone: StatusTone }[] {
@@ -220,7 +272,7 @@ function capabilityBadges(row: ScreenerResultRow): { label: string; tone: Status
   return badges.slice(0, 6);
 }
 
-function whyBlocked(row: ScreenerResultRow): string {
+function decisionReason(row: ScreenerResultRow): string {
   const reasons = [
     ...evidenceWarnings(row),
     ...row.blocked_reasons,
