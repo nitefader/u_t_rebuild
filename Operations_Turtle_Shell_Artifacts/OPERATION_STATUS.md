@@ -1,6 +1,6 @@
 # Operation Turtle Shell Status
 
-Last updated: 2026-04-29 13:44:32 -04:00
+Last updated: 2026-04-29 13:46:15 -04:00
 
 ## Date And Time Syntax
 
@@ -26,17 +26,17 @@ drawer). It does not add trading, broker submit, or a second runtime root.
 
 ## Executive Briefing
 
-Work session status: release_cleanup_pushed
+Work session status: final_schema_dirty_file_commit_in_progress
 
 Agent role: Codex - Operation Turtle Shell backend doctrine spine
 
 Started at: 2026-04-27 22:28:16 -04:00
 
-Last heartbeat: 2026-04-29 13:44:32 -04:00
+Last heartbeat: 2026-04-29 13:46:15 -04:00
 
 Ended at: 2026-04-29 13:44:32 -04:00
 
-Expected next checkpoint: Fix Account Detail deployment projection so persisted subscribed Deployments appear there; then commit/push that separate slice.
+Expected next checkpoint: Commit/push final Strategy Composer schema dirty file, then confirm the working tree is clean.
 
 Operator urgency:
 
@@ -72,6 +72,21 @@ Codex
 - Codex doctrine reviewer
 
 ## Latest Completed Action
+
+Final dirty-file cleanup:
+
+- Started at: 2026-04-29 13:44:32 -04:00
+- Completed verification at: 2026-04-29 13:46:15 -04:00
+- File:
+  - `frontend/src/api/schemas/strategyComposer.ts`
+- Scope:
+  - StrategyControls frontend schema now accepts session windows, no-new-entry/force-flat times, time-based exit values, cooldown/trade caps, feature refs, and regime filter refs.
+  - Client schema validation mirrors backend constraints for mutually exclusive cooldowns, a single time-based-exit unit, and force-flat after no-new-entry.
+- Verification:
+  - `npm.cmd run typecheck` in `frontend/` -> passed.
+  - `npx.cmd vitest run src/routes/StrategyCompose.test.tsx src/components/strategy_builder/editor/sections/StrategyControlsSection.test.tsx src/components/strategy_builder/editor/coherenceValidator.test.ts` -> 54 passed.
+- Next action:
+  - Commit and push this final dirty file.
 
 Release push complete:
 

@@ -278,6 +278,23 @@ export type AllowedDirections = z.infer<typeof AllowedDirectionsSchema>;
 export const SessionPreferenceSchema = z.enum(["regular_only", "regular_and_extended"]);
 export type SessionPreference = z.infer<typeof SessionPreferenceSchema>;
 
+export const SessionNameSchema = z.enum(["premarket", "regular", "after_hours"]);
+export type SessionName = z.infer<typeof SessionNameSchema>;
+
+// Backend serializes datetime.time as "HH:MM[:SS[.ffffff]]". Accept the common shapes.
+const TimeOfDaySchema = z
+  .string()
+  .regex(/^\d{2}:\d{2}(:\d{2}(\.\d+)?)?$/, "expected HH:MM or HH:MM:SS");
+
+export const SessionWindowSchema = z
+  .object({
+    session: SessionNameSchema.default("regular"),
+    start: TimeOfDaySchema,
+    end: TimeOfDaySchema,
+  })
+  .passthrough();
+export type SessionWindow = z.infer<typeof SessionWindowSchema>;
+
 /**
  * Page-1 wizard checkboxes — what the operator declared up front before AI.
  * Mirrors backend `WizardIntent` (extra="forbid"; do not add fields casually).
@@ -309,9 +326,57 @@ export const StrategyControlsVersionSchema = z
     allowed_directions: AllowedDirectionsSchema.default("long"),
     higher_timeframe_confirmation_required: z.boolean().default(false),
     session_preference: SessionPreferenceSchema.default("regular_only"),
+    session_windows: z.array(SessionWindowSchema).default([]),
+    avoid_first_minutes: z.number().int().min(0).nullable().optional(),
+    no_new_entries_after: TimeOfDaySchema.nullable().optional(),
+    force_flat_by: TimeOfDaySchema.nullable().optional(),
+    time_based_exit_after_bars: z.number().int().min(1).nullable().optional(),
+    time_based_exit_after_minutes: z.number().int().min(1).nullable().optional(),
+    time_based_exit_after_days: z.number().int().min(1).nullable().optional(),
+    cooldown_bars: z.number().int().min(0).nullable().optional(),
+    cooldown_minutes: z.number().int().min(0).nullable().optional(),
+    max_trades_per_session: z.number().int().min(1).nullable().optional(),
+    max_trades_per_day: z.number().int().min(1).nullable().optional(),
     earnings_news_blackout_enabled: z.boolean().default(false),
+    feature_refs: z.array(z.string()).default([]),
+    regime_filter_refs: z.array(z.string()).default([]),
   })
-  .passthrough();
+  .passthrough()
+  .superRefine((value, ctx) => {
+    // Mirrors backend StrategyControlsVersion.validate_cooldown.
+    if (value.cooldown_bars != null && value.cooldown_minutes != null) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["cooldown_minutes"],
+        message: "use cooldown_bars or cooldown_minutes, not both",
+      });
+    }
+    // Mirrors backend StrategyControlsVersion.validate_time_based_exit.
+    const exitUnits = [
+      value.time_based_exit_after_bars,
+      value.time_based_exit_after_minutes,
+      value.time_based_exit_after_days,
+    ].filter((v) => v != null).length;
+    if (exitUnits > 1) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["time_based_exit_after_minutes"],
+        message: "time-based exit accepts at most one of bars / minutes / days",
+      });
+    }
+    // Mirrors backend StrategyControlsVersion.validate_force_flat_after_no_new_entries.
+    if (
+      value.no_new_entries_after != null &&
+      value.force_flat_by != null &&
+      value.force_flat_by < value.no_new_entries_after
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["force_flat_by"],
+        message: "force_flat_by must be at or after no_new_entries_after",
+      });
+    }
+  });
 export type StrategyControlsVersion = z.infer<typeof StrategyControlsVersionSchema>;
 
 // ---------- ExecutionStyleVersion (passthrough; UI reads .preset.kind only) --
