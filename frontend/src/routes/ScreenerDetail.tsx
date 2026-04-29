@@ -259,7 +259,7 @@ export function ScreenerDetail(): JSX.Element {
               <span className="text-[11px] text-fg-muted">
                 Selected run: {relativeTime(activeRun.started_at)}
               </span>
-              <StatusBadge tone="neutral">{activeRun.run_kind}</StatusBadge>
+              <StatusBadge tone="neutral">{runKindLabel(activeRun.run_kind)}</StatusBadge>
               {activeRun.cache_hit_rate !== null && activeRun.cache_hit_rate !== undefined ? (
                 <StatusBadge tone="info">cache {(activeRun.cache_hit_rate * 100).toFixed(0)}%</StatusBadge>
               ) : null}
@@ -289,7 +289,7 @@ export function ScreenerDetail(): JSX.Element {
                 onClick={() => setSaveOpen(true)}
                 disabled={activeRun.matched_count === 0}
               >
-                Save selected matches
+                Save matched symbols as Watchlist
               </Button>
             </span>
           </CardHeader>
@@ -356,7 +356,7 @@ function ScreenerOverview({
         <CardTitle>Overview</CardTitle>
         <span className="flex flex-wrap items-center gap-2">
           <StatusBadge tone={screener.status === "active" ? "ok" : screener.status === "archived" ? "muted" : "info"}>
-            {screener.status}
+            {prettyKey(screener.status)}
           </StatusBadge>
           <StatusBadge tone="neutral">v{version.version}</StatusBadge>
           <StatusBadge tone="info">{criteriaCount} rules</StatusBadge>
@@ -378,7 +378,9 @@ function ScreenerOverview({
         <div>
           <div className="text-fg-muted">Sort by</div>
           <div className="mt-0.5">
-            {version.sort_metric ? `${version.sort_metric} / ${version.sort_descending ? "desc" : "asc"}` : "matched first"}
+            {version.sort_metric
+              ? `${prettyKey(version.sort_metric)} / ${version.sort_descending ? "High to low" : "Low to high"}`
+              : "Matched first"}
           </div>
         </div>
         <div>
@@ -417,7 +419,7 @@ function RunTabs({
         >
           <span className="font-medium">{relativeTime(r.started_at)}</span>
           <StatusBadge tone={r.status === "completed" ? "ok" : r.status === "failed" ? "danger" : "neutral"} size="sm" className="ml-1">
-            {r.status}
+            {prettyKey(r.status)}
           </StatusBadge>
           <span className="ml-1 text-fg-muted">
             {r.matched_count}/{r.universe_size}
@@ -438,7 +440,7 @@ function RunEvidence({ run }: { run: ScreenerRun }): JSX.Element {
         <div className="mt-1 flex flex-wrap gap-1">
           {run.sources_used.length ? run.sources_used.map((source) => (
             <StatusBadge key={source} tone="info" size="sm">
-              {source}
+              {sourceLabelFromKey(source)}
             </StatusBadge>
           )) : <span className="text-fg-subtle">No source evidence recorded</span>}
         </div>
@@ -633,7 +635,7 @@ function SaveAsWatchlistDrawer({
     <Drawer open={open} onOpenChange={onOpenChange}>
       <DrawerContent className="max-w-md">
         <DrawerHeader>
-          <DrawerTitle>Save matches as Watchlist</DrawerTitle>
+          <DrawerTitle>Save matched symbols as Watchlist</DrawerTitle>
           <DrawerDescription>
             Creates a new entry Watchlist. Static freezes symbols; dynamic refreshes from this Screener lineage.
           </DrawerDescription>
@@ -704,8 +706,20 @@ function describeUniverse(source: ScreenerUniverseSource, watchlistName: string 
 function prettyKey(key: string): string {
   return key
     .split("_")
-    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+    .join(" ")
+    .split(".")
+    .join(" ")
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((w) => (w.toLowerCase() === "alpaca" ? "Alpaca" : w.charAt(0).toUpperCase() + w.slice(1)))
     .join(" ");
+}
+
+function runKindLabel(kind: string): string {
+  if (kind === "run") return "Initial run";
+  if (kind === "rerun") return "Rerun";
+  if (kind === "scheduled") return "Scheduled run";
+  return prettyKey(kind);
 }
 
 function watchlistNameFor(
@@ -735,12 +749,35 @@ function sourceRecordSummary(record: Record<string, unknown>): string {
     .map(([key, value]) => {
       if (value && typeof value === "object") {
         const obj = value as Record<string, unknown>;
-        const detail = obj.as_of ?? obj.provider ?? obj.feed ?? obj.status ?? obj.source;
-        return detail ? `${prettyKey(key)}: ${String(detail)}` : prettyKey(key);
+        return sourceObjectSummary(key, obj);
       }
-      return `${prettyKey(key)}: ${String(value)}`;
+      return `${sourceLabelFromKey(key)}: ${String(value)}`;
     })
     .join(" / ");
+}
+
+function sourceObjectSummary(key: string, obj: Record<string, unknown>): string {
+  const label = sourceLabelFromKey(key);
+  const asOf = typeof obj.as_of === "string" ? formatTimestamp(obj.as_of) : null;
+  const feed = typeof obj.feed === "string" ? obj.feed.toUpperCase() : null;
+  const provider = typeof obj.provider === "string" ? prettyKey(obj.provider) : null;
+  const status = typeof obj.status === "string" ? prettyKey(obj.status) : null;
+  const source = typeof obj.source === "string" ? sourceLabelFromKey(obj.source) : null;
+  const details = [asOf, feed, provider, status, source].filter(Boolean);
+  return details.length ? `${label}: ${details.join(", ")}` : label;
+}
+
+function sourceLabelFromKey(key: string): string {
+  const labels: Record<string, string> = {
+    alpaca: "Alpaca",
+    alpaca_assets: "Alpaca asset capability",
+    alpaca_market_list: "Alpaca market list",
+    alpaca_bars: "Alpaca bars",
+    data_center: "Data Center cache",
+    historical_dataset: "Historical dataset",
+    screener_run: "Screener run",
+  };
+  return labels[key] ?? prettyKey(key);
 }
 
 function errorText(e: unknown): string {

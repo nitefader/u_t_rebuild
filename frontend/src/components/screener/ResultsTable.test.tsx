@@ -114,7 +114,7 @@ describe("<ResultsTable /> capability evidence", () => {
     expect(screen.getByText(/Tradable at Alpaca/i)).toBeInTheDocument();
     expect(screen.getByText(/Decision reason/i)).toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: /^All rows$/i }));
+    await user.click(screen.getByRole("button", { name: /^Show matches only$/i }));
     expect(screen.getByText("NVDA")).toBeInTheDocument();
     expect(screen.queryByText("TSLA")).not.toBeInTheDocument();
   });

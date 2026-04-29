@@ -1,6 +1,6 @@
 # Operation Turtle Shell Status
 
-Last updated: 2026-04-29 13:52:03 -04:00
+Last updated: 2026-04-29 14:14:35 -04:00
 
 ## Date And Time Syntax
 
@@ -26,17 +26,17 @@ drawer). It does not add trading, broker submit, or a second runtime root.
 
 ## Executive Briefing
 
-Work session status: release_cleanup_complete
+Work session status: scanner_watchlist_best_practices_cleanup_complete
 
 Agent role: Codex - Operation Turtle Shell backend doctrine spine
 
 Started at: 2026-04-27 22:28:16 -04:00
 
-Last heartbeat: 2026-04-29 13:52:03 -04:00
+Last heartbeat: 2026-04-29 14:14:35 -04:00
 
-Ended at: 2026-04-29 13:52:03 -04:00
+Ended at: 2026-04-29 14:14:35 -04:00
 
-Expected next checkpoint: Fix Account Detail deployment projection so persisted subscribed Deployments appear there; then commit/push that separate slice.
+Expected next checkpoint: Commit/push operator-approved scanner/watchlist cleanup if requested, while preserving unrelated dirty Strategy Controls files.
 
 Operator urgency:
 
@@ -54,11 +54,11 @@ briefing at start, heartbeat, and handoff.
 
 ## Current Phase
 
-Account Detail Risk Card backend route and bulk delete UX slice shipped; local backend/frontend restarted and verified live; final Strategy Controls cleanup verified.
+Scanner/watchlist online best-practices cleanup shipped locally and verified; coordination closeout in progress.
 
 ## Current Task
 
-Operator-requested worktree cleanup completed through final Strategy Controls cooldown/caps work; verification clean and ready for the final cleanup push to `origin/master`.
+Operator asked to work with `TradingFirmScannerExpert.agent.md`, go online for best practices, and clean up Scanner/Watchlist UX. Frontend readability patch and artifact are complete; verification is green.
 
 ## Current Owner
 
@@ -72,6 +72,33 @@ Codex
 - Codex doctrine reviewer
 
 ## Latest Completed Action
+
+Scanner/Watchlist best-practices cleanup:
+
+- Started at: 2026-04-29 14:04:11 -04:00
+- Completed verification at: 2026-04-29 14:14:35 -04:00
+- Files:
+  - `Operations_Turtle_Shell_Artifacts/SCANNER_WATCHLIST_BEST_PRACTICES_CLEANUP.md`
+  - `frontend/src/routes/Screeners.tsx`
+  - `frontend/src/routes/ScreenerDetail.tsx`
+  - `frontend/src/routes/Watchlists.tsx`
+  - `frontend/src/components/screener/ResultsTable.tsx`
+  - `frontend/src/components/screener/UniverseSourcePicker.tsx`
+  - focused route/component tests for those files
+- Scope:
+  - Added saved-Screener and Watchlist search/filter/sort controls.
+  - Scoped Watchlist select-all/bulk actions to the visible filtered set.
+  - Renamed matched-result saving to `Save matched symbols as Watchlist`.
+  - Converted raw run/status/source labels into readable operator labels.
+  - Made dynamic Watchlists read as refresh-snapshot sources instead of `0 symbols`.
+  - Added explicit Alpaca market-list provider failure state.
+  - Added online best-practices findings and MAP closeout artifact.
+- Verification:
+  - `npm.cmd run typecheck` in `frontend/` -> passed.
+  - `npx.cmd vitest run src/routes/Screeners.test.tsx src/routes/ScreenerDetail.test.tsx src/routes/Watchlists.test.tsx src/components/screener/ResultsTable.test.tsx src/components/screener/UniverseSourcePicker.test.tsx` -> 5 files / 20 tests passed.
+  - `git diff --check` -> clean, CRLF warnings only.
+- Doctrine:
+  - Frontend/operator-readability only. No Strategy, SignalPlan, Account truth, RiskResolver, Governor, BrokerAdapter, BrokerSync, order, or Position truth path changed.
 
 Final Strategy Controls cleanup:
 

@@ -154,7 +154,7 @@ export function UniverseSourcePicker(props: UniverseSourcePickerProps): JSX.Elem
           >
             {watchlists.data.watchlists.map((w) => (
               <option key={w.watchlist_id} value={w.watchlist_id}>
-                {w.name} · {(w.static_symbols ?? []).length} symbols
+                {w.name} - {watchlistOptionMeta(w)}
               </option>
             ))}
           </Select>
@@ -166,6 +166,14 @@ export function UniverseSourcePicker(props: UniverseSourcePickerProps): JSX.Elem
       ) : null}
     </div>
   );
+}
+
+function watchlistOptionMeta(w: { kind: string; static_symbols?: string[]; snapshot_count?: number }): string {
+  if (w.kind === "dynamic") {
+    const snapshots = w.snapshot_count ?? 0;
+    return `Dynamic - ${snapshots} snapshot${snapshots === 1 ? "" : "s"}`;
+  }
+  return `${(w.static_symbols ?? []).length} symbols`;
 }
 
 function KindButton({

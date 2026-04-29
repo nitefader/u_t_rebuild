@@ -51,6 +51,7 @@ export function ResultsTable(props: ResultsTableProps): JSX.Element {
     () => (matchedOnly ? results.filter((row) => row.matched) : results),
     [matchedOnly, results],
   );
+  const matchedCount = useMemo(() => results.filter((row) => row.matched).length, [results]);
 
   const sorted = useMemo(() => {
     const arr = [...displayedResults];
@@ -114,17 +115,22 @@ export function ResultsTable(props: ResultsTableProps): JSX.Element {
             </button>
           ))}
         </div>
-        <button
-          type="button"
-          onClick={() => setMatchedOnly((current) => !current)}
-          className={
-            matchedOnly
-              ? "rounded border border-accent bg-accent/20 px-2 py-0.5 text-accent"
-              : "rounded border border-border bg-bg-raised px-2 py-0.5 text-fg-muted hover:text-fg"
-          }
-        >
-          {matchedOnly ? "Matched only" : "All rows"}
-        </button>
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-fg-muted">
+            Showing {displayedResults.length} of {results.length}; {matchedCount} matched
+          </span>
+          <button
+            type="button"
+            onClick={() => setMatchedOnly((current) => !current)}
+            className={
+              matchedOnly
+                ? "rounded border border-accent bg-accent/20 px-2 py-0.5 text-accent"
+                : "rounded border border-border bg-bg-raised px-2 py-0.5 text-fg-muted hover:text-fg"
+            }
+          >
+            {matchedOnly ? "Show all rows" : "Show matches only"}
+          </button>
+        </div>
       </div>
       <div className="overflow-x-auto rounded border border-border">
         <table className="ut-table">

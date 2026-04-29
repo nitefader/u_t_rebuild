@@ -113,6 +113,8 @@ describe("<UniverseSourcePicker />", () => {
     await screen.findByRole("button", { name: /Watchlist/i });
     await user.click(screen.getByRole("button", { name: /Watchlist/i }));
     expect(await screen.findByText(/Opening Range Entries/i)).toBeInTheDocument();
+    expect(screen.getByText(/Dynamic - 1 snapshot/i)).toBeInTheDocument();
+    expect(screen.queryByText(/2 symbols/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/11111111/)).not.toBeInTheDocument();
   });
 });

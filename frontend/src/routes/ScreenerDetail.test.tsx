@@ -241,6 +241,8 @@ describe("<ScreenerDetail />", () => {
 
     await screen.findByText("Alpaca Fractionable Movers");
     expect(screen.getByRole("button", { name: /Run latest version/i })).toBeInTheDocument();
+    expect(screen.getAllByText(/Alpaca market list/i).length).toBeGreaterThanOrEqual(1);
+    expect(screen.queryByText(/alpaca_market_list/)).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: /^Compare with previous run$/i }));
     await waitFor(() => {
       expect(screen.getByText("Added")).toBeInTheDocument();
@@ -263,7 +265,7 @@ describe("<ScreenerDetail />", () => {
       );
     });
 
-    await user.click(screen.getByRole("button", { name: /Save selected matches/i }));
+    await user.click(screen.getByRole("button", { name: /Save matched symbols as Watchlist/i }));
     await user.selectOptions(screen.getByLabelText(/Watchlist kind/i), "dynamic");
     await user.clear(screen.getByLabelText(/Watchlist name/i));
     await user.type(screen.getByLabelText(/Watchlist name/i), "Dynamic movers");

@@ -62,6 +62,17 @@ export function Screeners(): JSX.Element {
 
   const [createOpen, setCreateOpen] = useState(false);
   const [aiOpen, setAiOpen] = useState(false);
+  const [screenerQuery, setScreenerQuery] = useState("");
+  const [statusFilter, setStatusFilter] = useState<"all" | Screener["status"]>("all");
+  const [sortBy, setSortBy] = useState<"last_run" | "created" | "name">("last_run");
+  const screeners = list.data?.screeners ?? [];
+  const filteredScreeners = useMemo(() => {
+    const text = screenerQuery.trim().toLowerCase();
+    return screeners
+      .filter((s) => (statusFilter === "all" ? true : s.status === statusFilter))
+      .filter((s) => (text ? screenerSearchText(s).includes(text) : true))
+      .sort((a, b) => compareScreeners(a, b, sortBy));
+  }, [screeners, screenerQuery, statusFilter, sortBy]);
 
   return (
     <div className="space-y-4">
@@ -92,7 +103,12 @@ export function Screeners(): JSX.Element {
       />
 
       <div className="grid grid-cols-1 gap-3 xl:grid-cols-[1.25fr_1fr]">
-        <MarketListsPanel marketLists={marketLists.data?.market_lists ?? []} loading={marketLists.isLoading} />
+        <MarketListsPanel
+          marketLists={marketLists.data?.market_lists ?? []}
+          loading={marketLists.isLoading}
+          loadError={marketLists.isError ? errorText(marketLists.error) : null}
+          onRetry={() => marketLists.refetch()}
+        />
         <TemplateLibrary templates={templates.data?.templates ?? []} loading={templates.isLoading} />
       </div>
 
@@ -102,6 +118,40 @@ export function Screeners(): JSX.Element {
         message="Watchlists created here feed entries. Exits still come from Account-owned Positions scoped by deployment."
       />
 
+      {screeners.length > 0 ? (
+        <div className="grid grid-cols-1 gap-2 rounded border border-border bg-bg-raised p-3 md:grid-cols-[1fr_12rem_12rem]">
+          <TextField
+            label="Search saved screeners"
+            value={screenerQuery}
+            onChange={(event) => setScreenerQuery(event.target.value)}
+            placeholder="name, tag, description"
+          />
+          <Select
+            label="Status"
+            value={statusFilter}
+            onChange={(event) => setStatusFilter(event.target.value as typeof statusFilter)}
+          >
+            <option value="all">All statuses</option>
+            <option value="active">Active</option>
+            <option value="draft">Draft</option>
+            <option value="deprecated">Deprecated</option>
+            <option value="archived">Archived</option>
+          </Select>
+          <Select
+            label="Sort"
+            value={sortBy}
+            onChange={(event) => setSortBy(event.target.value as typeof sortBy)}
+          >
+            <option value="last_run">Last run</option>
+            <option value="created">Created</option>
+            <option value="name">Name</option>
+          </Select>
+          <div className="text-[11px] text-fg-subtle md:col-span-3">
+            Showing {filteredScreeners.length} of {screeners.length} saved screeners
+          </div>
+        </div>
+      ) : null}
+
       {list.isLoading ? (
         <LoadingState title="Loading screeners" />
       ) : list.isError ? (
@@ -110,7 +160,7 @@ export function Screeners(): JSX.Element {
           detail={(list.error as Error)?.message}
           onRetry={() => list.refetch()}
         />
-      ) : (list.data?.screeners.length ?? 0) === 0 ? (
+      ) : screeners.length === 0 ? (
         <EmptyState
           title="No saved screeners yet"
           message="Run an Alpaca market list, start from a template, use AI Composer, or create typed criteria manually."
@@ -125,9 +175,14 @@ export function Screeners(): JSX.Element {
             </Button>
           }
         />
+      ) : filteredScreeners.length === 0 ? (
+        <EmptyState
+          title="No screeners match"
+          message="Adjust search, status, or sort to bring saved screeners back into view."
+        />
       ) : (
         <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
-          {list.data?.screeners.map((s) => <ScreenerCard key={s.id} screener={s} />)}
+          {filteredScreeners.map((s) => <ScreenerCard key={s.id} screener={s} />)}
         </div>
       )}
 
@@ -140,9 +195,13 @@ export function Screeners(): JSX.Element {
 function MarketListsPanel({
   marketLists,
   loading,
+  loadError,
+  onRetry,
 }: {
   marketLists: MarketListDefinition[];
   loading: boolean;
+  loadError: string | null;
+  onRetry: () => void;
 }): JSX.Element {
   const navigate = useNavigate();
   const qc = useQueryClient();
@@ -172,6 +231,13 @@ function MarketListsPanel({
           Premarket/open-hour movers and most-active lists resolve through Alpaca data and asset capability evidence.
         </div>
         {loading ? <LoadingState title="Loading market lists" /> : null}
+        {loadError ? (
+          <ErrorState
+            title="Alpaca market lists unavailable"
+            detail={loadError}
+            onRetry={onRetry}
+          />
+        ) : null}
         <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
           {marketLists.map((m) => (
             <div key={m.key} className="rounded border border-border bg-bg-inset/40 px-3 py-2">
@@ -307,7 +373,7 @@ function ScreenerCard({ screener }: { screener: Screener }): JSX.Element {
                   : "info"
               }
             >
-              {screener.status}
+              {prettyKey(screener.status)}
             </StatusBadge>
             <StatusBadge tone="neutral">{screener.version_count} versions</StatusBadge>
             {screener.last_run_at ? (
@@ -336,6 +402,22 @@ function ScreenerCard({ screener }: { screener: Screener }): JSX.Element {
       </div>
     </Card>
   );
+}
+
+function screenerSearchText(screener: Screener): string {
+  return [
+    screener.name,
+    screener.description ?? "",
+    screener.status,
+    ...screener.tags,
+  ].join(" ").toLowerCase();
+}
+
+function compareScreeners(a: Screener, b: Screener, sortBy: "last_run" | "created" | "name"): number {
+  if (sortBy === "name") return a.name.localeCompare(b.name);
+  const aTime = Date.parse(sortBy === "last_run" ? a.last_run_at ?? a.created_at : a.created_at);
+  const bTime = Date.parse(sortBy === "last_run" ? b.last_run_at ?? b.created_at : b.created_at);
+  return bTime - aTime;
 }
 
 function CreateScreenerDrawer({
@@ -700,4 +782,8 @@ function parseTags(value: string): string[] {
         .filter(Boolean),
     ),
   );
+}
+
+function errorText(e: unknown): string {
+  return e instanceof ApiError ? e.detail || e.message : e instanceof Error ? e.message : String(e);
 }

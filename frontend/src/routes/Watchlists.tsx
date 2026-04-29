@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useSearchParams } from "react-router-dom";
 import { Archive, Camera, Pencil, Plus, RefreshCw, Trash2 } from "lucide-react";
@@ -19,6 +19,7 @@ import {
   DrawerTitle,
 } from "@/components/ui/Drawer";
 import { TextField } from "@/components/ui/TextField";
+import { Select } from "@/components/ui/Select";
 import { StatusBadge } from "@/components/badges/StatusBadge";
 import { LoadingState } from "@/components/empty/LoadingState";
 import { ErrorState } from "@/components/empty/ErrorState";
@@ -40,10 +41,22 @@ export function Watchlists(): JSX.Element {
   const [bulkArchiveOpen, setBulkArchiveOpen] = useState(false);
   const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
   const [bulkMessage, setBulkMessage] = useState<string | null>(null);
+  const [watchlistQuery, setWatchlistQuery] = useState("");
+  const [kindFilter, setKindFilter] = useState<"all" | WatchlistKind>("all");
+  const [statusFilter, setStatusFilter] = useState<"all" | Watchlist["status"]>("all");
+  const [sortBy, setSortBy] = useState<"updated" | "name" | "snapshots">("updated");
   const [searchParams, setSearchParams] = useSearchParams();
 
   const watchlists = list.data?.watchlists ?? [];
-  const selectedWatchlists = watchlists.filter((w) => selectedIds.includes(w.watchlist_id));
+  const filteredWatchlists = useMemo(() => {
+    const text = watchlistQuery.trim().toLowerCase();
+    return watchlists
+      .filter((w) => (kindFilter === "all" ? true : w.kind === kindFilter))
+      .filter((w) => (statusFilter === "all" ? true : w.status === statusFilter))
+      .filter((w) => (text ? watchlistSearchText(w).includes(text) : true))
+      .sort((a, b) => compareWatchlists(a, b, sortBy));
+  }, [watchlists, watchlistQuery, kindFilter, statusFilter, sortBy]);
+  const selectedWatchlists = filteredWatchlists.filter((w) => selectedIds.includes(w.watchlist_id));
 
   useEffect(() => {
     const requestedWatchlist = searchParams.get("watchlist");
@@ -52,9 +65,12 @@ export function Watchlists(): JSX.Element {
 
   useEffect(() => {
     if (!list.data) return;
-    const available = new Set(list.data.watchlists.map((w) => w.watchlist_id));
-    setSelectedIds((prev) => prev.filter((id) => available.has(id)));
-  }, [list.data]);
+    const available = new Set(filteredWatchlists.map((w) => w.watchlist_id));
+    setSelectedIds((prev) => {
+      const next = prev.filter((id) => available.has(id));
+      return next.length === prev.length ? prev : next;
+    });
+  }, [filteredWatchlists, list.data]);
 
   const bulkArchive = useMutation({
     mutationFn: async () => {
@@ -110,7 +126,7 @@ export function Watchlists(): JSX.Element {
 
   function setAllSelected(checked: boolean): void {
     setBulkMessage(null);
-    setSelectedIds(checked ? watchlists.map((w) => w.watchlist_id) : []);
+    setSelectedIds(checked ? filteredWatchlists.map((w) => w.watchlist_id) : []);
   }
 
   return (
@@ -138,6 +154,21 @@ export function Watchlists(): JSX.Element {
       />
       {bulkMessage ? <Banner severity="info" title="Bulk action result" message={bulkMessage} /> : null}
 
+      {watchlists.length > 0 ? (
+        <WatchlistFilterBar
+          query={watchlistQuery}
+          onQuery={setWatchlistQuery}
+          kindFilter={kindFilter}
+          onKindFilter={setKindFilter}
+          statusFilter={statusFilter}
+          onStatusFilter={setStatusFilter}
+          sortBy={sortBy}
+          onSortBy={setSortBy}
+          visibleCount={filteredWatchlists.length}
+          totalCount={watchlists.length}
+        />
+      ) : null}
+
       {list.isLoading ? (
         <LoadingState title="Loading watchlists" />
       ) : list.isError ? (
@@ -146,7 +177,7 @@ export function Watchlists(): JSX.Element {
           detail={(list.error as Error)?.message}
           onRetry={() => list.refetch()}
         />
-      ) : (list.data?.watchlists.length ?? 0) === 0 ? (
+      ) : watchlists.length === 0 ? (
         <EmptyState
           title="No watchlists yet"
           message="Create a static list here or save matches from a Screener run as a static or dynamic Watchlist."
@@ -156,12 +187,17 @@ export function Watchlists(): JSX.Element {
             </Button>
           }
         />
+      ) : filteredWatchlists.length === 0 ? (
+        <EmptyState
+          title="No watchlists match"
+          message="Adjust search, kind, or status to bring Watchlists back into view."
+        />
       ) : (
         <>
           <BulkWatchlistBar
             selectedCount={selectedIds.length}
-            totalCount={watchlists.length}
-            allSelected={selectedIds.length > 0 && selectedIds.length === watchlists.length}
+            totalCount={filteredWatchlists.length}
+            allSelected={selectedIds.length > 0 && selectedIds.length === filteredWatchlists.length}
             onSelectAll={setAllSelected}
             onClear={() => setAllSelected(false)}
             onArchive={() => setBulkArchiveOpen(true)}
@@ -169,7 +205,7 @@ export function Watchlists(): JSX.Element {
             busy={bulkArchive.isPending || bulkDelete.isPending}
           />
           <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
-          {watchlists.map((w) => (
+          {filteredWatchlists.map((w) => (
             <WatchlistCard
               key={w.watchlist_id}
               w={w}
@@ -230,6 +266,71 @@ export function Watchlists(): JSX.Element {
           setBulkDeleteOpen(false);
         }}
       />
+    </div>
+  );
+}
+
+function WatchlistFilterBar({
+  query,
+  onQuery,
+  kindFilter,
+  onKindFilter,
+  statusFilter,
+  onStatusFilter,
+  sortBy,
+  onSortBy,
+  visibleCount,
+  totalCount,
+}: {
+  query: string;
+  onQuery: (value: string) => void;
+  kindFilter: "all" | WatchlistKind;
+  onKindFilter: (value: "all" | WatchlistKind) => void;
+  statusFilter: "all" | Watchlist["status"];
+  onStatusFilter: (value: "all" | Watchlist["status"]) => void;
+  sortBy: "updated" | "name" | "snapshots";
+  onSortBy: (value: "updated" | "name" | "snapshots") => void;
+  visibleCount: number;
+  totalCount: number;
+}): JSX.Element {
+  return (
+    <div className="grid grid-cols-1 gap-2 rounded border border-border bg-bg-raised p-3 md:grid-cols-[1fr_10rem_10rem_10rem]">
+      <TextField
+        label="Search watchlists"
+        value={query}
+        onChange={(event) => onQuery(event.target.value)}
+        placeholder="name, symbol, source"
+      />
+      <Select
+        label="Kind"
+        value={kindFilter}
+        onChange={(event) => onKindFilter(event.target.value as "all" | WatchlistKind)}
+      >
+        <option value="all">All kinds</option>
+        <option value="static">Static</option>
+        <option value="dynamic">Dynamic</option>
+      </Select>
+      <Select
+        label="Status"
+        value={statusFilter}
+        onChange={(event) => onStatusFilter(event.target.value as "all" | Watchlist["status"])}
+      >
+        <option value="all">All statuses</option>
+        <option value="active">Active</option>
+        <option value="archived">Archived</option>
+      </Select>
+      <Select
+        label="Sort"
+        value={sortBy}
+        onChange={(event) => onSortBy(event.target.value as "updated" | "name" | "snapshots")}
+      >
+        <option value="updated">Updated</option>
+        <option value="name">Name</option>
+        <option value="snapshots">Snapshots</option>
+      </Select>
+      <div className="text-[11px] text-fg-subtle md:col-span-4">
+        Showing {visibleCount} of {totalCount} Watchlists
+      </div>
     </div>
   );
 }
@@ -310,8 +411,8 @@ function WatchlistCard({
         <div className="min-w-0 flex-1">
           <div className="font-semibold tracking-tight">{w.name}</div>
           <div className="mt-1 flex flex-wrap items-center gap-1.5">
-            <StatusBadge tone={w.kind === "dynamic" ? "info" : "neutral"}>{w.kind}</StatusBadge>
-            <StatusBadge tone={w.status === "archived" ? "muted" : "ok"}>{w.status}</StatusBadge>
+            <StatusBadge tone={w.kind === "dynamic" ? "info" : "neutral"}>{kindLabel(w.kind)}</StatusBadge>
+            <StatusBadge tone={w.status === "archived" ? "muted" : "ok"}>{statusLabel(w.status)}</StatusBadge>
             <StatusBadge tone="neutral">{sourceLabel(w)}</StatusBadge>
             <StatusBadge tone="neutral">{w.snapshot_count} snapshots</StatusBadge>
           </div>
@@ -541,8 +642,8 @@ function WatchlistDetailDrawer({
               <CardHeader>
                 <CardTitle>Details</CardTitle>
                 <span className="flex flex-wrap items-center gap-2">
-                  <StatusBadge tone={w.kind === "dynamic" ? "info" : "neutral"}>{w.kind}</StatusBadge>
-                  <StatusBadge tone={w.status === "archived" ? "muted" : "ok"}>{w.status}</StatusBadge>
+                  <StatusBadge tone={w.kind === "dynamic" ? "info" : "neutral"}>{kindLabel(w.kind)}</StatusBadge>
+                  <StatusBadge tone={w.status === "archived" ? "muted" : "ok"}>{statusLabel(w.status)}</StatusBadge>
                   <StatusBadge tone="neutral">{sourceLabel(w)}</StatusBadge>
                   {!editing ? (
                     <Button size="sm" variant="ghost" leftIcon={<Pencil className="h-3.5 w-3.5" aria-hidden="true" />} onClick={() => setEditing(true)}>
@@ -611,7 +712,10 @@ function WatchlistDetailDrawer({
                   </div>
                 ) : null}
                 {visibleSymbols.length === 0 ? (
-                  <EmptyState title="No static symbols" message={w.kind === "dynamic" ? "Dynamic symbols come from refresh snapshots." : "Edit to add symbols."} />
+                  <EmptyState
+                    title={w.kind === "dynamic" ? "No refresh snapshot yet" : "No static symbols"}
+                    message={w.kind === "dynamic" ? "Refresh or schedule this Watchlist to create entry-universe evidence." : "Edit to add symbols."}
+                  />
                 ) : (
                   <div className="flex flex-wrap gap-1.5">
                     {visibleSymbols.map((sym) => (
@@ -756,14 +860,57 @@ function sourceLabel(w: Watchlist): string {
   return "manual rules";
 }
 
+function kindLabel(kind: WatchlistKind): string {
+  return kind === "dynamic" ? "Dynamic" : "Static";
+}
+
+function statusLabel(status: Watchlist["status"]): string {
+  return status === "archived" ? "Archived" : "Active";
+}
+
+function watchlistSearchText(w: Watchlist): string {
+  return [
+    w.name,
+    w.description ?? "",
+    w.kind,
+    w.status,
+    sourceLabel(w),
+    ...w.static_symbols,
+  ].join(" ").toLowerCase();
+}
+
+function compareWatchlists(a: Watchlist, b: Watchlist, sortBy: "updated" | "name" | "snapshots"): number {
+  if (sortBy === "name") return a.name.localeCompare(b.name);
+  if (sortBy === "snapshots") return b.snapshot_count - a.snapshot_count || a.name.localeCompare(b.name);
+  return Date.parse(b.updated_at) - Date.parse(a.updated_at);
+}
+
 function snapshotDiffText(snapshot: WatchlistSnapshot): string {
   return `+${snapshot.added_symbols.length} / -${snapshot.removed_symbols.length} / =${snapshot.stayed_symbols.length}`;
 }
 
 function evidenceSummary(record: Record<string, unknown>): string {
-  const keys = Object.keys(record);
-  if (keys.length === 0) return "retained by backend";
-  return keys.slice(0, 3).join(", ");
+  const entries = Object.entries(record);
+  if (entries.length === 0) return "Retained by backend";
+  return entries.slice(0, 3).map(([key, value]) => {
+    if (value && typeof value === "object") {
+      const obj = value as Record<string, unknown>;
+      const provider = typeof obj.provider === "string" ? prettySource(obj.provider) : null;
+      const feed = typeof obj.feed === "string" ? obj.feed.toUpperCase() : null;
+      return [prettySource(key), provider, feed].filter(Boolean).join(": ");
+    }
+    return prettySource(key);
+  }).join(" / ");
+}
+
+function prettySource(value: string): string {
+  const labels: Record<string, string> = {
+    alpaca: "Alpaca",
+    alpaca_assets: "Alpaca asset capability",
+    alpaca_market_list: "Alpaca market list",
+    data_center: "Data Center cache",
+  };
+  return labels[value] ?? value.split("_").map((part) => part.charAt(0).toUpperCase() + part.slice(1)).join(" ");
 }
 
 function latestSnapshotFrom(snapshots: WatchlistSnapshot[]): WatchlistSnapshot | null {

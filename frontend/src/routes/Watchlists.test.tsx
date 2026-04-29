@@ -145,6 +145,59 @@ describe("<Watchlists />", () => {
     expect(screen.getByRole("button", { name: /^Archive$/i })).toBeInTheDocument();
   });
 
+  it("uses refresh-snapshot copy for dynamic Watchlists before the first snapshot", async () => {
+    const user = userEvent.setup();
+    const now = new Date().toISOString();
+    restore = installFetchMock([
+      {
+        url: /\/api\/v1\/watchlists\/22222222-2222-2222-2222-222222222222$/,
+        body: {
+          watchlist: {
+            watchlist_id: "22222222-2222-2222-2222-222222222222",
+            name: "New Dynamic Entries",
+            description: null,
+            kind: "dynamic",
+            static_symbols: [],
+            dynamic_rules: { source_type: "screener_version" },
+            created_at: now,
+            updated_at: now,
+            latest_snapshot_id: null,
+            snapshot_count: 0,
+            status: "active",
+            archived_at: null,
+          },
+          snapshots: [],
+        },
+      },
+      {
+        url: "/api/v1/watchlists",
+        body: {
+          watchlists: [
+            {
+              watchlist_id: "22222222-2222-2222-2222-222222222222",
+              name: "New Dynamic Entries",
+              description: null,
+              kind: "dynamic",
+              static_symbols: [],
+              dynamic_rules: { source_type: "screener_version" },
+              created_at: now,
+              updated_at: now,
+              latest_snapshot_id: null,
+              snapshot_count: 0,
+              status: "active",
+              archived_at: null,
+            },
+          ],
+        },
+      },
+      { url: "/api/v1/system/status", body: STATUS_OK },
+    ]);
+    renderRoute(<Watchlists />);
+    await user.click(await screen.findByRole("button", { name: /Open/i }));
+    expect(await screen.findByText(/No refresh snapshot yet/i)).toBeInTheDocument();
+    expect(screen.queryByText(/No static symbols/i)).not.toBeInTheDocument();
+  });
+
   it("surfaces a degraded read state when list fails", async () => {
     restore = installFetchMock([
       { url: "/api/v1/watchlists", body: { detail: "kaboom" }, status: 500 },

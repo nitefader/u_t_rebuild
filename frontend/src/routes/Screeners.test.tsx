@@ -54,6 +54,18 @@ describe("<Screeners />", () => {
     expect(screen.getByText(/Alpaca Market Lists/i)).toBeInTheDocument();
   });
 
+  it("surfaces Alpaca market-list load failures instead of an empty provider panel", async () => {
+    restore = installFetchMock([
+      { url: "/api/v1/system/status", body: STATUS_OK },
+      { url: "/api/v1/screeners/templates", body: { templates: [] } },
+      { url: "/api/v1/market-lists", body: { detail: "Alpaca provider timed out" }, status: 503 },
+      { url: "/api/v1/screeners", body: { screeners: [] } },
+    ]);
+    mount();
+    expect(await screen.findByText(/Alpaca market lists unavailable/i)).toBeInTheDocument();
+    expect(screen.getByText(/Alpaca provider timed out/i)).toBeInTheDocument();
+  });
+
   it("lists screeners with their last-run badge and operator-readable name", async () => {
     restore = installFetchMock([
       { url: "/api/v1/system/status", body: STATUS_OK },
@@ -84,7 +96,7 @@ describe("<Screeners />", () => {
       expect(screen.getByText("Volume Surge")).toBeInTheDocument();
     });
     // Doctrine: operator-readable last-run timestamp, not the run UUID.
-    expect(screen.getByText(/last run/i)).toBeInTheDocument();
+    expect(screen.getAllByText(/last run/i).length).toBeGreaterThanOrEqual(1);
     expect(screen.queryByText(/22222222/)).not.toBeInTheDocument();
   });
 

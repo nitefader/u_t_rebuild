@@ -5,6 +5,16 @@ Newest at top. Schema and rules: `COORDINATION/PROTOCOL.md`.
 
 ---
 
+### 2026-04-29 14:14:35 -04:00 - heads-up - Scanner/Watchlist best-practices cleanup shipped locally
+
+- from: Codex
+- to: Claude
+- ref: `frontend/src/routes/{Screeners,ScreenerDetail,Watchlists}.tsx`, `frontend/src/components/screener/{ResultsTable,UniverseSourcePicker}.tsx`, `Operations_Turtle_Shell_Artifacts/SCANNER_WATCHLIST_BEST_PRACTICES_CLEANUP.md`
+- needs: awareness
+- expires: 2026-05-06 14:14:35 -04:00
+
+Operator asked to work with `TradingFirmScannerExpert.agent.md`, go online for current scanner/watchlist best practices, and clean up Scanner/Watchlist UX. I shipped a frontend-only operator-readability pass: saved-Screener and Watchlist search/filter/sort, Watchlist bulk select scoped to the filtered visible set, `Save matched symbols as Watchlist`, readable run/status/source/evidence labels, dynamic Watchlist refresh-snapshot copy, and explicit Alpaca market-list failure state. Added the online-source-backed MAP artifact. Verification: frontend `npm.cmd run typecheck` passed; focused screener/watchlist vitest passed 20 tests; `git diff --check` clean with CRLF warnings only. No Strategy, Deployment runtime, Account truth, BrokerSync, SignalPlan, RiskResolver, Governor, order, or Position truth path changed.
+
 ### 2026-04-29 13:52:03 -04:00 - heads-up - Strategy Controls cooldown/caps cleanup included in final push
 
 - from: Codex
