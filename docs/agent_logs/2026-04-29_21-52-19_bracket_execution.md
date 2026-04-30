@@ -96,6 +96,38 @@ MAP: Operations_Turtle_Shell_Artifacts/STRATEGY_TO_BROKER_BRACKET_PROGRAM.md
 
 ---
 
+## Pass 3 — T-3 baseline (SignalPlan enrichment)
+
+- pass number: 3 (T-3 baseline)
+- timestamp: 2026-04-29 23:10:00 -04:00
+- files changed:
+  - `backend/app/decision/signal_plan_builder.py` (added `ExecutionStyleVersion` parameter, `post_fill_pct_rule()` encoder + `parse_post_fill_pct()` decoder, `_legs_from_execution_plan` for BracketStopTarget / BracketRunner / MultiTargetScaleOut presets)
+  - `backend/tests/unit/decision/test_signal_plan_builder_bracket_intent.py` (new — 9 acceptance tests covering long bracket, short bracket symmetry, runner trail, multi-target scale-out, no-bracket fallback, quantity-free guard, legacy candidate path)
+- decisions made:
+  - **Encoding format**: `post_fill_pct:<pct>` for `SignalPlanStop.rule` and `SignalPlanTarget.rule`. Concrete prices stay None on the SignalPlan (it's neutral). Resolution happens in T-4's ProtectiveOrderPlacer post-fill.
+  - **Long/short symmetry**: same percent intent on both sides; concrete price flip happens at fill resolution. SignalPlan.side carries the direction.
+  - **Bracket runner mapping**: trail_pct → SignalPlanStop.type="trail" + post_fill_pct rule. first_target_pct + first_slice_pct → single REDUCE target with quantity_pct = first_slice_pct * 100. The remaining quantity stays on the position as the "runner" — managed by the trail rule.
+  - **Multi-target scale-out**: tier list expands to `t1..tN` REDUCE targets with each tier's slice_pct expressed as quantity_pct. Optional stop_pct creates the protective stop.
+  - **Legacy path preserved**: when `execution_plan=None` or no preset, `_stop_from_candidate` / `_targets_from_candidate` (legacy) still run. SignalPlanTarget label kept as "T1" in legacy path to preserve the existing pipeline test contract.
+  - **Doctrine guard**: explicit test asserts no `account_id` / `qty` / `quantity` / `notional` / `resolved_quantity` fields on the SignalPlan when the bracket is populated. SignalPlan stays neutral and quantity-free.
+- blockers and 5 Whys:
+  - 1 regression on first run: `test_deployment_entry_signal_plan_comes_from_watchlist_universe` expected "T1" label on the legacy candidate path; my change had lowercased to "t1" for stylistic consistency.
+    - Why? I changed the legacy label too aggressively.
+    - Why was the legacy label uppercase? An earlier slice locked it to "T1" and a pipeline test pinned that.
+    - Why pin a label? Operator-visible leg label appears in risk decision traces.
+    - Why does T-3 use lowercase "t1"? Because the new bracket presets (BracketStopTarget, BracketRunner, MultiTarget) emit lowercase labels for visual consistency in dashboards.
+    - Resolution: keep lowercase for the new bracket-emitted targets, restore "T1" for the legacy candidate path. Legacy contract preserved; new contract uses lowercase. Test passes.
+- tests run:
+  - `pytest backend/tests/unit/decision/test_signal_plan_builder_bracket_intent.py -v` → 9 passed.
+  - `pytest backend/tests/unit -q` → **1506 passed** (+9 over T-2 baseline 1497).
+- test results: all green; zero regressions.
+- remaining gaps:
+  - The orchestrator does not yet pass `execution_plan=` into `SignalPlanBuilder.build_from_candidate(...)`. That wiring lands in T-4 along with the OrderManager/BrokerAdapter changes — the orchestrator needs to load the Deployment's `execution_plan_version_id` and resolve it through the new `ExecutionPlanRepository`.
+  - SignalPlan is enriched but no consumer reads it yet. The ProtectiveOrderPlacer (T-4) will subscribe to BrokerSync entry-fill events and decode the `post_fill_pct:*` rules to compute concrete prices.
+- next action: commit T-3, then T-4 (the main feature — dual-mode order execution).
+
+---
+
 ## Alpaca verification (online + SDK source, locked 2026-04-29 21:50:00 -04:00)
 
 - alpaca-py SDK version present at `.venv/Lib/site-packages/alpaca/`.
