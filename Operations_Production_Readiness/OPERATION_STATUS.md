@@ -1,8 +1,29 @@
 # Operations Production Readiness Status
 
-Last updated: 2026-04-29 18:42:51 -04:00
+Last updated: 2026-04-29 22:30:00 -04:00
 
-## Active Slice — Governor wiring (operator override)
+## Active Slice — Bracket Execution Program (operator override end-to-end)
+
+```text
+Work session status: in_progress (T-1 shipped; T-2..T-7 + Wiggum 2/3 pending)
+Started at: 2026-04-29 21:52:19 -04:00
+T-1 result: persistence trio shipped — strategy_controls_versions +
+  execution_plan_versions + Deployment FKs (strategy_controls_version_id,
+  execution_plan_version_id, risk_plan_version_id) + ExecutionMode enum
+  (post_fill_bracket default + native_alpaca_bracket optional) +
+  composer save_draft persists both versions + 21 new tests + Alpaca
+  bracket constraints verified online + against alpaca-py SDK.
+Verification: pytest backend/tests/unit -q -> 1497 passed (+21 over
+  baseline 1476). Zero regressions.
+Doctrine: NEW saved entities operator-pre-approved in resume prompt.
+  Deployment-is-binder doctrine locked in feedback memory entry.
+MAP: Operations_Turtle_Shell_Artifacts/STRATEGY_TO_BROKER_BRACKET_PROGRAM.md.
+Log: docs/agent_logs/2026-04-29_21-52-19_bracket_execution.md.
+Next: T-2 Compose/API wiring (operator types 5/10 -> save -> reload survives)
+  in parallel with T-3 SignalPlan enrichment as warranted.
+```
+
+## Previous Active Slice (archived 2026-04-29 22:30:00)
 
 ```text
 Work session status: handoff_ready (Slices A + B SHIPPED end-to-end)

@@ -102,7 +102,41 @@ ExecutionStylePresetSpec = Annotated[
 ]
 
 
+class ExecutionMode(StrEnum):
+    """Bracket execution mode owned by the ExecutionPlan.
+
+    - ``post_fill_bracket`` (default): submit entry, wait for BrokerSync-confirmed
+      fill, compute stop/target from the actual fill price, submit child OCO
+      protective pair. Idempotent on re-emission of the same fill event.
+    - ``native_alpaca_bracket`` (optional): submit a broker-native Alpaca
+      bracket order (``OrderClass.BRACKET``) with both child legs attached at
+      submit time. Pre-flight rejects fractional, notional, extended-hours, or
+      same-symbol concurrent opposing-side cases (Alpaca constraints verified
+      2026-04-29 against alpaca-py SDK + ``docs.alpaca.markets``).
+    """
+
+    POST_FILL_BRACKET = "post_fill_bracket"
+    NATIVE_ALPACA_BRACKET = "native_alpaca_bracket"
+
+
 class ExecutionStyleVersion(DomainSchema):
+    """Persisted, immutable Execution Plan version.
+
+    Doctrine name in ``MY_COMMAND_EXECUTION_PLAN_PERSISTENCE_AND_LABS.md`` is
+    "ExecutionPlan"; the table name is ``execution_plan_versions`` and the
+    Deployment FK is ``execution_plan_version_id``. The Python class identity
+    keeps the legacy name for now to avoid a 94-site rename in this slice.
+    Renaming the class identifier is a follow-up slice with its own contract.
+
+    The ExecutionPlan owns *how* a SignalPlan becomes broker-valid orders —
+    entry order type, stop/target shape, post-fill placement policy, partial-fill
+    handling, time-in-force, OCO/bracket selection. It does not create signals.
+
+    A Deployment binds an ``execution_plan_version_id`` to a StrategyVersion
+    and a StrategyControlsVersion to form the executable package. The same
+    StrategyVersion can run with different ExecutionPlans across Accounts.
+    """
+
     id: UUID
     execution_style_id: UUID
     version: int = Field(ge=1)
@@ -113,6 +147,7 @@ class ExecutionStyleVersion(DomainSchema):
     entry_limit_offset_bps: float | None = None
     cancel_after_bars: int | None = Field(default=None, gt=0)
     bracket: BracketSpec = Field(default_factory=BracketSpec)
+    execution_mode: ExecutionMode = ExecutionMode.POST_FILL_BRACKET
     trailing_stop_enabled: bool = False
     scale_out_enabled: bool = False
     feature_refs: list[str] = Field(default_factory=list)

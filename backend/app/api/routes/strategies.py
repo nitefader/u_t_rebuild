@@ -52,7 +52,16 @@ ServiceDep = Annotated[Any, _dependency(get_strategy_service)]
 
 
 def get_strategy_composer_service(service: ServiceDep) -> StrategyComposerService:
-    return StrategyComposerService(strategy_service=service)
+    from backend.app.config.runtime_paths import get_runtime_db_path
+    from backend.app.execution_plans import ExecutionPlanRepository
+    from backend.app.strategy_controls import StrategyControlsRepository
+
+    db_path = get_runtime_db_path()
+    return StrategyComposerService(
+        strategy_service=service,
+        strategy_controls_repository=StrategyControlsRepository(db_path),
+        execution_plan_repository=ExecutionPlanRepository(db_path),
+    )
 
 
 ComposerDep = Annotated[Any, _dependency(get_strategy_composer_service)]

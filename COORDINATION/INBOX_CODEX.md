@@ -5,6 +5,69 @@ Newest at top. Schema and rules: `COORDINATION/PROTOCOL.md`.
 
 ---
 
+### 2026-04-29 21:53:00 -04:00 · heads-up · Bracket Execution Program started (T-1 through T-7, end-to-end, operator override)
+
+- from: Claude
+- to: Codex
+- ref: `Operations_Turtle_Shell_Artifacts/STRATEGY_TO_BROKER_BRACKET_PROGRAM.md`, `docs/agent_logs/2026-04-29_21-52-19_bracket_execution.md`, `backend/app/{persistence,strategy_composer,domain,signal_planner,orders,brokers,runtime,governor,pipeline,api}/`, `frontend/src/{routes,components/strategy_builder,api/schemas}/`
+- needs: awareness — operator directive `"Run this end-to-end yourself. Do not wait for Codex."` (resume prompt 2026-04-29). Operator pre-approved new saved entities `strategy_controls_versions` and `execution_plan_versions` with FKs `strategy_controls_version_id` (on `strategy_versions`) and `execution_plan_version_id` + `risk_plan_version_id` (on `deployments`).
+- expires: 2026-05-06 21:53:00 -04:00
+
+Starting the Strategy-to-Broker Bracket Program end-to-end. Today an operator-composed strategy with "market entry, +10% target / -5% stop" reaches Alpaca as a naked market order — bracket params drop at save time and never reach the broker. The MAP doc covers the full doctrine + Alpaca verification + 7-slice plan + Wiggum 3-pass loop. Slices: T-1 persistence, T-2 compose/API, T-3 SignalPlan enrichment, T-4 dual-mode order execution (post_fill_bracket default + native_alpaca_bracket optional), T-5 protection verification, T-6 TOCTOU hardening, T-7 daily-state aggregator + cooldown. Native Alpaca bracket constraints verified online + against alpaca-py SDK source: whole-share, day/gtc, RTH, ETB-if-short, no-fractional, no-notional, no-concurrent-opposite-side. Both modes route through BrokerAdapter (only submit boundary) and BrokerSync (only truth writer). Six leases acquired (TTL 2h) for T-1 paths; will refresh / open additional ones per slice. No Codex action needed unless the operator hands the slice back.
+
+---
+
+### 2026-04-29 20:20:00 -04:00 · heads-up · Slice A + Slice B SHIPPED end-to-end (Governor wiring + AccountRiskPlanMap + frontend UI)
+
+- from: Claude
+- to: Codex
+- ref: `backend/app/governor/`, `backend/app/pipeline/orchestrator.py`, `backend/app/runtime/account_trading_orchestrator.py`, `backend/app/broker_accounts/`, `backend/app/persistence/{models,runtime_store}.py`, `backend/app/api/routes/broker_accounts.py`, `backend/app/domain/{strategy_controls,signal_plan}.py`, `frontend/src/components/risk_plans/HorizonRiskPlanPicker.tsx`, `frontend/src/routes/{RiskCardPanel,Deployments,EditDeploymentDrawer,Operations}.tsx`, `frontend/src/api/{risk,schemas/{risk,deployments}}.ts`, `Operations_Turtle_Shell_Artifacts/GOVERNOR_WIRING_MAP{,_SLICE_B}.md`
+- needs: nothing (FYI / coordination)
+- expires: 2026-05-06 20:20:00 -04:00
+
+Operator (Nanyel) directed end-to-end Governor wiring per locked Risk Horizon doctrine: *Deployment chooses horizon. Account chooses risk plan. Governor enforces.* Both slices SHIPPED.
+
+**Slice A** — `GovernorPolicyResolver` translates `(account_id, TradingHorizon) -> GovernorPolicy` per evaluation; min-of-floor-and-Account-and-Plan rule; field-name asymmetry `max_symbol_concentration_pct` ↔ `max_symbol_exposure_pct` resolved internally; `PortfolioGovernor.evaluate(request, *, policy_override=None)` accepts per-call override; `RuntimeOrchestrator.governor_policy_resolver=` kwarg; `BrokerRuntimeOrchestrator._build_governor_policy_resolver()` wires the AccountRiskConfig lookup in production. Adversarial fixes: AccountRiskConfig.max_open_positions default 5→None (was silent 5-pos cap on every default account); GovernorDecisionTrace.projected_state field added (operator-visible numeric snapshot).
+
+**Slice B** — `TradingHorizon.OTHER` added; `DeploymentContext.risk_horizon: TradingHorizon | None`; **NEW SAVED ENTITY** `account_risk_plan_map` (PRIMARY KEY account_id, horizon) + Pydantic models + four runtime_store methods + cascade delete with broker account; **NEW ROUTES** `GET/PUT /api/v1/broker-accounts/{account_id}/risk-plan-map`; `GovernorPolicy.requires_risk_plan: bool` + new rejection rule `account_missing_risk_plan_for_horizon` (only fires when Deployment declared explicit risk_horizon); production composition root wires the per-horizon plan lookup. Frontend: 5 per-horizon dropdowns on Account Risk Card with archived-plan staleness chips, "0 of 5 covered" danger banner, ref-based mutation lock; Deployment risk_horizon picker with "enforcement OFF" warning when blank; Operations resolved-plan label + friendly rejection text.
+
+Adversarial fixes shipped in-slice (parallel sonnet ×2 recursions per slice): B-BUG-1 dangling-FK validation in PUT route returns 400; B-RISK-2 defensive enum coercion skips corrupt rows; B-RISK-3 filters DEPRECATED versions from join; F-BUG-1 archived-plan stale-value display; F-BUG-2 ref-based mutation lock + queue drain; F-RISK-1 zero-coverage banner; F-RISK-2 a11y double-label fix.
+
+Verification: `pytest backend/tests/unit -q` → **1476 passed** (was 1395 pre-slice A; +81 across both slices); `npm test` → **379 passed** across 51 files; `npx tsc --noEmit` clean. Boundary suite green.
+
+LOCKS released. OPERATION_STATUS marked handoff_ready.
+
+---
+
+### 2026-04-29 18:42:51 -04:00 · heads-up · Operator override — Governor wiring slice (numeric limits)
+
+- from: Claude
+- to: Codex
+- ref: `backend/app/governor/`, `backend/app/pipeline/orchestrator.py`, `backend/tests/unit/governor/`, `Operations_Turtle_Shell_Artifacts/GOVERNOR_WIRING_MAP.md`
+- needs: nothing (FYI)
+- expires: 2026-04-30 18:42:51 -04:00
+
+Operator (Nanyel) directed Claude to fix the Governor and wire it end-to-end. Adversarial trace confirmed: today the kill switches and account/deployment pause toggles are correctly wired (Operations.tsx → ControlPlane → GovernorPolicy.paused_*), but the SIX numeric limits (`max_open_positions`, `max_gross_exposure_pct`, `max_net_exposure_pct`, `max_symbol_concentration_pct`, `max_open_risk_pct`, plus `broker_sync_stale` threshold) all default to `None` and are NEVER populated from any source. `AccountRiskConfig` (which the operator edits via Risk Card) and `RiskPlanConfig` (which the operator edits via Risk Plans) carry these fields but are not read by the Governor. The Governor is decorative for numeric checks.
+
+Lease rows added in `LOCKS.md` for `backend/app/governor/`, `backend/app/pipeline/orchestrator.py`, `backend/tests/unit/{governor,pipeline}/`, plus the MAP artifact in `Operations_Turtle_Shell_Artifacts/`. TTL 2h.
+
+Scope (small, additive):
+1. Add `GovernorPolicyResolver` that reads the account's `AccountRiskConfig` + the deployment's active `RiskPlanConfig` and produces a per-evaluation `GovernorPolicy` snapshot. Min-of-both rule for fields that overlap (most-conservative wins) — operator approved.
+2. Wire the resolver into `RuntimeOrchestrator` at the three Governor call sites so `PortfolioGovernor` receives a populated policy per evaluation instead of the persisted-default singleton.
+3. Tests: resolver unit tests (None×config, config×None, config×config min, broker_sync stale threshold from config), orchestrator integration tests for each new gate.
+4. Two adversarial recursion passes after implementation to verify the wiring holds.
+
+Doctrine notes:
+- No new saved entity. Both source tables (`account_risk_configs`, `risk_plan_versions`) already persist; this is a translation/wiring layer only.
+- `GovernorPolicy` itself stays unchanged — just gets populated per-evaluation rather than per-process.
+- The persisted `GovernorPolicy` (loaded by `state_store.load_portfolio_governor_state`) becomes the floor; per-account/per-deployment overrides apply on top via min.
+- Pause/kill paths untouched — those already work.
+- `broker_sync_stale` 30s default in `brokers/sync.py:270` stays the floor; configs can tighten it but not relax it.
+
+Will close out via this inbox + LEDGER + status board on completion. Ping me if you want a different scope split.
+
+---
+
 ### 2026-04-29 09:45:00 -04:00 · heads-up · Short-side entries slice closed; leases released
 
 - from: Claude

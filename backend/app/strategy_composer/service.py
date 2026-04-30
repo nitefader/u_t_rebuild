@@ -55,6 +55,7 @@ from backend.app.features import (
     registry,
 )
 from backend.app.features.spec import FeatureValidationError
+from backend.app.execution_plans import ExecutionPlanRepository
 from backend.app.strategies import StrategyService, StrategyWriteRequest
 from backend.app.strategies.models import StrategyVersionRecord
 from backend.app.strategy_composer.presets import (
@@ -63,6 +64,7 @@ from backend.app.strategy_composer.presets import (
     build_preset_spec,
     build_signal_plan_shape_preview,
 )
+from backend.app.strategy_controls import StrategyControlsRepository
 
 
 # Internal placeholder symbol used solely by the composer's feature-plan
@@ -254,6 +256,8 @@ class StrategyDraftSaveResponse(BaseModel):
     strategy_version: StrategyVersionRecord
     draft: StrategyDraft
     component_version_snapshots: StrategyDraftComponentSnapshots
+    strategy_controls_version_id: UUID | None = None
+    execution_plan_version_id: UUID | None = None
     deployment_created: bool = False
     broker_action_created: bool = False
     live_readiness_claimed: bool = False
@@ -263,8 +267,16 @@ _CONDITION_ADAPTER = TypeAdapter(ConditionExpression)
 
 
 class StrategyComposerService:
-    def __init__(self, *, strategy_service: StrategyService | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        strategy_service: StrategyService | None = None,
+        strategy_controls_repository: "StrategyControlsRepository | None" = None,
+        execution_plan_repository: "ExecutionPlanRepository | None" = None,
+    ) -> None:
         self._strategy_service = strategy_service
+        self._strategy_controls_repository = strategy_controls_repository
+        self._execution_plan_repository = execution_plan_repository
 
     def feature_catalog(self) -> tuple[FeatureCatalogItem, ...]:
         items: list[FeatureCatalogItem] = []
@@ -611,21 +623,73 @@ class StrategyComposerService:
             }
         )
         version = self._strategy_service.add_version(strategy_record.strategy_id, payload)
+
+        saved_controls, controls_version_id = self._persist_strategy_controls(
+            request.draft.strategy_controls
+        )
+        saved_execution_plan, plan_version_id = self._persist_execution_plan(
+            request.draft.execution_style
+        )
+
         saved_draft = request.draft.model_copy(
             update={
                 "strategy": payload,
                 "validation": validation,
+                "strategy_controls": saved_controls,
+                "execution_style": saved_execution_plan,
             }
         )
         return StrategyDraftSaveResponse(
             strategy_version=version,
             draft=saved_draft,
             component_version_snapshots=StrategyDraftComponentSnapshots(
-                execution_style=request.draft.execution_style,
+                execution_style=saved_execution_plan,
                 backtest_plan=request.draft.backtest_plan,
                 launch_plans=request.draft.launch_plans,
             ),
+            strategy_controls_version_id=controls_version_id,
+            execution_plan_version_id=plan_version_id,
         )
+
+    def _persist_strategy_controls(
+        self, controls: StrategyControlsVersion | None
+    ) -> tuple[StrategyControlsVersion | None, UUID | None]:
+        """Persist StrategyControlsVersion if a repository is wired.
+
+        Returns ``(payload, persisted_version_id)``. When no repository is
+        wired, the payload passes through unchanged and ``persisted_version_id``
+        is ``None`` — signalling "not durably saved".
+        """
+
+        if controls is None:
+            return None, None
+        if self._strategy_controls_repository is None:
+            return controls, None
+        # New strategy_controls_id and version=1 for a fresh save.
+        normalized = controls.model_copy(
+            update={
+                "id": uuid4(),
+                "strategy_controls_id": uuid4(),
+                "version": 1,
+            }
+        )
+        self._strategy_controls_repository.save_version(normalized)
+        return normalized, normalized.id
+
+    def _persist_execution_plan(
+        self, execution_plan: ExecutionStyleVersion
+    ) -> tuple[ExecutionStyleVersion, UUID | None]:
+        if self._execution_plan_repository is None:
+            return execution_plan, None
+        normalized = execution_plan.model_copy(
+            update={
+                "id": uuid4(),
+                "execution_style_id": uuid4(),
+                "version": 1,
+            }
+        )
+        self._execution_plan_repository.save_version(normalized)
+        return normalized, normalized.id
 
     def _launch_plans(
         self,
