@@ -1,13 +1,62 @@
 # Operations Production Readiness Status
 
-Last updated: 2026-04-30 04:00:00 -04:00
+Last updated: 2026-04-30 06:30:00 -04:00
 
 ## Active Slice — Bracket Execution Program (operator override end-to-end)
 
 ```text
-Work session status: in_progress (T-1..T-5 SHIPPED; T-6, T-7, Wiggum 2/3 pending)
+Work session status: in_progress (T-1..T-6 SHIPPED; T-7, Wiggum 2/3 pending)
 Started at: 2026-04-29 21:52:19 -04:00
-Last heartbeat: 2026-04-30 04:00:00 -04:00
+Last heartbeat: 2026-04-30 06:30:00 -04:00
+T-6 result: TOCTOU hardening shipped per locked MAP §7 D7 (single-conn +
+  WAL mode + explicit read transaction; no optimistic locking, no
+  risk_plan_map_concurrent_modification rejection rule per operator
+  directive 2026-04-30 "Proceed with T-6 using D7. Do NOT implement
+  row-version optimistic locking. Do NOT add
+  risk_plan_map_concurrent_modification rejection.").
+  SQLiteSessionFactory.connect now issues PRAGMA journal_mode=WAL on
+  every connect (idempotent; WAL is a persistent DB property).
+  New SQLiteRuntimeStore.load_governor_policy_inputs(account_id,
+  horizon) reads account_risk_configs and account_risk_plan_map ⨝
+  risk_plan_versions inside ONE with self._connect() block wrapped by
+  an explicit BEGIN/COMMIT (single-conn alone is not enough — Python's
+  sqlite3 driver default isolation_level="" autocommits SELECTs, so a
+  writer commit between the two SELECTs would otherwise be visible).
+  GovernorPolicyResolver API refactored from two independent lookup
+  callbacks (get_account_risk_config + get_risk_plan_config_for_horizon)
+  to ONE composite callback (get_policy_inputs) so both halves of the
+  snapshot come from one DB call. Production
+  BrokerRuntimeOrchestrator._build_governor_policy_resolver binds
+  runtime_store.load_governor_policy_inputs directly. _safe_lookup
+  emits a structured log event "governor_policy_inputs_lookup_failed"
+  with account_id + horizon for Operations alarming on graceful
+  degrade. Two parallel sonnet critics (architecture/adversarial; UX
+  skipped — no operator-facing UI surface) at closeout; 5 fix-in-slice
+  items shipped: explicit BEGIN/COMMIT + dual-write race regression
+  test (real headline TOCTOU defense), dead except KeyError removal,
+  structured graceful-degrade log, GOVERNOR_WIRING_MAP*.md T-6
+  amendment. Doctrine: D7 strictly preserved; MAP §7 D7 gained a
+  clarifying paragraph naming the new method per operator's "Update
+  MAP §7 only if needed for clarity, not to change doctrine."
+Verification: pytest backend/tests/unit -q -> 1570 passed (+8 over T-5
+  baseline 1562; +194 over original Bracket Program baseline 1376).
+  npx tsc --noEmit clean. npx vitest run -> 399 passed across 54 test
+  files (no change — T-6 has no frontend surface). npm run lint:names
+  clean. manager.py banned-name guard clean.
+T-1..T-5 are committed. T-6 commit pending immediately after this
+  status refresh.
+MAP: Operations_Turtle_Shell_Artifacts/STRATEGY_TO_BROKER_BRACKET_PROGRAM.md.
+Log: docs/agent_logs/2026-04-29_21-52-19_bracket_execution.md (Pass 7 + Pass 8).
+Next: T-7 daily-state aggregator + cooldown (DailyAccountState snapshot
+  on BrokerSync fills, daily_loss_pct + drawdown_pct + cooldown checks
+  in PortfolioGovernor.evaluate, Operations Daily Risk State card).
+```
+
+## Previous Active Slice (archived 2026-04-30 04:00:00)
+
+```text
+Work session status: handoff_ready (T-1..T-5 SHIPPED)
+Closed at: 2026-04-30 04:00:00 -04:00
 T-5 result: orchestrator wiring + post-fill protective children + native
   bracket runtime path + Operations protection_status column shipped end-to-end.
   RuntimeOrchestrator now passes execution_plan into SignalPlanBuilder

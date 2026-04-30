@@ -14,35 +14,40 @@ Risk-horizon doctrine (locked 2026-04-29 by operator):
     Account chooses risk plan.
     Governor enforces.
 
-Each Account owns a per-horizon RiskPlan map (Slice B — not yet built).
-The Deployment declares its risk_horizon. At evaluation time the resolver
-looks up the Account's mapped RiskPlanVersion FOR THAT HORIZON and
-combines its config with the Account's AccountRiskConfig.
+Each Account owns a per-horizon RiskPlan map (Slice B). The Deployment
+declares its risk_horizon. At evaluation time the resolver looks up the
+Account's mapped RiskPlanVersion FOR THAT HORIZON and combines its config
+with the Account's AccountRiskConfig.
 
-Horizon vocabulary today (Slice A): the resolver accepts every
-``TradingHorizon`` enum value (currently ``SCALPING``, ``INTRADAY``,
-``SWING``, ``POSITION``). Slice B will add an ``OTHER`` variant for
-catch-all strategies; the resolver code already supports any enum value
-because the lookup is a callable, not a switch.
+T-6 (Bracket Program, MAP §7 D7) — TOCTOU hardening:
+  Both inputs are read together as a single point-in-time snapshot via
+  one composite lookup. The resolver no longer owns separate account /
+  plan callbacks; it owns one ``get_policy_inputs(account_id, horizon)``
+  callback. The production wiring in
+  ``BrokerRuntimeOrchestrator._build_governor_policy_resolver`` routes
+  this callback through ``SQLiteRuntimeStore.load_governor_policy_inputs``
+  which wraps both reads in a single SQLite connection. WAL mode at
+  composition root keeps the writer (operator PUT to /risk-plan-map)
+  non-blocking. Per D7: single-conn + WAL only, no optimistic version
+  stamps, no mid-evaluation rejection.
 
-Design constraints (locked in MAP §4):
-- Pure logic. The resolver does not own a runtime store; it accepts two
-  lookup callables so it stays testable without DB stubs.
+Design constraints (locked in MAP §4 + §7 D7):
+- Pure logic. The resolver does not own a runtime store; it accepts one
+  lookup callable so it stays testable without DB stubs.
 - ``GovernorPolicy`` is ``frozen``, so each resolution returns a new
   instance built from the floor policy + per-evaluation overrides.
 - Floor ``global_kill_active`` / ``paused_account_ids`` /
   ``paused_deployment_ids`` carry through verbatim. Per-evaluation policies
   may only ADD numeric limits, never relax kill/pause state.
-- Lookup callables that return ``None`` mean "no per-source override".
-  For RiskPlanConfig today, this is the steady-state since the per-horizon
-  AccountRiskPlanMap entity does not yet exist. A future Slice B will add
-  the entity AND the rejection rule for "Account has no plan for the
-  Deployment's horizon" — that rejection lives in the orchestrator, not
-  here, because it must produce a GovernorDecision rather than a policy.
-- Lookup callables that raise should NOT block trading; the resolver logs
+- The lookup callable returns ``(account_config, plan_config)``. Either
+  half may be ``None`` to mean "no per-source override".
+- Lookup callable that raises should NOT block trading; the resolver logs
   and falls back to the floor policy as if no override existed (graceful
   degrade per MAP D7). A misbehaving lookup is an operations problem, not
-  an entire-fleet kill switch.
+  an entire-fleet kill switch. In that case ``requires_risk_plan`` is
+  NOT set even if ``enforce_plan_required=True`` — that path is the
+  graceful-degrade branch and a transient DB failure must not become a
+  false-positive rejection.
 - Combine rule: ``min`` of present values per field. ``None`` on either
   side means "no contribution from this source"; both ``None`` means the
   field stays at the floor's value (typically ``None`` = no gate).
@@ -62,13 +67,12 @@ from .models import GovernorPolicy
 
 _LOG = logging.getLogger(__name__)
 
-AccountRiskConfigLookup = Callable[[UUID], AccountRiskConfig | None]
-# The (account_id, horizon) → RiskPlanConfig lookup is the per-Account,
-# per-horizon resolution required by the locked Risk Horizon doctrine.
-# Today this returns None for every input until AccountRiskPlanMap (Slice B)
-# lands — the resolver still works, just contributes no plan-side limits.
-RiskPlanConfigForHorizonLookup = Callable[
-    [UUID, TradingHorizon], RiskPlanConfig | None
+# T-6: composite (account, horizon) → (AccountRiskConfig?, RiskPlanConfig?)
+# lookup. The two halves are read as one snapshot so a concurrent operator
+# PUT to /risk-plan-map cannot interleave between them.
+GovernorPolicyInputsLookup = Callable[
+    [UUID, TradingHorizon],
+    "tuple[AccountRiskConfig | None, RiskPlanConfig | None]",
 ]
 
 
@@ -78,11 +82,9 @@ class GovernorPolicyResolver:
     def __init__(
         self,
         *,
-        get_account_risk_config: AccountRiskConfigLookup,
-        get_risk_plan_config_for_horizon: RiskPlanConfigForHorizonLookup,
+        get_policy_inputs: GovernorPolicyInputsLookup,
     ) -> None:
-        self._get_account_risk_config = get_account_risk_config
-        self._get_risk_plan_config_for_horizon = get_risk_plan_config_for_horizon
+        self._get_policy_inputs = get_policy_inputs
 
     def resolve(
         self,
@@ -112,8 +114,7 @@ class GovernorPolicyResolver:
         resolves by horizon, not by deployment.
         """
         del deployment_id  # explicitly unused; kept in signature on purpose
-        account_config = self._safe_lookup_account(account_id)
-        plan_config, plan_lookup_failed = self._safe_lookup_plan_with_status(account_id, risk_horizon)
+        account_config, plan_config, lookup_failed = self._safe_lookup(account_id, risk_horizon)
 
         # Slice B: if enforce_plan_required is True AND the plan lookup returned
         # None (not because the lookup itself raised, but because no map row
@@ -123,7 +124,7 @@ class GovernorPolicyResolver:
         #
         # If the lookup *raised* (DB error, transient failure), we do NOT set
         # requires_risk_plan — that path is graceful-degrade (MAP D7).
-        requires_risk_plan = enforce_plan_required and (plan_config is None) and (not plan_lookup_failed)
+        requires_risk_plan = enforce_plan_required and (plan_config is None) and (not lookup_failed)
 
         # Start from floor, then layer numeric limits with min-of-both.
         # Kill/pause state is preserved verbatim — see MAP D4.
@@ -165,41 +166,47 @@ class GovernorPolicyResolver:
             requires_risk_plan=requires_risk_plan,
         )
 
-    def _safe_lookup_account(self, account_id: UUID) -> AccountRiskConfig | None:
-        try:
-            return self._get_account_risk_config(account_id)
-        except Exception:
-            _LOG.warning(
-                "GovernorPolicyResolver: account risk config lookup failed for %s; "
-                "falling back to floor policy",
-                account_id,
-                exc_info=True,
-            )
-            return None
-
-    def _safe_lookup_plan_with_status(
+    def _safe_lookup(
         self, account_id: UUID, horizon: TradingHorizon
-    ) -> "tuple[RiskPlanConfig | None, bool]":
-        """Return ``(config, lookup_raised)`` tuple.
+    ) -> "tuple[AccountRiskConfig | None, RiskPlanConfig | None, bool]":
+        """Return ``(account_config, plan_config, lookup_raised)`` tuple.
 
-        ``lookup_raised=True`` means the lookup itself raised an exception
-        (DB error, transient failure); the caller should *not* set
-        ``requires_risk_plan`` in that case — that would be a false positive.
+        ``lookup_raised=True`` means the composite lookup itself raised an
+        exception (DB error, transient failure); the caller should *not*
+        set ``requires_risk_plan`` in that case — that would be a false
+        positive that kills trading during a transient DB failure.
 
-        ``lookup_raised=False, config=None`` means the lookup succeeded but
-        found no map row: the Account genuinely has no plan for this horizon.
+        ``lookup_raised=False, plan_config=None`` means the lookup succeeded
+        but found no map row: the Account genuinely has no plan for this
+        horizon. ``account_config`` may also be ``None`` independently.
+
+        T-6: this is the single TOCTOU-safe entry point. Both halves of
+        the snapshot come from one ``get_policy_inputs`` call so the
+        production SQLite wiring reads them inside one connection.
         """
         try:
-            return self._get_risk_plan_config_for_horizon(account_id, horizon), False
+            account_config, plan_config = self._get_policy_inputs(account_id, horizon)
+            return account_config, plan_config, False
         except Exception:
+            # Adversarial-critic BUG-3 (T-6 Pass 8): silent graceful-degrade
+            # is invisible to Operations. Emit a structured ``extra`` so
+            # log aggregators can alarm on
+            # ``event=governor_policy_inputs_lookup_failed``. D7 says the
+            # resolver must graceful-degrade (no false-positive
+            # rejection); it does not say the failure must be silent.
             _LOG.warning(
-                "GovernorPolicyResolver: risk plan config lookup failed for "
+                "GovernorPolicyResolver: policy-inputs lookup failed for "
                 "account %s horizon %s; falling back to floor policy",
                 account_id,
                 horizon,
                 exc_info=True,
+                extra={
+                    "event": "governor_policy_inputs_lookup_failed",
+                    "account_id": str(account_id),
+                    "horizon": horizon.value,
+                },
             )
-            return None, True
+            return None, None, True
 
 
 def _account_field(config: AccountRiskConfig | None, field: str) -> float | int | None:
@@ -228,7 +235,6 @@ def _min_present(*values: float | int | None) -> float | int | None:
 
 
 __all__ = [
-    "AccountRiskConfigLookup",
+    "GovernorPolicyInputsLookup",
     "GovernorPolicyResolver",
-    "RiskPlanConfigForHorizonLookup",
 ]

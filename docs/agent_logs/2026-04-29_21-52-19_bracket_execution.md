@@ -292,3 +292,104 @@ Sources:
 - alpaca/trading/requests.py:144-166
 
 ---
+
+## Pass 7 — T-6 baseline (TOCTOU hardening, D7 path)
+
+- pass number: 7 (T-6 baseline)
+- timestamp: 2026-04-30 06:00:00 -04:00
+- operator directive (this turn 2026-04-30): *"Proceed with T-6 using D7. Do NOT implement row-version optimistic locking. Do NOT add risk_plan_map_concurrent_modification rejection. Use single connection per evaluation + WAL mode at composition root. Each evaluation reads a consistent snapshot. Updates apply to future evaluations. Last-writer-wins outside evaluation window is acceptable."*
+- files changed:
+  - `backend/app/persistence/session.py` — `SQLiteSessionFactory.connect()` now issues `PRAGMA journal_mode=WAL` on every connect. WAL is a persistent database property (the first connect promotes the file; subsequent issues are no-ops), so re-issuing per-connect is idempotent and ensures fresh process boots converge to WAL even when the database file pre-exists in the legacy `delete` mode.
+  - `backend/app/persistence/runtime_store.py` — new method `load_governor_policy_inputs(account_id, horizon) -> tuple[AccountRiskConfig | None, RiskPlanConfig | None]` reads `account_risk_configs` and `account_risk_plan_map ⨝ risk_plan_versions` inside ONE `with self._connect() as connection:` block. DEPRECATED RiskPlanVersion still excluded (Slice B fix B-RISK-3 preserved). Returns `(None, None)` for missing rows; KeyError surfaces upward via the resolver's safe-lookup wrapper for graceful degrade.
+  - `backend/app/governor/policy_resolver.py` — `GovernorPolicyResolver` API refactored from two independent lookup callbacks (`get_account_risk_config` + `get_risk_plan_config_for_horizon`) to ONE composite callback (`get_policy_inputs`) so both halves of the snapshot come from one DB call. `_safe_lookup` is the new single graceful-degrade entry point: lookup raises → fall back to floor with `lookup_failed=True`; `requires_risk_plan` stays False even with `enforce_plan_required=True` so a transient DB failure cannot become a false-positive rejection (per D7).
+  - `backend/app/governor/__init__.py` — exports updated: drop `AccountRiskConfigLookup` + `RiskPlanConfigForHorizonLookup`, add `GovernorPolicyInputsLookup`.
+  - `backend/app/runtime/account_trading_orchestrator.py` — `_build_governor_policy_resolver` collapsed to a single path that wires `runtime_store.load_governor_policy_inputs` directly. Returns `None` when the runtime_store doesn't expose the new method (legacy single-policy path stays intact for in-memory test shims). The legacy two-callback fallback was removed — production-grade rule, no parallel paths.
+  - `backend/tests/unit/persistence/test_t6_toctou_hardening.py` (new) — 8 tests:
+    - `test_wal_mode_is_enabled_on_connect` (PRAGMA journal_mode reports `wal` after first connect)
+    - `test_wal_mode_is_idempotent_on_repeat_connect` (3 successive opens, mode stays wal, no error)
+    - `test_load_governor_policy_inputs_returns_both_halves` (round-trip with both populated)
+    - `test_load_governor_policy_inputs_returns_none_for_missing_rows` (no AccountRiskConfig + no map row → (None, None))
+    - `test_load_governor_policy_inputs_skips_deprecated_plan` (DEPRECATED RiskPlanVersion → plan_config=None; B-RISK-3 preserved)
+    - `test_concurrent_put_does_not_yield_mixed_state_to_evaluation` — the headline race test: two-version setup (OLD caps positions at 3, NEW at 7), reader thread hammers `load_governor_policy_inputs` while writer thread flips `risk_plan_map` 200 times between OLD and NEW; assert every observation is in {3, 7}, never a mix.
+    - `test_concurrent_put_does_not_block_reader` — soft check WAL is on: reader completes ≥50 reads in parallel with 200 writer flips. Without WAL, SQLite would serialize writer↔reader and the reader would stall.
+    - `test_governor_evaluation_observes_no_mixed_state_under_put_race` — end-to-end via real `GovernorPolicyResolver`; same race shape but resolved through the production policy code; assert resolved `max_open_positions ∈ {3, 7}`.
+  - `backend/tests/unit/governor/test_policy_resolver.py` — `_resolver()` helper folds the two legacy callbacks into one composite callback; deleted `test_account_lookup_raising_falls_back_to_plan_only` and `test_plan_lookup_raising_falls_back_to_account_only` (per-source partial failure no longer a meaningful state); added `test_composite_lookup_raising_falls_back_to_floor` (composite raise → floor preserved + `requires_risk_plan=False` even with `enforce_plan_required=True`).
+  - `backend/tests/unit/pipeline/test_runtime_orchestrator.py` — 4 `GovernorPolicyResolver(...)` construction sites converted to the composite callback; `_resolver_for` helper updated similarly.
+  - `Operations_Turtle_Shell_Artifacts/STRATEGY_TO_BROKER_BRACKET_PROGRAM.md` — D7 row gains a clarifying paragraph that names the new method + explains the API refactor that made single-conn realizable, per operator's *"Update MAP §7 only if needed for clarity, not to change doctrine."* The doctrine itself is unchanged.
+  - `COORDINATION/LOCKS.md` — 4 fresh T-6 leases (TTL 2h).
+  - `COORDINATION/INBOX_CODEX.md` — heads-up filed at slice start.
+- decisions made:
+  - **D7 strict path** per operator directive. Confirmed in pre-coding question to operator. No optimistic locking, no `risk_plan_map_concurrent_modification` rule.
+  - **Resolver API refactored** rather than caching results across two callbacks. Two earlier wiring designs (thread-local cache populated on plan_lookup; intermediate snapshot held in resolver) were rejected because (a) cache cleanup window is fragile, (b) per-source-failure tests still implied independent reads. Refactoring to a single composite callback is the doctrine-correct realization of D7's "single connection per evaluation" — both halves of the snapshot now come from one call. Test churn was 5 construction sites (4 in tests + 1 in production) plus a helper; manageable.
+  - **`requires_risk_plan` stays False on lookup raise** even when `enforce_plan_required=True`. This preserves the Slice B graceful-degrade contract: a transient DB failure must not become a false-positive `account_missing_risk_plan_for_horizon` rejection that kills trading.
+  - **Returned `None` for both halves on KeyError** in `_build_governor_policy_resolver`'s composite wrapper. Other exceptions propagate so the resolver's `_safe_lookup` can route them to the graceful-degrade branch.
+  - **Race test asserts `set(observed).issubset({3, 7})`** rather than asserting both states observed. The doctrine guarantee is "no mix", not "must observe both states" — observing only one state still satisfies it. Soft transition observation is left to the throughput test.
+  - **WAL throughput floor 50 reads in 30s.** Soft check that reader-writer concurrency actually runs in parallel; without WAL the reader stalls. Floor is intentionally low to avoid Windows / Python 3.14 jitter false-fails.
+- blockers and 5 Whys:
+  - **Blocker: per-source resolver tests no longer fit the composite API.** Why? The two failure-mode tests assumed account_lookup could raise while plan_lookup succeeded. Why does that break? The production T-6 path reads both halves in one call; you cannot have one half raise and the other succeed. Why was that the test design before? Slice A's two-callback API made the orthogonal failure path explicit. Why is it not orthogonal anymore? D7 unifies the read into one snapshot; orthogonal failures stop being a real production state. Resolution: deleted the two tests and added one composite-failure test that asserts the new contract (lookup raise → floor preserved + `requires_risk_plan=False`). Net test delta: -2 + 1 + 8 = +7.
+- tests run:
+  - `pytest backend/tests/unit/persistence/test_t6_toctou_hardening.py -v` → 8 passed.
+  - `pytest backend/tests/unit/governor backend/tests/unit/pipeline backend/tests/unit/persistence backend/tests/unit/runtime backend/tests/unit/broker_accounts -q` → 277 passed (focused gate).
+  - `pytest backend/tests/unit -q` → **1569 passed** (+7 over T-5 baseline 1562).
+  - `pytest backend/tests/unit/orders/test_order_manager.py::test_no_external_calls -v` → passed (banned-name guard clean).
+  - `npx tsc --noEmit` → clean.
+  - `npx vitest run` → **399 passed across 54 files** (no change — T-6 has no frontend surface).
+  - `npm run lint:names` → clean.
+- test results: all green; zero regressions.
+- remaining gaps:
+  - Architecture critic + Adversarial critic pass (parallel sonnet x2) running at the time of this baseline writeup; their findings addressed in Pass 8 below.
+  - T-7 (Daily-state aggregator + cooldown) still pending after T-6.
+- next action: collect critic findings; address fix-in-slice items; commit T-6; proceed to T-7.
+
+---
+
+## Pass 8 — T-6 critic findings + fix-in-slice resolution
+
+- pass number: 8 (T-6 critic pass)
+- timestamp: 2026-04-30 06:30:00 -04:00
+- agents spawned: 2 parallel sonnet critics — Architecture/doctrine, Adversarial bug-hunt. (UX critic skipped per slice plan: T-6 has no operator-facing UI surface.)
+- critic output summary:
+  - **Architecture critic**: 1 BUG, 3 RISK, 4 NIT findings.
+  - **Adversarial critic**: 3 BUG, 4 RISK, 4 NIT findings.
+  - Both critics independently identified the same headline BUG (single connection alone is not a SQLite snapshot under default Python ``sqlite3`` ``isolation_level=""``).
+
+### Fix-in-slice items shipped (5):
+
+1. **Fix #1 — Explicit ``BEGIN`` / ``COMMIT`` around the composite read** (architecture BUG-1 + adversarial BUG-1, both critics agreed): Python's ``sqlite3`` driver default ``isolation_level=""`` only implicitly begins a transaction on DML — bare SELECTs autocommit. In WAL mode, two consecutive SELECTs on the same connection therefore each take their own end-mark read snapshot, and a writer that commits between them is visible to the second one. ``load_governor_policy_inputs`` now opens an explicit ``BEGIN`` before the first SELECT and ``COMMIT`` after the second so both reads come from one snapshot. Docstring updated to document the mechanism (driver autocommit nuance + why single-conn alone is insufficient).
+
+2. **Fix #2 — Strengthened race regression with a real dual-write scenario** (architecture RISK-1 / adversarial RISK-1): the original headline race test (`test_concurrent_put_does_not_yield_mixed_state_to_evaluation`) only flipped one row, so any "mix" still reported a coherent plan_config — the test was doctrinally vacuous. New test `test_concurrent_dual_write_does_not_yield_correlated_mix` mutates BOTH ``account_risk_configs`` and ``account_risk_plan_map`` inside ONE writer SQLite transaction, tagging two coherent generations: A=(account_max_open=10, plan_cap=3) vs. B=(account_max_open=20, plan_cap=7). Reader asserts every observation is in {(10,3), (20,7)}; (10,7) and (20,3) would be the half-applied snapshot the BEGIN/COMMIT closes. Confirmed the test catches the BUG-1 failure mode by temporarily disabling the BEGIN/COMMIT and observing (10,7) and (20,3) in the failure output.
+
+3. **Fix #3 — Removed dead ``except KeyError`` in orchestrator wiring** (adversarial BUG-5): ``SQLiteRuntimeStore.load_governor_policy_inputs`` never raises ``KeyError`` for missing rows — it returns ``(None, None)`` natively. The wrapper closure in ``_build_governor_policy_resolver`` had ``try: ... except KeyError: return None, None`` which was both dead AND would mask a real future bug (e.g. malformed payload in ``_load_model``) by converting it to a silent "no override" path that bypasses ``_safe_lookup``'s graceful-degrade logging. Wrapper closure removed entirely; the resolver now binds `runtime_store.load_governor_policy_inputs` directly. Real exceptions propagate into ``_safe_lookup`` which logs them per D7.
+
+4. **Fix #4 — Structured log on graceful-degrade failure** (adversarial BUG-3): ``_safe_lookup`` previously logged a plain warning string on lookup raise; log aggregators couldn't alarm on the path. Added a structured ``extra`` dict with ``event="governor_policy_inputs_lookup_failed"`` + ``account_id`` + ``horizon`` so Operations dashboards can wire an alarm. D7 says graceful-degrade — it does not say silent.
+
+5. **Fix #5 — Doctrine-doc T-6 amendment** (architecture RISK-2): `Operations_Turtle_Shell_Artifacts/GOVERNOR_WIRING_MAP.md` and `GOVERNOR_WIRING_MAP_SLICE_B.md` still described the resolver as a two-callback constructor (`get_account_risk_config` + `get_risk_plan_config_for_horizon`). T-6 collapsed that to one composite callback. Both docs now carry a short T-6 amendment block at the top noting the new shape. The locked Risk Horizon doctrine in §0 of each doc is unchanged.
+
+Also updated `STRATEGY_TO_BROKER_BRACKET_PROGRAM.md` §7 D7 with a clarifying paragraph naming the new method and explaining the API refactor that made single-conn realizable. Per operator: *"Update MAP §7 only if needed for clarity, not to change doctrine."*
+
+### Out-of-slice items (deferred):
+
+- Architecture NIT-1: rename `load_governor_policy_inputs` → `load_governor_policy_snapshot`. Naming churn is a separate slice; defer.
+- Architecture NIT-2: assert `PRAGMA journal_mode=WAL` actually granted (warn if filesystem rejected WAL on a network share). Cheap log-only enhancement; deferred — operator's local SQLite path is doctrine-fine.
+- Adversarial RISK-6: WAL sidecar files (`-wal`, `-shm`) — search for any code that copies/checksums the runtime DB file; document sidecars; consider periodic checkpoint. No current consumer; defer.
+- Adversarial RISK-7: per-connect PRAGMA cost. Every `_fetch_one`/`_fetch_all` opens a fresh connection that runs two PRAGMAs. Throughput tax. Defer to a future caching slice.
+- Adversarial NIT-4: gap in coverage where the production composite raises specifically inside the runtime_store layer (vs. inside a test shim). The orchestrator wrapper now binds the method directly, so a real raise does propagate; the resolver-side composite-failure test exercises the path. Defer additional regression depth.
+
+### Tests added (1) + tightened (existing 8 retained):
+
+- `backend/tests/unit/persistence/test_t6_toctou_hardening.py::test_concurrent_dual_write_does_not_yield_correlated_mix` (new, the headline doctrine guard).
+- The original 8 tests remain unchanged; they now run alongside the dual-write test.
+
+### Verification post-fixes:
+
+- `pytest backend/tests/unit/persistence/test_t6_toctou_hardening.py -v` → **9 passed**.
+- `pytest backend/tests/unit -q` → **1570 passed** (+8 over T-5 baseline 1562, +1 over T-6 Pass 7 baseline 1569 = the new dual-write race test).
+- `npx tsc --noEmit` → clean.
+- `npx vitest run` → **399 passed across 54 files** (no change — T-6 has no frontend surface).
+- `npm run lint:names` → clean.
+- `pytest backend/tests/unit/orders/test_order_manager.py::test_no_external_calls -v` → passed (manager.py banned-name guard).
+- Sanity check: temporarily disabled the BEGIN/COMMIT block in `load_governor_policy_inputs` and confirmed `test_concurrent_dual_write_does_not_yield_correlated_mix` fails with observed (10,7) / (20,3) pairs. Restored. Confirms the regression test actually exercises the BUG-1 mechanism.
+
+- next action: append LEDGER entry; release T-6 leases; update OPERATION_STATUS to T-6 SHIPPED; file INBOX_CODEX heads-up; commit T-6 as a single commit; proceed to T-7 (Daily-state aggregator + cooldown).
+
+---

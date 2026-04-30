@@ -277,31 +277,34 @@ class BrokerRuntimeOrchestrator:
         # Returns None when the runtime store cannot supply lookups (test
         # fixtures, in-memory orchestrators) so the legacy single-policy
         # path stays intact.
-        if self._runtime_store is None or not hasattr(self._runtime_store, "load_account_risk_config"):
+        if self._runtime_store is None or not hasattr(self._runtime_store, "load_governor_policy_inputs"):
             return None
 
         runtime_store = self._runtime_store
 
-        def _account_lookup(account_id: UUID) -> AccountRiskConfig | None:
-            try:
-                return runtime_store.load_account_risk_config(account_id)
-            except KeyError:
-                return None
-
-        def _plan_lookup(account_id: UUID, horizon: TradingHorizon) -> RiskPlanConfig | None:
-            # Slice B: delegate to the production runtime_store method that
-            # joins account_risk_plan_map → risk_plan_versions to resolve the
-            # operator-assigned RiskPlanConfig for this (account, horizon).
-            # Returns None when no map row exists (triggers the
-            # account_missing_risk_plan_for_horizon rejection rule in the
-            # Governor when requires_risk_plan is True).
-            if not hasattr(runtime_store, "load_risk_plan_config_for_horizon"):
-                return None
-            return runtime_store.load_risk_plan_config_for_horizon(account_id, horizon)
-
+        # T-6 (MAP §7 D7): TOCTOU hardening. The resolver reads both
+        # AccountRiskConfig and the per-horizon RiskPlanConfig in ONE
+        # ``runtime_store.load_governor_policy_inputs`` call. The
+        # SQLiteRuntimeStore implementation wraps both reads in a single
+        # connection so a concurrent operator PUT to /risk-plan-map
+        # cannot interleave between them and hand the resolver a
+        # half-applied state. WAL mode at composition root
+        # (SQLiteSessionFactory.connect) keeps the writer non-blocking.
+        # Per D7 the doctrine choice is single-conn + WAL only — no
+        # optimistic version stamps, no mid-evaluation rejection.
+        # Updates apply to the next evaluation (last-writer-wins outside
+        # the evaluation window).
+        # Adversarial-critic BUG-5 (T-6 Pass 8): no try/except KeyError
+        # wrapper here. ``SQLiteRuntimeStore.load_governor_policy_inputs``
+        # never raises ``KeyError`` for missing rows — it returns
+        # ``(None, None)`` natively. A blanket ``except KeyError`` would
+        # only mask a real bug (e.g. malformed payload in ``_load_model``)
+        # by converting it to a silent "no override" path that bypasses
+        # the resolver's ``_safe_lookup`` graceful-degrade logging. Real
+        # exceptions propagate into ``_safe_lookup`` which logs them and
+        # falls back to floor per D7.
         return GovernorPolicyResolver(
-            get_account_risk_config=_account_lookup,
-            get_risk_plan_config_for_horizon=_plan_lookup,
+            get_policy_inputs=runtime_store.load_governor_policy_inputs,
         )
 
     def _freshness(self, account_id: UUID):

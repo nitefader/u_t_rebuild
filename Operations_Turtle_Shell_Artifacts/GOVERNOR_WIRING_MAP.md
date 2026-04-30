@@ -7,6 +7,14 @@ Doctrine references: `HANDOFF_PROTOCOL.md`, `TURTLE_SHELL_GUARDRAILS.md`, `COORD
 
 ---
 
+## T-6 Amendment (2026-04-30) — Resolver API consolidated for TOCTOU snapshot
+
+The Bracket Program's T-6 (TOCTOU hardening) refactored the resolver's lookup contract from two independent callbacks (`get_account_risk_config` + `get_risk_plan_config_for_horizon`) to ONE composite callback (`get_policy_inputs(account_id, horizon) -> (AccountRiskConfig | None, RiskPlanConfig | None)`). Both halves of the snapshot now come from one call so the production `SQLiteRuntimeStore.load_governor_policy_inputs` can wrap both reads in a single connection + explicit read transaction (per `STRATEGY_TO_BROKER_BRACKET_PROGRAM.md` §7 D7).
+
+The locked Risk Horizon doctrine in §0 below is unchanged. The Slice A wiring described in §3-§6 below still describes the *purpose* of each lookup correctly; only the *signature* moved. Anywhere this MAP says "two callbacks" or quotes `get_account_risk_config` / `get_risk_plan_config_for_horizon`, read it as the single composite `get_policy_inputs` callback. The per-source DB methods (`load_account_risk_config`, `load_risk_plan_config_for_horizon`) still exist on `SQLiteRuntimeStore`; they are kept for non-resolver callers (route handlers, diagnostics).
+
+---
+
 ## 0 · Locked Risk Horizon Doctrine (operator-locked 2026-04-29)
 
 > Deployment chooses horizon. Account chooses risk plan. Governor enforces.

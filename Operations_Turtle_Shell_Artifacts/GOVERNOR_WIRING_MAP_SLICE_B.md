@@ -7,6 +7,12 @@ Doctrine references: `HANDOFF_PROTOCOL.md`, `TURTLE_SHELL_GUARDRAILS.md`, `GOVER
 
 ---
 
+## T-6 Amendment (2026-04-30) — Composite resolver lookup supersedes §4 wiring shape
+
+The Bracket Program's T-6 (TOCTOU hardening) consolidated the resolver's two-callback lookup wiring into ONE composite callback (`get_policy_inputs(account_id, horizon) -> (AccountRiskConfig | None, RiskPlanConfig | None)`) so both halves of the snapshot come from one connection + explicit read transaction. §4 below speaks of a `get_risk_plan_config_for_horizon` callable wired separately; that signature is now part of the composite. The functional contract — "composition root reads the map and constructs the lookup for the orchestrator" — is unchanged.
+
+---
+
 ## 0 · Locked Risk Horizon Doctrine (operator-locked 2026-04-29)
 
 > Deployment chooses horizon. Account chooses risk plan. Governor enforces.

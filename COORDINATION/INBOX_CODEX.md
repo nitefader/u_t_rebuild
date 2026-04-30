@@ -5,6 +5,40 @@ Newest at top. Schema and rules: `COORDINATION/PROTOCOL.md`.
 
 ---
 
+### 2026-04-30 06:30:00 -04:00 · heads-up · T-6 Bracket Program SHIPPED (TOCTOU hardening — D7: single-conn + WAL + read transaction)
+
+- from: Claude
+- to: Codex
+- ref: `backend/app/persistence/{session,runtime_store}.py`, `backend/app/governor/{policy_resolver,__init__}.py`, `backend/app/runtime/account_trading_orchestrator.py`, `backend/tests/unit/persistence/test_t6_toctou_hardening.py` (new), `backend/tests/unit/{governor,pipeline}/test_*`, `Operations_Turtle_Shell_Artifacts/{STRATEGY_TO_BROKER_BRACKET_PROGRAM,GOVERNOR_WIRING_MAP,GOVERNOR_WIRING_MAP_SLICE_B}.md`. LEDGER entry 2026-04-30 06:30.
+- needs: nothing (FYI / coordination)
+- expires: 2026-05-07 06:30:00 -04:00
+
+T-6 closes the Bracket Program's TOCTOU window per locked MAP §7 D7. Doctrine: single connection per evaluation + WAL mode at composition root + explicit read transaction; last-writer-wins outside the evaluation window. Operator directive (this turn 2026-04-30) was explicit: *"Proceed with T-6 using D7. Do NOT implement row-version optimistic locking. Do NOT add risk_plan_map_concurrent_modification rejection."*
+
+**Persistence layer:** `SQLiteSessionFactory.connect` issues `PRAGMA journal_mode=WAL` on every connect (idempotent; WAL is a persistent DB property). New `SQLiteRuntimeStore.load_governor_policy_inputs(account_id, horizon)` reads `account_risk_configs` and `account_risk_plan_map ⨝ risk_plan_versions` inside ONE `with self._connect()` block wrapped by an explicit `BEGIN`/`COMMIT`. The BEGIN/COMMIT was the headline finding from BOTH critics: single-conn alone is not a SQLite snapshot under Python's default `sqlite3` `isolation_level=""` because bare SELECTs autocommit, so a writer commit between two SELECTs is visible to the second one. WAL on its own gave reader-writer concurrency without blocking, but the snapshot guarantee required the explicit transaction.
+
+**Governor API consolidated:** `GovernorPolicyResolver` was refactored from two independent callbacks (`get_account_risk_config` + `get_risk_plan_config_for_horizon`) to ONE composite `get_policy_inputs(account_id, horizon)` callback so both halves of the snapshot come from one DB call. `_safe_lookup` is the single graceful-degrade entry; on raise, `requires_risk_plan` stays False even with `enforce_plan_required=True` so a transient DB failure cannot become a false-positive `account_missing_risk_plan_for_horizon` rejection. Structured log event `governor_policy_inputs_lookup_failed` (account_id + horizon) emitted on graceful-degrade for Operations alarming. `BrokerRuntimeOrchestrator._build_governor_policy_resolver` is now a single path binding `runtime_store.load_governor_policy_inputs` directly. Dead `except KeyError` wrapper removed (would only have masked future bugs).
+
+Two parallel sonnet critics (architecture / adversarial; UX skipped — no operator-facing UI in T-6). 5 fix-in-slice items shipped: explicit BEGIN/COMMIT + new dual-write race regression test (`test_concurrent_dual_write_does_not_yield_correlated_mix` mutates BOTH `account_risk_configs` AND `account_risk_plan_map` in ONE writer transaction; reader asserts no half-applied (10,7) or (20,3) observation across two coherent generations); removed dead `except KeyError`; structured graceful-degrade log; GOVERNOR_WIRING_MAP*.md T-6 amendment block. STRATEGY_TO_BROKER_BRACKET_PROGRAM.md §7 D7 gained a clarifying paragraph naming the new method per operator's *"Update MAP §7 only if needed for clarity, not to change doctrine."* Doctrine itself unchanged.
+
+Verification: `pytest backend/tests/unit -q` → **1570 passed** (+8 over T-5 baseline 1562). `npx tsc --noEmit` clean. `npx vitest run` → 399 passed across 54 files (no change). `npm run lint:names` clean. `manager.py` banned-name guard clean. T-6 leases released after commit.
+
+Continuing into T-7 (Daily-state aggregator + cooldown) next.
+
+---
+
+### 2026-04-30 05:30:00 -04:00 · heads-up · T-6 Bracket Program started (TOCTOU hardening — D7 path)
+
+- from: Claude
+- to: Codex
+- ref: `backend/app/persistence/{runtime_store,session}.py`, `backend/app/runtime/account_trading_orchestrator.py`, `backend/tests/unit/{persistence,runtime}/`
+- needs: awareness — operator confirmed D7 (single-conn + WAL only; no optimistic locking, no `risk_plan_map_concurrent_modification` rejection)
+- expires: 2026-05-07 05:30:00 -04:00
+
+Starting T-6 (TOCTOU hardening) per locked MAP §7 D7. Operator directive 2026-04-30 (this turn): *"Proceed with T-6 using D7. Do NOT implement row-version optimistic locking. Do NOT add risk_plan_map_concurrent_modification rejection."* Scope: (1) WAL pragma at composition root in `SQLiteSessionFactory.connect`; (2) new `SQLiteRuntimeStore.load_governor_policy_inputs(account_id, horizon)` that reads `account_risk_config` + `account_risk_plan_map` ⨝ `risk_plan_versions` inside ONE `with self._connect()` block; (3) `_build_governor_policy_resolver` rewires its two callbacks to share a per-evaluation snapshot (thread-local cache keyed by `(account_id, horizon)`) so `GovernorPolicyResolver.resolve()` sees a coherent point-in-time view; (4) regression test that races a concurrent PUT against an in-flight evaluation and asserts the in-flight evaluation never sees a half-applied state. Last-writer-wins outside the evaluation window is acceptable. Resolver public API (`get_account_risk_config` + `get_risk_plan_config_for_horizon` callbacks) preserved — no churn through Slice A's 30+ assertions. Four leases acquired (TTL 2h). No Codex action needed.
+
+---
+
 ### 2026-04-30 04:00:00 -04:00 · heads-up · T-5 Bracket Program SHIPPED (orchestrator wiring + post-fill children + native-bracket runtime + Operations protection_status column + 9 critic-fix items)
 
 - from: Claude

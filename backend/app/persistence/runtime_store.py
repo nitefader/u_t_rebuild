@@ -787,6 +787,80 @@ class SQLiteRuntimeStore:
             return None
         return version.config
 
+    def load_governor_policy_inputs(
+        self, account_id: UUID, horizon: TradingHorizon
+    ) -> "tuple[AccountRiskConfig | None, RiskPlanConfig | None]":
+        """Read both Governor policy inputs as ONE atomic snapshot.
+
+        T-6 (Bracket Program, MAP §7 D7): the two reads that feed
+        ``GovernorPolicyResolver.resolve()`` — ``account_risk_config`` and
+        the ``account_risk_plan_map`` ⨝ ``risk_plan_versions`` join — must
+        observe a single point-in-time snapshot. Without this, a
+        concurrent operator PUT can hand the resolver a half-applied
+        state (old account config, new plan, or vice versa).
+
+        Single connection alone is not sufficient. Python's sqlite3 driver
+        default ``isolation_level=""`` only implicitly begins a
+        transaction on DML; bare SELECTs autocommit. In WAL mode each
+        autocommit SELECT takes its own end-mark read snapshot, so two
+        consecutive SELECTs on the same connection can observe different
+        snapshots if a writer commits between them. We therefore open an
+        explicit ``BEGIN`` before the first SELECT and ``COMMIT`` after
+        the second so both rows come from one read snapshot.
+
+        WAL mode is enabled at composition root (``SQLiteSessionFactory``)
+        so the writer does not block this reader. Per D7 the doctrine
+        choice is single-conn + WAL + read-transaction only — no
+        optimistic version stamps, no mid-evaluation rejection. Updates
+        that arrive after the BEGIN apply to the next evaluation
+        (last-writer-wins outside the evaluation window).
+
+        Returns ``(account_config, risk_plan_config)``. Either side may
+        be ``None`` when no row exists. Never raises for a missing row;
+        DB outages still propagate so the resolver's safe-lookup wrappers
+        can graceful-degrade per D7.
+        """
+        from backend.app.domain.risk_plan import (
+            RiskPlanConfig,
+            RiskPlanVersion,
+            RiskPlanVersionStatus,
+        )
+
+        with self._connect() as connection:
+            # Explicit read transaction so both SELECTs see one snapshot.
+            # See docstring above for why ``isolation_level=""`` defaults
+            # are not enough on their own.
+            connection.execute("BEGIN")
+            try:
+                account_row = connection.execute(
+                    "SELECT payload FROM account_risk_configs WHERE account_id = ?",
+                    (str(account_id),),
+                ).fetchone()
+                plan_row = connection.execute(
+                    """
+                    SELECT rpv.payload
+                    FROM account_risk_plan_map arpm
+                    JOIN risk_plan_versions rpv
+                        ON arpm.risk_plan_version_id = rpv.risk_plan_version_id
+                    WHERE arpm.account_id = ? AND arpm.horizon = ?
+                    """,
+                    (str(account_id), horizon.value),
+                ).fetchone()
+            finally:
+                connection.execute("COMMIT")
+
+        account_config: AccountRiskConfig | None = (
+            _load_model(AccountRiskConfig, account_row["payload"])
+            if account_row is not None
+            else None
+        )
+        plan_config: RiskPlanConfig | None = None
+        if plan_row is not None:
+            version = _load_model(RiskPlanVersion, plan_row["payload"])
+            if version.status != RiskPlanVersionStatus.DEPRECATED:
+                plan_config = version.config
+        return account_config, plan_config
+
     def save_broker_account_snapshot(self, snapshot: BrokerAccountSnapshot) -> BrokerAccountSnapshot:
         with self._connect() as connection:
             connection.execute(

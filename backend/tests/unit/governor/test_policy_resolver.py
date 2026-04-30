@@ -54,10 +54,22 @@ def _resolver(
         [UUID, TradingHorizon], RiskPlanConfig | None
     ] = lambda _aid, _h: None,
 ) -> GovernorPolicyResolver:
-    return GovernorPolicyResolver(
-        get_account_risk_config=account_lookup,
-        get_risk_plan_config_for_horizon=plan_lookup,
-    )
+    """Compose the two legacy lookup callbacks into the new T-6 composite
+    ``get_policy_inputs`` callback. Tests still author per-source behavior
+    via ``account_lookup`` / ``plan_lookup`` shims; the helper translates
+    them into the snapshot tuple the resolver now expects.
+
+    Either lookup raising propagates up so ``_safe_lookup`` can route
+    the failure into the graceful-degrade branch (MAP D7) — keeping the
+    existing failure-mode tests honest.
+    """
+
+    def _combined(
+        account_id: UUID, horizon: TradingHorizon
+    ) -> tuple[AccountRiskConfig | None, RiskPlanConfig | None]:
+        return account_lookup(account_id), plan_lookup(account_id, horizon)
+
+    return GovernorPolicyResolver(get_policy_inputs=_combined)
 
 
 # ---------------------------------------------------------------------------
@@ -263,41 +275,37 @@ def test_resolve_preserves_paused_deployment_ids():
 # ---------------------------------------------------------------------------
 # Lookup failure — graceful degrade (MAP D7)
 # ---------------------------------------------------------------------------
+#
+# T-6 semantics: the resolver now reads (account_config, plan_config) as one
+# atomic composite snapshot. A "partial failure" (one source raises, the
+# other returns) is no longer a meaningful state — both halves are read in
+# a single connection on the production SQLite store. The graceful-degrade
+# branch fires when the *composite* lookup raises; in that case both sides
+# fall back to the floor and ``requires_risk_plan`` stays False so a
+# transient DB failure cannot become a false-positive rejection.
 
 
-def test_account_lookup_raising_falls_back_to_plan_only():
-    def _broken_account(_aid: UUID) -> AccountRiskConfig | None:
+def test_composite_lookup_raising_falls_back_to_floor():
+    """Composite snapshot read raises → resolver returns the floor unchanged.
+
+    Per MAP D7: a transient DB failure must not block trading.
+    ``requires_risk_plan`` must stay False even with
+    ``enforce_plan_required=True`` so an outage is not silently treated
+    as "no plan mapped".
+    """
+    def _broken(_aid: UUID, _h: TradingHorizon):
         raise RuntimeError("simulated DB outage")
 
-    plan = _plan_config(max_open_positions=4)
-    policy = _resolver(
-        account_lookup=_broken_account,
-        plan_lookup=lambda _aid, _h: plan,
-    ).resolve(
-        floor=GovernorPolicy(),
+    floor = GovernorPolicy(max_open_positions=2)
+    policy = GovernorPolicyResolver(get_policy_inputs=_broken).resolve(
+        floor=floor,
         account_id=ACCOUNT_ID,
         deployment_id=DEPLOYMENT_ID,
         risk_horizon=TradingHorizon.INTRADAY,
+        enforce_plan_required=True,
     )
-    # Account contributes nothing (errored); plan still applies.
-    assert policy.max_open_positions == 4
-
-
-def test_plan_lookup_raising_falls_back_to_account_only():
-    def _broken_plan(_aid: UUID, _h: TradingHorizon) -> RiskPlanConfig | None:
-        raise RuntimeError("simulated DB outage")
-
-    account = _account_config(max_open_positions=7)
-    policy = _resolver(
-        account_lookup=lambda _aid: account,
-        plan_lookup=_broken_plan,
-    ).resolve(
-        floor=GovernorPolicy(),
-        account_id=ACCOUNT_ID,
-        deployment_id=DEPLOYMENT_ID,
-        risk_horizon=TradingHorizon.SWING,
-    )
-    assert policy.max_open_positions == 7
+    assert policy.max_open_positions == 2  # floor preserved
+    assert policy.requires_risk_plan is False  # graceful-degrade per D7
 
 
 def test_both_lookups_raising_returns_floor():

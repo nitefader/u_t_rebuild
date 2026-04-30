@@ -1087,9 +1087,10 @@ def _make_plan_config(**overrides):
 
 def _resolver_for(account_config=None, plan_config=None):
     from backend.app.governor import GovernorPolicyResolver
+    # T-6: composite single-conn lookup. The helper folds the per-source
+    # configs into the snapshot tuple the resolver now expects.
     return GovernorPolicyResolver(
-        get_account_risk_config=lambda _aid: account_config,
-        get_risk_plan_config_for_horizon=lambda _aid, _h: plan_config,
+        get_policy_inputs=lambda _aid, _h: (account_config, plan_config),
     )
 
 
@@ -1238,10 +1239,11 @@ def test_resolver_handles_multi_account_fanout_independently() -> None:
     from backend.app.governor import GovernorPolicyResolver
     # Slice B: provide a plan_config so requires_risk_plan is False; this
     # test is specifically about multi-account fanout capturing, not the
-    # missing-plan rejection.
+    # missing-plan rejection. T-6: the per-source lookups are folded into
+    # the composite get_policy_inputs callback; account_lookup runs inside
+    # to keep the captured-account assertion intact.
     resolver = GovernorPolicyResolver(
-        get_account_risk_config=_account_lookup,
-        get_risk_plan_config_for_horizon=lambda _aid, _h: _make_plan_config(),
+        get_policy_inputs=lambda aid, _h: (_account_lookup(aid), _make_plan_config()),
     )
     resolved = _components()
     pipeline = RuntimeOrchestrator(
@@ -1292,9 +1294,9 @@ def test_resolver_missing_plan_rejects_entry_signal() -> None:
     """
     from backend.app.governor import GovernorPolicyResolver
 
+    # T-6: composite snapshot — both halves None so requires_risk_plan trips.
     resolver = GovernorPolicyResolver(
-        get_account_risk_config=lambda _aid: None,  # no AccountRiskConfig
-        get_risk_plan_config_for_horizon=lambda _aid, _h: None,  # no plan mapped
+        get_policy_inputs=lambda _aid, _h: (None, None),
     )
     # Use a deployment with an explicit risk_horizon so enforce_plan_required=True.
     resolved = _components()
@@ -1332,8 +1334,7 @@ def test_resolver_missing_plan_does_not_block_protective_exit() -> None:
     opening_signal_plan_id = uuid4()
 
     resolver = GovernorPolicyResolver(
-        get_account_risk_config=lambda _aid: None,
-        get_risk_plan_config_for_horizon=lambda _aid, _h: None,
+        get_policy_inputs=lambda _aid, _h: (None, None),
     )
     # Deployment with explicit risk_horizon to activate the doctrine check.
     deployment = DeploymentContext(

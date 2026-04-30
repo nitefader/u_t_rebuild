@@ -10,22 +10,20 @@ from .models import (
     PositionSummary,
 )
 from .policy_resolver import (
-    AccountRiskConfigLookup,
+    GovernorPolicyInputsLookup,
     GovernorPolicyResolver,
-    RiskPlanConfigForHorizonLookup,
 )
 from .service import PortfolioGovernor
 
 __all__ = [
-    "AccountRiskConfigLookup",
     "BrokerSyncFreshness",
     "GovernorDecision",
     "GovernorPolicy",
+    "GovernorPolicyInputsLookup",
     "GovernorPolicyResolver",
     "GovernorRequest",
     "PendingOpenSummary",
     "PortfolioGovernor",
     "PortfolioSnapshot",
     "PositionSummary",
-    "RiskPlanConfigForHorizonLookup",
 ]
