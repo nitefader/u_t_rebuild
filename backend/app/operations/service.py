@@ -5,7 +5,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING
 from uuid import UUID
 
-from backend.app.brokers.models import BrokerFillUpdateEvent
+from backend.app.brokers.models import BrokerFillUpdateEvent, BrokerPositionSnapshot
 from backend.app.domain import (
     AccountEvaluationStatus,
     AccountParticipationDecision,
@@ -26,6 +26,7 @@ from .models import (
     DeploymentSummary,
     FlattenRequestResponse,
     InternalOrderLedgerSummary,
+    OperatorPositionView,
     OrderDetail,
     OPEN_ORDER_STATUSES,
     ResearchEvidenceSummary,
@@ -115,13 +116,15 @@ class OperationsCenterService:
         # Operations_Production_Readiness/OPERATION_STATUS.md.
         deployment_ids = {order.deployment_id for order in orders if order.deployment_id is not None}
         deployment_ids |= self._deployment_ids_for_account(account_id)
+        positions = self._positions(account_id)
         return AccountOperations(
             account_id=account_id,
             broker_account_snapshot=self._broker_account_snapshot(account_id),
             broker_sync_freshness=self._broker_sync_freshness(account_id),
             open_broker_orders=self._open_broker_orders(account_id),
             internal_order_ledger_summary=self._order_summary(orders),
-            positions=self._positions(account_id),
+            positions=positions,
+            position_views=self._position_views(positions=positions, orders=orders),
             deployments=tuple(
                 self._deployment_summary(deployment_id)
                 for deployment_id in sorted(deployment_ids, key=str)
@@ -129,6 +132,95 @@ class OperationsCenterService:
             is_paused=self._control_plane.is_account_paused(account_id),
             is_killed=self._control_plane.global_kill_active,
         )
+
+    @staticmethod
+    def _position_views(
+        *,
+        positions: tuple[BrokerPositionSnapshot, ...],
+        orders: tuple[InternalOrder, ...],
+    ) -> tuple[OperatorPositionView, ...]:
+        """Compute operator-visible protection_status per position.
+
+        T-5 of the Strategy-to-Broker Bracket Execution Program. Joins
+        the position snapshot's ``opening_signal_plan_id`` against the
+        InternalOrder ledger to count active protective stop children
+        for that lineage:
+
+        - count > 0 of open STOP_LOSS / STOP / TRAIL children => ``protected``
+        - entry filled but zero open stop children                => ``naked``
+        - entry not filled / position has no signal plan lineage  => ``unknown``
+        - position has lineage and entry filled, protective child exists
+          but in CREATED / SUBMITTED state (not yet ACCEPTED)      => ``pending_protection``
+        """
+
+        from backend.app.orders.models import InternalOrderIntent, InternalOrderStatus
+
+        protective_intents = {
+            InternalOrderIntent.STOP_LOSS,
+            InternalOrderIntent.STOP,
+            InternalOrderIntent.TRAIL,
+        }
+        active_statuses = {
+            InternalOrderStatus.ACCEPTED,
+            InternalOrderStatus.PARTIALLY_FILLED,
+        }
+        pending_statuses = {
+            InternalOrderStatus.CREATED,
+            InternalOrderStatus.SUBMITTED,
+        }
+        views: list[OperatorPositionView] = []
+        for position in positions:
+            if not position.qty:
+                # Closed position — no protection signal needed.
+                views.append(
+                    OperatorPositionView(
+                        snapshot=position,
+                        protection_status="unknown",
+                        protective_order_count=0,
+                    )
+                )
+                continue
+            opening_id = getattr(position, "opening_signal_plan_id", None)
+            if opening_id is None:
+                views.append(
+                    OperatorPositionView(
+                        snapshot=position,
+                        protection_status="unknown",
+                        protective_order_count=0,
+                    )
+                )
+                continue
+            entry_filled = any(
+                order.opening_signal_plan_id == opening_id
+                and order.intent == InternalOrderIntent.OPEN
+                and order.status in {InternalOrderStatus.FILLED, InternalOrderStatus.PARTIALLY_FILLED}
+                for order in orders
+            )
+            stop_children = [
+                order
+                for order in orders
+                if order.opening_signal_plan_id == opening_id
+                and order.intent in protective_intents
+                and order.parent_order_id is not None
+            ]
+            active_stops = [order for order in stop_children if order.status in active_statuses]
+            pending_stops = [order for order in stop_children if order.status in pending_statuses]
+            if active_stops:
+                status = "protected"
+            elif not entry_filled:
+                status = "unknown"
+            elif pending_stops:
+                status = "pending_protection"
+            else:
+                status = "naked"
+            views.append(
+                OperatorPositionView(
+                    snapshot=position,
+                    protection_status=status,
+                    protective_order_count=len(active_stops),
+                )
+            )
+        return tuple(views)
 
     def get_deployment_operations(self, deployment_id: UUID) -> DeploymentOperations:
         orders = self._orders_by_deployment(deployment_id)

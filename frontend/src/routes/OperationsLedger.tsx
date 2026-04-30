@@ -13,6 +13,7 @@ import { LoadingState } from "@/components/empty/LoadingState";
 import { ErrorState } from "@/components/empty/ErrorState";
 import { EmptyState } from "@/components/empty/EmptyState";
 import { formatCurrency, formatTimestamp, relativeTime } from "@/lib/format";
+import { getProtectionDisplay } from "@/lib/protectionDisplay";
 
 /**
  * OperationsLedger — persistent aggregated Orders + Positions tables
@@ -88,6 +89,8 @@ interface AggregatedPosition {
   avg: number | null;
   marketValue: number | null;
   unrealized: number | null;
+  protectionStatus: string;
+  protectiveOrderCount: number;
 }
 
 interface AggregatedOrder {
@@ -117,6 +120,18 @@ function aggregate(
     const a = accounts[i];
     const ac = ops[i];
     if (ac) {
+      // T-5 Bracket Program: build a lineage->view lookup so we can stamp
+      // operator-visible protection_status onto each aggregated row.
+      const viewByLineage = new Map<string, { protection_status: string; protective_order_count: number }>();
+      for (const v of ac.position_views ?? []) {
+        const lineageId = (v.snapshot as { position_lineage_id?: string | null }).position_lineage_id ?? null;
+        if (lineageId) {
+          viewByLineage.set(lineageId, {
+            protection_status: v.protection_status ?? "unknown",
+            protective_order_count: v.protective_order_count ?? 0,
+          });
+        }
+      }
       for (const p of ac.positions) {
         const r = p as {
           symbol?: string;
@@ -127,7 +142,9 @@ function aggregate(
           market_value?: number | null;
           unrealized_pl?: number | null;
           side?: string | null;
+          position_lineage_id?: string | null;
         };
+        const view = r.position_lineage_id ? viewByLineage.get(r.position_lineage_id) : undefined;
         positions.push({
           accountId: a.id,
           accountLabel: labelByAccount.get(a.id) ?? a.id,
@@ -137,6 +154,8 @@ function aggregate(
           avg: r.avg_entry_price ?? r.average_entry_price ?? null,
           marketValue: r.market_value ?? null,
           unrealized: r.unrealized_pl ?? null,
+          protectionStatus: view?.protection_status ?? "unknown",
+          protectiveOrderCount: view?.protective_order_count ?? 0,
         });
       }
       for (const o of ac.open_broker_orders) {
@@ -242,11 +261,16 @@ function PositionsCard({
                 <th>Avg entry</th>
                 <th>Market value</th>
                 <th>Unrealized</th>
+                <th>Protection</th>
               </tr>
             </thead>
             <tbody>
               {positions.map((p, i) => {
                 const tone = p.unrealized == null ? "neutral" : p.unrealized > 0 ? "ok" : p.unrealized < 0 ? "danger" : "neutral";
+                const protectionDisplay = getProtectionDisplay(
+                  p.protectionStatus,
+                  p.protectiveOrderCount,
+                );
                 return (
                   <tr key={`${p.accountId}-${p.symbol}-${i}`}>
                     <td className="text-fg-muted">{p.accountLabel}</td>
@@ -269,6 +293,11 @@ function PositionsCard({
                       >
                         {formatCurrency(p.unrealized)}
                       </span>
+                    </td>
+                    <td title={protectionDisplay.title}>
+                      <StatusBadge tone={protectionDisplay.tone}>
+                        {protectionDisplay.label}
+                      </StatusBadge>
                     </td>
                   </tr>
                 );

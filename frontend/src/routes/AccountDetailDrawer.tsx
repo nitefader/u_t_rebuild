@@ -20,6 +20,7 @@ import { ErrorState } from "@/components/empty/ErrorState";
 import { EmptyState } from "@/components/empty/EmptyState";
 import { formatCurrency, relativeTime } from "@/lib/format";
 import { latestBrokerSyncTimestamp } from "@/lib/brokerSync";
+import { getProtectionDisplay } from "@/lib/protectionDisplay";
 import { PositionExplainDrawer } from "./PositionExplainDrawer";
 import { ManualOrderDrawer } from "./ManualOrderDrawer";
 import { RiskCardPanel } from "./RiskCardPanel";
@@ -177,6 +178,7 @@ export function AccountDetailDrawer({
                           <th>Avg entry</th>
                           <th>Market value</th>
                           <th>Unrealized P&amp;L</th>
+                          <th>Protection</th>
                           <th></th>
                         </tr>
                       </thead>
@@ -201,8 +203,28 @@ export function AccountDetailDrawer({
                           const lineageId = rawP.position_lineage_id ?? null;
                           const uplTone =
                             upl == null ? "neutral" : upl > 0 ? "ok" : upl < 0 ? "danger" : "neutral";
+                          // T-5 Bracket Program: protection_status from the
+                          // operator-derived position_views array. Match by
+                          // position_lineage_id (only stable join key).
+                          const matchingView = lineageId
+                            ? (detail.data.position_views ?? []).find(
+                                (v) =>
+                                  (v.snapshot as { position_lineage_id?: string | null }).position_lineage_id ===
+                                  lineageId,
+                              )
+                            : undefined;
+                          const protectionStatus = matchingView?.protection_status ?? "unknown";
+                          const protectionDisplay = getProtectionDisplay(
+                            protectionStatus,
+                            matchingView?.protective_order_count ?? 0,
+                          );
+                          // Critic Fix #7: row key uses lineage_id (stable
+                          // across same-symbol-different-lineage rows) rather
+                          // than `${symbol}-${quantity}` (collides on multi-
+                          // entry same-symbol same-qty positions).
+                          const rowKey = lineageId ?? `${symbol}-${quantity}-fallback`;
                           return (
-                            <tr key={`${symbol}-${quantity}`}>
+                            <tr key={rowKey}>
                               <td className="font-medium">{symbol}</td>
                               <td className="tabular">{quantity}</td>
                               <td className="tabular">{formatCurrency(avg)}</td>
@@ -219,6 +241,11 @@ export function AccountDetailDrawer({
                                 >
                                   {formatCurrency(upl)}
                                 </span>
+                              </td>
+                              <td title={protectionDisplay.title}>
+                                <StatusBadge tone={protectionDisplay.tone}>
+                                  {protectionDisplay.label}
+                                </StatusBadge>
                               </td>
                               <td className="text-right">
                                 <Button

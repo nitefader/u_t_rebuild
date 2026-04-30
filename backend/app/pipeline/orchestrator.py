@@ -61,6 +61,7 @@ from backend.app.governor import (
     PortfolioSnapshot,
 )
 from backend.app.orders import InternalOrder, InternalOrderIntent, InternalOrderStatus, OrderManager, TradeLedger
+from backend.app.orders.protective_placer import ProtectiveOrderPlacer
 from backend.app.risk_resolver import AccountRiskSizingInput, RiskResolver, StaticSizingInput
 from backend.app.runtime import DeploymentContext, RuntimeState
 
@@ -163,6 +164,7 @@ class RuntimeOrchestrator:
         broker_preflight_service: AlpacaBrokerPreflightService | None = None,
         market_rule_preflight_service: MarketRulePreflightService | None = None,
         live_order_submission_enabled: bool = False,
+        protective_order_placer: ProtectiveOrderPlacer | None = None,
     ) -> None:
         self._account_id = account_id
         self._account_ids = tuple(dict.fromkeys(account_ids or (account_id,)))
@@ -240,6 +242,7 @@ class RuntimeOrchestrator:
         self._persist_runtime_state()
         self._event_log = RuntimePipelineEventLog(deployment_id=deployment.deployment_id)
         self._entry_symbols = frozenset(symbol.symbol.upper() for symbol in components.universe.symbols)
+        self._protective_order_placer = protective_order_placer or ProtectiveOrderPlacer()
 
     @property
     def order_manager(self) -> OrderManager:
@@ -330,6 +333,7 @@ class RuntimeOrchestrator:
                 strategy_id=self._components.strategy.strategy_id,
                 strategy_version_id=self._components.strategy.id,
                 watchlist_snapshot_id=self._components.universe.id,
+                execution_plan=self._components.execution_style,
             )
             if signal_plan.entry is not None:
                 signal_plan = signal_plan.model_copy(
@@ -413,7 +417,12 @@ class RuntimeOrchestrator:
                 orders.append(order)
                 if order.status != InternalOrderStatus.CREATED:
                     continue
-                result, ledger_update = self._submit_sync_order(order)
+                order = self._maybe_attach_native_bracket_to_entry(
+                    order=order,
+                    signal_plan=signal_plan,
+                    normalized_bar=normalized_bar,
+                )
+                result, ledger_update = self._submit_sync_order(order, signal_plan=signal_plan)
                 broker_results.append(result)
                 ledger_updates.append(ledger_update)
         self._process_position_management_candidates(
@@ -604,7 +613,7 @@ class RuntimeOrchestrator:
                         symbol=signal_plan.symbol,
                     )
                 )
-                result, ledger_update = self._submit_sync_order(order)
+                result, ledger_update = self._submit_sync_order(order, signal_plan=signal_plan)
                 broker_results.append(result)
                 ledger_updates.append(ledger_update)
 
@@ -796,7 +805,7 @@ class RuntimeOrchestrator:
         broker_results: list[BrokerOrderResult] = []
         ledger_updates: list[InternalOrder] = []
         if order.status == InternalOrderStatus.CREATED:
-            broker_result, ledger_update = self._submit_sync_order(order)
+            broker_result, ledger_update = self._submit_sync_order(order, signal_plan=signal_plan)
             broker_results.append(broker_result)
             ledger_updates.append(ledger_update)
         return self._result(
@@ -808,7 +817,12 @@ class RuntimeOrchestrator:
             ledger_updates=ledger_updates,
         )
 
-    def _submit_sync_order(self, order: InternalOrder) -> tuple[BrokerOrderResult, InternalOrder]:
+    def _submit_sync_order(
+        self,
+        order: InternalOrder,
+        *,
+        signal_plan: SignalPlan | None = None,
+    ) -> tuple[BrokerOrderResult, InternalOrder]:
         self._event_log.append(
             timestamp=order.created_at,
             event_type=PipelineEventType.ORDER_CREATED,
@@ -861,7 +875,286 @@ class RuntimeOrchestrator:
             message="order ledger updated from broker result",
             details={"status": ledger_update.status.value, "filled_quantity": ledger_update.filled_quantity},
         )
+        if signal_plan is not None and self._is_signal_plan_open_entry(ledger_update):
+            self._handle_post_fill_protective_placement(
+                parent_order=ledger_update,
+                signal_plan=signal_plan,
+                broker_result=broker_result,
+            )
         return broker_result, ledger_update
+
+    def _maybe_attach_native_bracket_to_entry(
+        self,
+        *,
+        order: InternalOrder,
+        signal_plan: SignalPlan,
+        normalized_bar: NormalizedBar,
+    ) -> InternalOrder:
+        """Attach native broker bracket params to a SignalPlan-origin OPEN entry.
+
+        T-5 of the Strategy-to-Broker Bracket Execution Program. When the
+        deployment's ExecutionPlan declares ``execution_mode=native_alpaca_bracket``
+        AND the SignalPlan carries ``post_fill_pct`` stop+target intent
+        (T-3), compute concrete child prices from a reference price and
+        ask OrderManager to mark the entry as ``order_class="bracket"``.
+
+        Reference price for the bracket child computation:
+        - LIMIT entry: ``signal_plan.entry.limit_price``
+        - MARKET entry: latest bar close (``normalized_bar.close``)
+
+        On any input that cannot produce both a positive stop and target
+        price (missing rule, zero ref price, unsupported side) the method
+        leaves the order alone — the post-fill placer remains the safety
+        net for those cases. Native bracket is the *optional fast path*,
+        not a replacement for post-fill.
+        """
+
+        from backend.app.decision.signal_plan_builder import parse_post_fill_pct
+
+        execution_mode = getattr(self._components.execution_style, "execution_mode", None)
+        if execution_mode is None or getattr(execution_mode, "value", execution_mode) != "native_alpaca_bracket":
+            return order
+        if order.origin.value != "signal_plan" or order.intent != InternalOrderIntent.OPEN:
+            return order
+        if signal_plan.stop is None or not signal_plan.targets:
+            return order
+        stop_pct = parse_post_fill_pct(signal_plan.stop.rule)
+        target_pct = parse_post_fill_pct(signal_plan.targets[0].rule)
+        if stop_pct is None or target_pct is None:
+            return order
+
+        ref_price = self._native_bracket_reference_price(
+            signal_plan=signal_plan,
+            normalized_bar=normalized_bar,
+        )
+        if ref_price is None or ref_price <= 0:
+            return order
+        if signal_plan.side == SignalPlanSide.LONG:
+            take_profit = ref_price * (1.0 + target_pct / 100.0)
+            stop_loss = ref_price * (1.0 - stop_pct / 100.0)
+        elif signal_plan.side == SignalPlanSide.SHORT:
+            take_profit = ref_price * (1.0 - target_pct / 100.0)
+            stop_loss = ref_price * (1.0 + stop_pct / 100.0)
+        else:
+            return order
+        if take_profit <= 0 or stop_loss <= 0:
+            return order
+        return self._order_manager.attach_native_bracket_to_entry(
+            order_id=order.order_id,
+            take_profit_limit_price=take_profit,
+            stop_loss_stop_price=stop_loss,
+        )
+
+    @staticmethod
+    def _native_bracket_reference_price(
+        *,
+        signal_plan: SignalPlan,
+        normalized_bar: NormalizedBar,
+    ) -> float | None:
+        if signal_plan.entry is not None and signal_plan.entry.limit_price is not None:
+            return signal_plan.entry.limit_price
+        # Market entry: the latest bar's close is the operator-visible
+        # reference. Real fill price lands later via BrokerSync; the
+        # bracket child prices set here can drift from the actual fill.
+        # That drift is acceptable because the post-fill placer is the
+        # default mode — operators only opt into native bracket when
+        # they accept this small slippage in exchange for atomic submit.
+        return getattr(normalized_bar, "close", None)
+
+    @staticmethod
+    def _is_signal_plan_open_entry(order: InternalOrder) -> bool:
+        # Protective placement only applies to SignalPlan-origin OPEN entries.
+        # Children (STOP_LOSS / TAKE_PROFIT / etc.) are excluded by intent and
+        # by parent_order_id presence — they themselves carry parent_order_id
+        # and an exit-flavor intent, so this guard prevents recursive
+        # protection placement on protective legs.
+        from backend.app.orders.models import OrderOrigin
+
+        return (
+            order.origin == OrderOrigin.SIGNAL_PLAN
+            and order.intent == InternalOrderIntent.OPEN
+            and order.parent_order_id is None
+        )
+
+    def _handle_post_fill_protective_placement(
+        self,
+        *,
+        parent_order: InternalOrder,
+        signal_plan: SignalPlan,
+        broker_result: BrokerOrderResult,
+    ) -> None:
+        """Place post-fill protective stop+target children on a SignalPlan-origin entry fill.
+
+        T-5 of the Strategy-to-Broker Bracket Execution Program.
+
+        - Skipped when the deployment runs in `native_alpaca_bracket` mode
+          (the broker auto-attaches protective legs at entry submit time
+          via T-4's AlpacaBrokerAdapter native bracket path).
+        - Skipped when the broker reports zero filled quantity (rejection
+          / no-fill — there is nothing to protect yet).
+        - Idempotent on re-emission: ProtectiveOrderPlacer keys placement
+          on `cumulative_filled_qty - already_covered_qty`, so partial
+          fills extend coverage incrementally.
+        - Logs `protection_placed` (with leg count) on success and
+          `protection_naked` (with reason) when the SignalPlan declared
+          stop/target intent but no legs could be produced — operator
+          must see naked positions.
+        """
+
+        # Critic Fix #6: skip if the entry already carries a native broker
+        # bracket (order_class="bracket"). The broker placed the protective
+        # children atomically at submit; running post-fill on top would
+        # double-bracket the position. This is more robust than reading
+        # self._components.execution_style.execution_mode because the
+        # orchestrator caches components at construction; switching the
+        # deployment's execution_mode mid-run would leave a stale snapshot
+        # behind. The order's own order_class is the ground truth.
+        if parent_order.order_class == "bracket":
+            return
+        execution_mode = getattr(self._components.execution_style, "execution_mode", None)
+        if execution_mode is not None and getattr(execution_mode, "value", execution_mode) == "native_alpaca_bracket":
+            return
+        # Critic Fix #4: use the ledger's cumulative filled_quantity rather
+        # than the broker_result's per-event filled_quantity. Some brokers
+        # ship delta fills on the trade-update stream; if we treat that as
+        # cumulative, the second partial fill is counted as if it equalled
+        # the first, and `new_qty = cumulative - already_covered = 0` —
+        # the second slice never gets a stop. The ledger is authoritative
+        # because BrokerSync.apply_result accumulates fills onto the
+        # InternalOrder before this method runs.
+        filled_qty = parent_order.filled_quantity or 0.0
+        if filled_qty <= 0:
+            return
+        fill_price = broker_result.filled_avg_price
+        if fill_price is None or fill_price <= 0:
+            self._event_log.append(
+                timestamp=broker_result.received_at,
+                event_type=PipelineEventType.PROTECTION_NAKED,
+                symbol=parent_order.symbol,
+                message="post-fill protective placement skipped — no fill price reported",
+                details={
+                    "parent_order_id": str(parent_order.order_id),
+                    "rule_id": "protection_failed_after_fill",
+                    "reason": "missing_fill_price",
+                },
+            )
+            return
+
+        already_covered = self._order_manager.cumulative_covered_qty_for_signal_plan(
+            signal_plan_id=signal_plan.signal_plan_id,
+            parent_order_id=parent_order.order_id,
+        )
+        plan = self._protective_order_placer.compute_protective_plan(
+            signal_plan=signal_plan,
+            parent_order_id=parent_order.order_id,
+            account_id=parent_order.account_id,
+            fill_price=fill_price,
+            cumulative_filled_qty=filled_qty,
+            already_covered_qty=already_covered,
+        )
+        signal_plan_has_intent = signal_plan.stop is not None or bool(signal_plan.targets)
+        if not plan.legs:
+            if signal_plan_has_intent:
+                self._event_log.append(
+                    timestamp=broker_result.received_at,
+                    event_type=PipelineEventType.PROTECTION_NAKED,
+                    symbol=parent_order.symbol,
+                    message="entry filled but ProtectivePlacer produced no legs",
+                    details={
+                        "parent_order_id": str(parent_order.order_id),
+                        "rule_id": "protection_failed_after_fill",
+                        "reason": "no_legs_from_intent",
+                    },
+                )
+            return
+
+        children = self._order_manager.create_protective_orders_post_fill(
+            plan=plan,
+            parent_order=parent_order,
+        )
+        # Critic Fix #1 + Fix #2: track per-leg success so PROTECTION_PLACED
+        # only fires when at least one child reached the broker, and to
+        # abort the loop on stop-leg rejection (a target-only "protection"
+        # is worse than naked: it consumes margin without downside cover).
+        submitted_count = 0
+        aborted_due_to_stop_rejection = False
+        for child in children:
+            if child.status != InternalOrderStatus.CREATED:
+                # Idempotent reuse of an existing child row counts as
+                # already-submitted protection from a prior call; do not
+                # re-submit but do count as covered.
+                submitted_count += 1
+                continue
+            is_stop_leg = child.intent == InternalOrderIntent.STOP_LOSS
+            child_rejected = False
+            child_reject_reason: str | None = None
+            try:
+                child_result, child_ledger = self._submit_sync_order(child)
+                # The broker can reject a child without raising — it
+                # returns a BrokerOrderResult(status=REJECTED). The
+                # ledger update reflects the same. Both paths must land
+                # in the "rejected" branch so the operator sees the
+                # PROTECTION_NAKED alarm and we abort on stop-leg loss.
+                if child_result.status == BrokerOrderStatus.REJECTED or (
+                    child_ledger.status == InternalOrderStatus.REJECTED
+                ):
+                    child_rejected = True
+                    child_reject_reason = (
+                        child_result.reason
+                        or child_ledger.reason
+                        or "broker_rejected_protective_child"
+                    )
+                else:
+                    submitted_count += 1
+            except BrokerAdapterError as exc:
+                child_rejected = True
+                child_reject_reason = self._broker_error_reason(exc)
+            if child_rejected:
+                self._event_log.append(
+                    timestamp=broker_result.received_at,
+                    event_type=PipelineEventType.PROTECTION_NAKED,
+                    symbol=child.symbol,
+                    message="protective child rejected by broker adapter",
+                    details={
+                        "parent_order_id": str(parent_order.order_id),
+                        "child_order_id": str(child.order_id),
+                        "rule_id": "protection_failed_after_fill",
+                        "reason": child_reject_reason or "rejected",
+                    },
+                )
+                if is_stop_leg:
+                    aborted_due_to_stop_rejection = True
+                    break
+        if submitted_count == 0:
+            # All children rejected (or none submittable). Surface
+            # PROTECTION_NAKED at the parent level too so the operator
+            # sees a single, parent-keyed alarm in addition to per-leg
+            # rejection events.
+            self._event_log.append(
+                timestamp=broker_result.received_at,
+                event_type=PipelineEventType.PROTECTION_NAKED,
+                symbol=parent_order.symbol,
+                message="entry filled but no protective child reached the broker",
+                details={
+                    "parent_order_id": str(parent_order.order_id),
+                    "rule_id": "protection_failed_after_fill",
+                    "reason": "all_children_rejected",
+                    "leg_count_attempted": len(children),
+                },
+            )
+            return
+        self._event_log.append(
+            timestamp=broker_result.received_at,
+            event_type=PipelineEventType.PROTECTION_PLACED,
+            symbol=parent_order.symbol,
+            message="post-fill protective children placed",
+            details={
+                "parent_order_id": str(parent_order.order_id),
+                "leg_count": submitted_count,
+                "covered_qty": plan.covered_qty,
+                "aborted_due_to_stop_rejection": aborted_due_to_stop_rejection,
+            },
+        )
 
     def _preflight_order_submission(self, order: InternalOrder) -> BrokerOrderResult | None:
         broker_mode = getattr(self._broker_adapter, "mode", self._deployment.mode)

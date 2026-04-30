@@ -202,6 +202,21 @@ export const InternalOrderLedgerSummarySchema = z
   })
   .passthrough();
 
+/**
+ * T-5 Bracket Program: operator-visible protection status on each open
+ * position. ``z.string()`` instead of ``z.enum`` so additive backend
+ * status values (e.g. future `protection_failing`) don't break the
+ * UI — the table renders a neutral tone for unknown strings.
+ */
+export const OperatorPositionViewSchema = z
+  .object({
+    snapshot: BrokerPositionSnapshotSchema,
+    protection_status: z.string().default("unknown"),
+    protective_order_count: z.number().default(0),
+  })
+  .passthrough();
+export type OperatorPositionView = z.infer<typeof OperatorPositionViewSchema>;
+
 export const AccountOperationsSchema = z
   .object({
     account_id: z.string(),
@@ -210,6 +225,7 @@ export const AccountOperationsSchema = z
     open_broker_orders: z.array(BrokerOpenOrderSnapshotSchema).default([]),
     internal_order_ledger_summary: InternalOrderLedgerSummarySchema,
     positions: z.array(BrokerPositionSnapshotSchema).default([]),
+    position_views: z.array(OperatorPositionViewSchema).default([]),
     deployments: z.array(DeploymentSummarySchema).default([]),
     is_paused: z.boolean().default(false),
     is_killed: z.boolean().default(false),

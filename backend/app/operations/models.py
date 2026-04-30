@@ -83,6 +83,33 @@ class RuntimeOverview(BaseModel):
     research_evidence_summary: tuple["ResearchEvidenceSummary", ...] = ()
 
 
+class OperatorPositionView(BaseModel):
+    """Operator-facing wrapper around a BrokerPositionSnapshot.
+
+    T-5 of the Strategy-to-Broker Bracket Execution Program. Adds the
+    operator-visible ``protection_status`` derived from the orders
+    ledger so the Open Positions card surfaces naked exposure
+    immediately.
+
+    ``protection_status`` is one of:
+    - ``protected`` — at least one open child stop order references the
+      entry that opened this position.
+    - ``pending_protection`` — entry filled but no protective child has
+      been accepted yet (in-flight protective placement).
+    - ``naked`` — entry filled, ProtectivePlacer / OrderManager could
+      not place a stop child (placement failed or rejected). Operator
+      action required.
+    - ``unknown`` — unable to derive (no ``opening_signal_plan_id`` on
+      the position, or origin is not a SignalPlan trade).
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    snapshot: BrokerPositionSnapshot
+    protection_status: str = "unknown"
+    protective_order_count: int = 0
+
+
 class AccountOperations(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -92,6 +119,7 @@ class AccountOperations(BaseModel):
     open_broker_orders: tuple[BrokerOpenOrderSnapshot, ...] = ()
     internal_order_ledger_summary: InternalOrderLedgerSummary
     positions: tuple[BrokerPositionSnapshot, ...] = ()
+    position_views: tuple[OperatorPositionView, ...] = ()
     deployments: tuple[DeploymentSummary, ...] = ()
     is_paused: bool = False
     is_killed: bool = False

@@ -3,16 +3,10 @@
 Both agents read this file at the start of every turn. Default TTL is 30 minutes.
 See `COORDINATION/PROTOCOL.md` for full lock semantics.
 
-Last updated: 2026-04-29 21:53:00 -04:00
+Last updated: 2026-04-30 04:00:00 -04:00
 
-| Acquired                  | Expires                   | Agent  | Path or glob                                  | Intent                                              |
-| ------------------------- | ------------------------- | ------ | --------------------------------------------- | --------------------------------------------------- |
-| 2026-04-29 21:53:00 -04:00 | 2026-04-29 23:53:00 -04:00 | Claude | `backend/app/persistence/`                    | T-1 Bracket Program — strategy_controls + execution_plan version persistence |
-| 2026-04-29 21:53:00 -04:00 | 2026-04-29 23:53:00 -04:00 | Claude | `backend/app/strategy_composer/service.py`    | T-1 Bracket Program — wire save_draft to persist controls + plan |
-| 2026-04-29 21:53:00 -04:00 | 2026-04-29 23:53:00 -04:00 | Claude | `backend/app/domain/execution_style.py`       | T-1 Bracket Program — rename ExecutionStyleVersion → ExecutionPlanVersion |
-| 2026-04-29 21:53:00 -04:00 | 2026-04-29 23:53:00 -04:00 | Claude | `backend/app/domain/strategy_controls.py`     | T-1 Bracket Program — versioned StrategyControls payload |
-| 2026-04-29 21:53:00 -04:00 | 2026-04-29 23:53:00 -04:00 | Claude | `backend/app/deployments/`                    | T-1/T-3 Bracket Program — deployment binds execution_plan_version_id + risk_plan_version_id |
-| 2026-04-29 21:53:00 -04:00 | 2026-04-29 23:53:00 -04:00 | Claude | `backend/tests/unit/{persistence,strategy_composer,strategies,deployments}/` | T-1 tests |
+(no active leases — T-5 leases released after commit; T-1..T-5 of the
+Bracket Program are committed)
 
 ---
 

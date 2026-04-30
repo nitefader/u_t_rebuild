@@ -2,8 +2,11 @@ from __future__ import annotations
 
 from collections import defaultdict
 from collections.abc import Mapping
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import UUID, uuid4
+
+if TYPE_CHECKING:
+    from .protective_placer import ProtectivePlacementPlan
 
 from backend.app.control_plane.service import CancellationScope, ControlPlane
 from backend.app.domain import CandidateSide, IntentType, OrderType, TimeInForce
@@ -335,6 +338,278 @@ class OrderManager:
                 )
             )
         return tuple(orders)
+
+    def create_protective_orders_post_fill(
+        self,
+        *,
+        plan: "ProtectivePlacementPlan",
+        parent_order: InternalOrder,
+    ) -> tuple[InternalOrder, ...]:
+        """Create child stop+target InternalOrders from a ProtectivePlacementPlan.
+
+        T-5 of the Strategy-to-Broker Bracket Execution Program. The
+        ProtectiveOrderPlacer (T-4) computes the plan; this method turns
+        the plan into lineage-correct InternalOrders ready for
+        BrokerAdapter submission.
+
+        Each child carries:
+        - ``parent_order_id`` = ``parent_order.order_id``
+        - lineage from the parent (account_id, deployment_id, strategy_id,
+          strategy_version_id, signal_plan_id, position_lineage_id, etc.)
+        - ``order_class="oco"`` — the protective pair is mutually exclusive
+          on the broker side
+        - intent = STOP_LOSS for stop legs, TAKE_PROFIT for target legs
+        - order_type = STOP for stop legs, LIMIT for target legs
+
+        Doctrine guards:
+        - All children are SignalPlan-origin (carry full lineage chain).
+        - No broker calls; this method only produces the InternalOrder rows.
+          The orchestrator is responsible for submitting via BrokerAdapter.
+        - No broker truth writes; BrokerSync remains the only writer.
+
+        Args:
+            plan: The ProtectivePlacementPlan from
+                ``ProtectiveOrderPlacer.compute_protective_plan(...)``.
+            parent_order: The parent entry InternalOrder (must already be
+                in the ledger; this method does not write the parent).
+
+        Returns:
+            The created child InternalOrders, in plan order. Empty tuple
+            when ``plan.legs`` is empty (no-op idempotent case).
+        """
+
+        if parent_order.order_id != plan.parent_order_id:
+            raise OrderManagerError(
+                "ProtectivePlacementPlan parent_order_id does not match parent_order"
+            )
+        if parent_order.account_id != plan.account_id:
+            raise OrderManagerError(
+                "ProtectivePlacementPlan account_id does not match parent_order"
+            )
+        if parent_order.signal_plan_id != plan.signal_plan_id:
+            raise OrderManagerError(
+                "ProtectivePlacementPlan signal_plan_id does not match parent_order"
+            )
+
+        if not plan.legs:
+            return ()
+        if parent_order.origin != OrderOrigin.SIGNAL_PLAN:
+            raise OrderManagerError(
+                "post-fill protective orders require a SignalPlan-origin parent"
+            )
+        if (
+            parent_order.deployment_id is None
+            or parent_order.strategy_id is None
+            or parent_order.signal_plan_id is None
+            or parent_order.position_lineage_id is None
+            or parent_order.account_evaluation_id is None
+            or parent_order.governor_decision_id is None
+        ):
+            raise OrderManagerError(
+                "parent order is missing lineage required for protective children"
+            )
+
+        if self._control_plane.system_recovery_active:
+            raise OrderManagerError(
+                "system recovery is active; new protective order creation is blocked"
+            )
+
+        children: list[InternalOrder] = []
+        now = utc_now()
+        # Each protective slice is keyed on the cumulative covered qty so
+        # incremental partial-fill placements don't collide with the prior
+        # slice's client_order_id. Format: "<label>@<cumulative_covered>".
+        cumulative_covered_qty = self.cumulative_covered_qty_for_signal_plan(
+            signal_plan_id=plan.signal_plan_id,
+            parent_order_id=parent_order.order_id,
+        )
+        slice_breakpoint = cumulative_covered_qty + plan.covered_qty
+        slice_suffix = f"@{slice_breakpoint:g}"
+        for leg in plan.legs:
+            child_intent = (
+                InternalOrderIntent.STOP_LOSS
+                if leg.label == "stop"
+                else InternalOrderIntent.TAKE_PROFIT
+            )
+            child_order_type = (
+                OrderType.STOP if leg.stop_price is not None else OrderType.LIMIT
+            )
+            child_side = self._exit_side_to_candidate(leg.side)
+            slice_leg_label = f"{leg.label}{slice_suffix}"
+            client_order_id = build_signal_plan_client_order_id(
+                parent_order.account_id,
+                parent_order.deployment_id,
+                parent_order.signal_plan_id,
+                intent=child_intent,
+                position_lineage_id=parent_order.position_lineage_id,
+                leg_label=slice_leg_label,
+            )
+            existing = self._ledger.by_client_order_id(client_order_id)
+            if existing is not None:
+                if existing.account_id != parent_order.account_id:
+                    raise OrderManagerError(
+                        "idempotency key collision across accounts on protective leg"
+                    )
+                children.append(existing)
+                continue
+            child = InternalOrder(
+                order_id=uuid4(),
+                client_order_id=client_order_id,
+                account_id=parent_order.account_id,
+                origin=OrderOrigin.SIGNAL_PLAN,
+                deployment_id=parent_order.deployment_id,
+                program_id=None,
+                strategy_id=parent_order.strategy_id,
+                strategy_version_id=parent_order.strategy_version_id,
+                signal_plan_id=parent_order.signal_plan_id,
+                opening_signal_plan_id=parent_order.opening_signal_plan_id or parent_order.signal_plan_id,
+                current_signal_plan_id=parent_order.signal_plan_id,
+                position_lineage_id=parent_order.position_lineage_id,
+                account_evaluation_id=parent_order.account_evaluation_id,
+                governor_decision_id=parent_order.governor_decision_id,
+                parent_order_id=parent_order.order_id,
+                order_class="oco",
+                leg_label=slice_leg_label,
+                lifecycle_intent=child_intent.value,
+                symbol=parent_order.symbol,
+                side=child_side,
+                quantity=leg.quantity,
+                order_type=child_order_type,
+                time_in_force=parent_order.time_in_force,
+                limit_price=leg.limit_price,
+                stop_price=leg.stop_price,
+                intent=child_intent,
+                status=InternalOrderStatus.CREATED,
+                created_at=now,
+                updated_at=now,
+                signal_name=parent_order.signal_name,
+                reason=f"post_fill_bracket:{leg.label}",
+            )
+            children.append(self._ledger.add(child))
+        return tuple(children)
+
+    def attach_native_bracket_to_entry(
+        self,
+        *,
+        order_id: UUID,
+        take_profit_limit_price: float,
+        stop_loss_stop_price: float,
+    ) -> InternalOrder:
+        """Mark a SignalPlan-origin entry as a native broker bracket.
+
+        T-5 of the Strategy-to-Broker Bracket Execution Program. When the
+        deployment's ExecutionPlan declares the native-broker execution
+        mode, the orchestrator computes concrete child prices from the
+        SignalPlan post_fill_pct intent and a reference price (limit
+        price for limit entries; latest bar close for market entries)
+        and calls this method before submission. The BrokerAdapter
+        translates ``order_class="bracket"`` into the broker-specific
+        atomic bracket request (T-4 wires this for the production
+        broker provider).
+
+        Mutates the order's ``order_class`` to ``"bracket"`` and populates
+        ``bracket_take_profit_limit_price`` + ``bracket_stop_loss_stop_price``.
+        Only applies to OPEN entries (the bracket pair fires on the entry
+        leg only); raises if the order is not a SignalPlan-origin OPEN.
+        """
+
+        if take_profit_limit_price <= 0 or stop_loss_stop_price <= 0:
+            raise OrderManagerError(
+                "native bracket child prices must be positive; "
+                f"got take_profit={take_profit_limit_price} stop_loss={stop_loss_stop_price}"
+            )
+        order = self._ledger.get(order_id)
+        if order.origin != OrderOrigin.SIGNAL_PLAN or order.intent != InternalOrderIntent.OPEN:
+            raise OrderManagerError(
+                "native bracket can only attach to a SignalPlan-origin OPEN entry"
+            )
+        if order.parent_order_id is not None:
+            raise OrderManagerError(
+                "native bracket cannot attach to a child order (must be the entry parent)"
+            )
+        # Critic Fix #5 (T-5): native bracket attachment is idempotent on
+        # identical prices and rejects re-attach with different prices.
+        # Once submitted, the broker holds the original child prices;
+        # silently overwriting the ledger here would create a divergence
+        # between ledger and broker truth. Operators that want to change
+        # bracket prices must cancel + resubmit, not patch in place.
+        if order.order_class == "bracket":
+            same_take_profit = (
+                order.bracket_take_profit_limit_price is not None
+                and abs(order.bracket_take_profit_limit_price - take_profit_limit_price) < 1e-9
+            )
+            same_stop_loss = (
+                order.bracket_stop_loss_stop_price is not None
+                and abs(order.bracket_stop_loss_stop_price - stop_loss_stop_price) < 1e-9
+            )
+            if same_take_profit and same_stop_loss:
+                return order
+            raise OrderManagerError(
+                "native bracket already attached with different child prices; "
+                "cancel and resubmit to change bracket parameters"
+            )
+        updated = order.model_copy(
+            update={
+                "order_class": "bracket",
+                "bracket_take_profit_limit_price": take_profit_limit_price,
+                "bracket_stop_loss_stop_price": stop_loss_stop_price,
+                "updated_at": utc_now(),
+            }
+        )
+        return self._ledger.replace(updated)
+
+    def cumulative_covered_qty_for_signal_plan(
+        self,
+        *,
+        signal_plan_id: UUID,
+        parent_order_id: UUID,
+    ) -> float:
+        """Sum the live protective stop-leg quantities for a parent entry.
+
+        Used to derive the cumulative covered qty so partial-fill incremental
+        protective placements get unique client_order_ids and so
+        ProtectiveOrderPlacer can compute new uncovered qty as
+        ``cumulative_filled_qty - already_covered_qty``.
+
+        Critic Fix #3 (T-5): excludes terminal-status stop children
+        (CANCELED / REJECTED / FAILED). A stop child that the broker
+        rejected does NOT actually protect any shares, so counting its
+        quantity here would inflate ``already_covered_qty`` and prevent
+        the orchestrator from re-attempting protection on the next fill
+        event. We sum stop-leg quantities only (not target+stop) so the
+        breakpoint reflects shares protected on the stop side, which
+        equals shares covered.
+
+        This method is intentionally public (no leading underscore) so
+        the runtime orchestrator can read the breakpoint cleanly without
+        reaching into a private name.
+        """
+
+        return sum(
+            o.quantity
+            for o in self._ledger.all()
+            if o.signal_plan_id == signal_plan_id
+            and o.parent_order_id == parent_order_id
+            and o.intent == InternalOrderIntent.STOP_LOSS
+            and o.status not in {
+                InternalOrderStatus.CANCELED,
+                InternalOrderStatus.REJECTED,
+                InternalOrderStatus.FAILED,
+            }
+        )
+
+    @staticmethod
+    def _exit_side_to_candidate(exit_side: str) -> CandidateSide:
+        token = exit_side.lower().strip()
+        if token == "buy":
+            # exit BUY closes a SHORT entry; the BUY direction maps to
+            # CandidateSide.LONG on the internal enum. The BrokerAdapter
+            # boundary is the only component that translates internal
+            # side to a broker-specific side string.
+            return CandidateSide.LONG
+        if token == "sell":
+            return CandidateSide.SHORT
+        raise OrderManagerError(f"unsupported protective leg exit side: {exit_side}")
 
     @staticmethod
     def _coerce_manual_intent(intent: InternalOrderIntent | str) -> str:

@@ -1,26 +1,56 @@
 # Operations Production Readiness Status
 
-Last updated: 2026-04-29 22:30:00 -04:00
+Last updated: 2026-04-30 04:00:00 -04:00
 
 ## Active Slice — Bracket Execution Program (operator override end-to-end)
 
 ```text
-Work session status: in_progress (T-1 shipped; T-2..T-7 + Wiggum 2/3 pending)
+Work session status: in_progress (T-1..T-5 SHIPPED; T-6, T-7, Wiggum 2/3 pending)
 Started at: 2026-04-29 21:52:19 -04:00
-T-1 result: persistence trio shipped — strategy_controls_versions +
-  execution_plan_versions + Deployment FKs (strategy_controls_version_id,
-  execution_plan_version_id, risk_plan_version_id) + ExecutionMode enum
-  (post_fill_bracket default + native_alpaca_bracket optional) +
-  composer save_draft persists both versions + 21 new tests + Alpaca
-  bracket constraints verified online + against alpaca-py SDK.
-Verification: pytest backend/tests/unit -q -> 1497 passed (+21 over
-  baseline 1476). Zero regressions.
-Doctrine: NEW saved entities operator-pre-approved in resume prompt.
-  Deployment-is-binder doctrine locked in feedback memory entry.
+Last heartbeat: 2026-04-30 04:00:00 -04:00
+T-5 result: orchestrator wiring + post-fill protective children + native
+  bracket runtime path + Operations protection_status column shipped end-to-end.
+  RuntimeOrchestrator now passes execution_plan into SignalPlanBuilder
+  (T-3 enrichment fires in production), attaches native broker bracket
+  child prices on entry when execution_mode=native_alpaca_bracket, and
+  on every SignalPlan-origin OPEN entry FILL kicks off ProtectiveOrderPlacer
+  -> OrderManager.create_protective_orders_post_fill -> BrokerAdapter
+  for the post-fill OCO stop+target pair.
+  New OrderManager methods: create_protective_orders_post_fill (lineage-
+  correct child orders with order_class=oco + breakpoint-suffixed leg
+  labels for partial-fill uniqueness) and attach_native_bracket_to_entry
+  (idempotent native bracket attachment on the entry leg).
+  cumulative_covered_qty_for_signal_plan made public + filters
+  CANCELED/REJECTED/FAILED stops so a rejected stop doesn't permanently
+  inflate already_covered_qty.
+  New pipeline event types: PROTECTION_PLACED + PROTECTION_NAKED with
+  rule_id=protection_failed_after_fill (no-naked invariant).
+  New OperatorPositionView { snapshot, protection_status,
+  protective_order_count } shipped on AccountOperations.position_views;
+  service joins by opening_signal_plan_id to compute
+  protected | pending_protection | naked | unknown.
+  Frontend Open Positions tables (per-account drawer + all-accounts
+  ledger) gain a "Protection" column with tone-coded StatusBadge backed
+  by a single shared getProtectionDisplay helper.
+  Three parallel sonnet critics (architecture/adversarial/UX) ran at
+  closeout; 9 fix-in-slice items shipped (PROTECTION_PLACED only on
+  success, stop-leg rejection aborts loop, ledger cumulative qty,
+  native bracket idempotency, post-fill skipped on existing bracket,
+  row-key collision fix, unknown-enum warn-tone fallthrough, shared
+  helper extraction, parent-keyed PROTECTION_NAKED with reason
+  all_children_rejected).
+Verification: pytest backend/tests/unit -q -> 1562 passed (+31 over T-4
+  baseline 1531; +186 over original Bracket Program baseline 1376).
+  npx tsc --noEmit clean. npx vitest run -> 399 passed across 54 test
+  files. npm run lint:names clean. Zero regressions.
+T-1..T-4 are committed. T-5 commit pending immediately after this status
+  refresh.
 MAP: Operations_Turtle_Shell_Artifacts/STRATEGY_TO_BROKER_BRACKET_PROGRAM.md.
-Log: docs/agent_logs/2026-04-29_21-52-19_bracket_execution.md.
-Next: T-2 Compose/API wiring (operator types 5/10 -> save -> reload survives)
-  in parallel with T-3 SignalPlan enrichment as warranted.
+Log: docs/agent_logs/2026-04-29_21-52-19_bracket_execution.md (Pass 5 + Pass 6).
+Next: T-6 TOCTOU hardening (single-conn composite reads in RuntimeStore +
+  WAL mode at composition root + concurrent-PUT race test for the
+  account_risk_plan_map -> risk_plan_version join), then T-7 daily-state
+  aggregator + cooldown.
 ```
 
 ## Previous Active Slice (archived 2026-04-29 22:30:00)

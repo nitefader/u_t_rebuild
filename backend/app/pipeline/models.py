@@ -20,6 +20,8 @@ class PipelineEventType(StrEnum):
     LEDGER_UPDATE = "ledger_update"
     FEATURE_UPDATED = "feature_updated"
     SIGNAL_BLOCKED = "signal_blocked"
+    PROTECTION_PLACED = "protection_placed"
+    PROTECTION_NAKED = "protection_naked"
 
 
 class PipelineEvent(BaseModel):
