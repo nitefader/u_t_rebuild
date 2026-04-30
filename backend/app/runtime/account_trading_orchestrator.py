@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -22,6 +22,7 @@ from backend.app.governor import (
     PortfolioGovernor,
     PortfolioSnapshot,
 )
+from backend.app.runtime.daily_account_state import DailyAccountState, DailyAccountStateAggregator, _et_market_day as _daily_et_market_day
 from backend.app.orders import OrderManager
 from backend.app.pipeline import PipelineEvent, PipelineResult, RuntimeOrchestrator
 
@@ -94,6 +95,9 @@ class BrokerRuntimeOrchestrator:
         self._feature_caches: dict[UUID, FeatureCache] = {}
         self._latest_events: list[PipelineEvent] = []
         self._recovery_completed: set[UUID] = set()
+        # T-7: daily risk state aggregator + boot-load from persisted store.
+        self._daily_aggregator = DailyAccountStateAggregator()
+        self._daily_states: dict[UUID, DailyAccountState] = self._boot_load_daily_states()
 
     @property
     def latest_events(self) -> tuple[PipelineEvent, ...]:
@@ -258,6 +262,9 @@ class BrokerRuntimeOrchestrator:
             control_plane=self._control_plane,
             runtime_store=self._runtime_store,
             live_order_submission_enabled=entry.live_order_submission_enabled,
+            daily_state_factory=self._daily_state_for,
+            daily_state_aggregator=self._daily_aggregator,
+            daily_states=self._daily_states,
         )
         self._pipelines[deployment_id] = pipeline
         return pipeline
@@ -404,3 +411,22 @@ class BrokerRuntimeOrchestrator:
             ),
             default=None,
         )
+
+    # T-7 helpers
+
+    def _boot_load_daily_states(self) -> dict[UUID, DailyAccountState]:
+        if self._runtime_store is None or not hasattr(self._runtime_store, "list_daily_account_states"):
+            return {}
+        states: dict[UUID, DailyAccountState] = {}
+        account_ids = set(entry.account_id for entry in self._deployments.values())
+        today = _daily_et_market_day(datetime.now(timezone.utc))
+        for account_id in account_ids:
+            try:
+                state = self._runtime_store.load_daily_account_state(account_id, today)
+                states[account_id] = state
+            except KeyError:
+                pass
+        return states
+
+    def _daily_state_for(self, account_id: UUID) -> DailyAccountState | None:
+        return self._daily_states.get(account_id)

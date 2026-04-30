@@ -323,4 +323,20 @@ CREATE INDEX IF NOT EXISTS ix_account_signal_plan_evaluations_deployment
     ON account_signal_plan_evaluations(deployment_id);
 CREATE INDEX IF NOT EXISTS ix_account_signal_plan_evaluations_persisted
     ON account_signal_plan_evaluations(persisted_at DESC);
+
+-- T-7: daily risk state aggregator (Bracket Program 2026-04-30).
+-- Upserted on every BrokerSync fill; reloaded on orchestrator boot.
+-- (account_id, market_day) is the compound PK — one row per account per ET calendar day.
+CREATE TABLE IF NOT EXISTS daily_account_states (
+    account_id TEXT NOT NULL,
+    market_day TEXT NOT NULL,
+    realized_pnl REAL NOT NULL DEFAULT 0,
+    drawdown_pct REAL NOT NULL DEFAULT 0,
+    last_loss_at TEXT,
+    updated_at TEXT NOT NULL,
+    payload TEXT NOT NULL,
+    PRIMARY KEY (account_id, market_day)
+);
+CREATE INDEX IF NOT EXISTS ix_daily_account_states_account_day
+    ON daily_account_states(account_id, market_day DESC);
 """

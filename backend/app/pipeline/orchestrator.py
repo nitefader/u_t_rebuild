@@ -167,6 +167,9 @@ class RuntimeOrchestrator:
         market_rule_preflight_service: MarketRulePreflightService | None = None,
         live_order_submission_enabled: bool = False,
         protective_order_placer: ProtectiveOrderPlacer | None = None,
+        daily_state_factory: "Callable[[UUID], object | None] | None" = None,
+        daily_state_aggregator: object | None = None,
+        daily_states: "dict[UUID, object] | None" = None,
     ) -> None:
         self._account_id = account_id
         self._account_ids = tuple(dict.fromkeys(account_ids or (account_id,)))
@@ -198,12 +201,15 @@ class RuntimeOrchestrator:
         self._order_manager = order_manager or OrderManager(broker_adapter=self._broker_adapter)
         self._broker_sync = broker_sync or BrokerSync(ledger=self._order_manager.ledger)
         self._trade_ledger = trade_ledger or TradeLedger()
+        self._daily_states: dict[UUID, object] = daily_states if daily_states is not None else {}
         self._broker_sync_service = broker_sync_service or BrokerSyncService(
             adapter=self._broker_adapter,
             broker_sync=self._broker_sync,
             order_ledger=self._order_manager.ledger,
             trade_ledger=self._trade_ledger,
             runtime_store=runtime_store,
+            daily_state_aggregator=daily_state_aggregator,
+            daily_states=self._daily_states,
         )
         if hasattr(self._order_manager, "attach_broker_sync_service"):
             self._order_manager.attach_broker_sync_service(self._broker_sync_service)
@@ -253,6 +259,7 @@ class RuntimeOrchestrator:
         self._event_log = RuntimePipelineEventLog(deployment_id=deployment.deployment_id)
         self._entry_symbols = frozenset(symbol.symbol.upper() for symbol in components.universe.symbols)
         self._protective_order_placer = protective_order_placer or ProtectiveOrderPlacer()
+        self._daily_state_factory = daily_state_factory
 
     @property
     def order_manager(self) -> OrderManager:
@@ -1453,6 +1460,7 @@ class RuntimeOrchestrator:
             risk_result_stop_distance=risk_result_stop_distance,
             timestamp=timestamp,
         )
+        daily_state = self._daily_state_factory(account_id) if self._daily_state_factory is not None else None
         request = GovernorRequest(
             account_id=account_id,
             deployment_id=signal_plan.deployment_id,
@@ -1465,6 +1473,7 @@ class RuntimeOrchestrator:
             order_intent=order_intent,
             candidate_market_value=candidate_market_value,
             candidate_open_risk=candidate_open_risk,
+            daily_state=daily_state,
         )
         # When a resolver is wired, build a per-(account, horizon) policy from
         # AccountRiskConfig + the Account's RiskPlan-for-this-horizon, then

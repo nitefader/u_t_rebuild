@@ -269,6 +269,8 @@ class BrokerSyncService:
         trade_ledger: object | None = None,
         max_stale_seconds: int = 30,
         runtime_store: object | None = None,
+        daily_state_aggregator: object | None = None,
+        daily_states: "dict[UUID, object] | None" = None,
     ) -> None:
         self._adapter = adapter
         self._broker_sync = broker_sync
@@ -276,6 +278,8 @@ class BrokerSyncService:
         self._trade_ledger = trade_ledger
         self._max_stale_seconds = max_stale_seconds
         self._runtime_store = runtime_store
+        self._daily_state_aggregator = daily_state_aggregator
+        self._daily_states: dict[UUID, object] = daily_states if daily_states is not None else {}
         self._last_event_at_by_account: dict[UUID, datetime] = {}
         self._last_poll_sync_at_by_account: dict[UUID, datetime] = {}
         self._last_successful_sync_at_by_account: dict[UUID, datetime] = {}
@@ -427,7 +431,28 @@ class BrokerSyncService:
             elif hasattr(self._trade_ledger, "add"):
                 self._trade_ledger.add(event)
         self._record_stream_event(event.account_id, event.event_at)
+        self._apply_daily_state_fill(event)
         return event
+
+    def _apply_daily_state_fill(self, event: BrokerFillUpdateEvent) -> None:
+        if self._daily_state_aggregator is None:
+            return
+        current = self._daily_states.get(event.account_id)
+        snapshot = self._account_snapshots_by_account.get(event.account_id)
+        equity: float | None = float(snapshot.equity) if snapshot is not None and snapshot.equity > 0 else None
+        try:
+            updated = self._daily_state_aggregator.apply_fill(current, event, equity=equity)
+        except Exception:
+            return
+        self._daily_states[event.account_id] = updated
+        if self._runtime_store is not None and hasattr(self._runtime_store, "save_daily_account_state"):
+            try:
+                self._runtime_store.save_daily_account_state(updated)
+            except Exception:
+                pass
+
+    def daily_state_for(self, account_id: UUID) -> object | None:
+        return self._daily_states.get(account_id)
 
     def handle_position_update(self, event: BrokerPositionSnapshot) -> BrokerPositionSnapshot:
         positions = self._positions_by_account.setdefault(event.account_id, {})

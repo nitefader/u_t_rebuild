@@ -46,6 +46,7 @@ from backend.app.domain._base import utc_now
 from backend.app.governor import GovernorPolicy
 from backend.app.orders import InternalOrder, InternalOrderStatus, OrderLedger, OrderManagerError
 from backend.app.runtime import RuntimeState
+from backend.app.runtime.daily_account_state import DailyAccountState
 from backend.app.simulation import SimulatedTrade
 
 from .models import RUNTIME_SCHEMA
@@ -1021,6 +1022,51 @@ class SQLiteRuntimeStore:
     def list_broker_sync_freshness(self) -> tuple[BrokerSyncState, ...]:
         rows = self._fetch_all("SELECT payload FROM broker_sync_freshness ORDER BY rowid")
         return tuple(_load_model(BrokerSyncState, row["payload"]) for row in rows)
+
+    # T-7 — daily risk state persistence
+
+    def save_daily_account_state(self, state: DailyAccountState) -> DailyAccountState:
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO daily_account_states
+                    (account_id, market_day, realized_pnl, drawdown_pct, last_loss_at, updated_at, payload)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(account_id, market_day) DO UPDATE SET
+                    realized_pnl = excluded.realized_pnl,
+                    drawdown_pct = excluded.drawdown_pct,
+                    last_loss_at = excluded.last_loss_at,
+                    updated_at = excluded.updated_at,
+                    payload = excluded.payload
+                """,
+                (
+                    str(state.account_id),
+                    state.market_day,
+                    state.realized_pnl,
+                    state.drawdown_pct,
+                    state.last_loss_at.isoformat() if state.last_loss_at is not None else None,
+                    state.updated_at.isoformat(),
+                    _dump_model(state),
+                ),
+            )
+        return state
+
+    def load_daily_account_state(self, account_id: UUID, market_day: str) -> DailyAccountState:
+        row = self._fetch_one(
+            "SELECT payload FROM daily_account_states WHERE account_id = ? AND market_day = ?",
+            (str(account_id), market_day),
+        )
+        if row is None:
+            raise KeyError(f"no daily account state for {account_id} on {market_day}")
+        return _load_model(DailyAccountState, row["payload"])
+
+    def list_daily_account_states(self, account_id: UUID, *, limit: int = 30) -> tuple[DailyAccountState, ...]:
+        bounded = max(1, min(int(limit), 365))
+        rows = self._fetch_all(
+            "SELECT payload FROM daily_account_states WHERE account_id = ? ORDER BY market_day DESC LIMIT ?",
+            (str(account_id), bounded),
+        )
+        return tuple(_load_model(DailyAccountState, row["payload"]) for row in rows)
 
     def save_deployment_runtime_state(self, state: RuntimeState) -> RuntimeState:
         with self._connect() as connection:

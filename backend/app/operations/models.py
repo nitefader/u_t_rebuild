@@ -13,6 +13,7 @@ from backend.app.brokers.models import (
     BrokerPositionSnapshot,
     BrokerSyncState,
 )
+from backend.app.runtime.daily_account_state import DailyAccountState
 from backend.app.control_plane.service import ControlPlaneState
 from backend.app.domain import AccountSignalPlanEvaluation
 from backend.app.governor.models import GovernorDecision, GovernorPolicy
@@ -169,6 +170,14 @@ class OrderDetail(BaseModel):
     broker_sync_timestamp: datetime | None = None
     fills: tuple[BrokerFillUpdateEvent, ...] = ()
     trade_summary: dict[str, object] = Field(default_factory=dict)
+
+
+class DailyRiskStateResponse(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    account_id: UUID
+    state: DailyAccountState | None = None
+    cooldown_remaining_minutes: float | None = None
 
 
 class ResearchEvidenceSummary(BaseModel):

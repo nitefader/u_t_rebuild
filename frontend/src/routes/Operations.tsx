@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Activity, Pause, Play, Search, ShieldAlert, Zap } from "lucide-react";
+import { Activity, Clock, Pause, Play, Search, ShieldAlert, TrendingDown, Zap } from "lucide-react";
 import { OperationsApi } from "@/api/operations";
 import { SystemApi } from "@/api/system";
 import type {
@@ -9,6 +9,7 @@ import type {
   GovernorDecision,
   RuntimeOverview,
 } from "@/api/schemas/operations";
+import type { DailyRiskStateResponse } from "@/api/schemas/dailyRiskState";
 import type { HubStatus, TradeStreamStatus } from "@/api/schemas/system";
 import { TRADING_HORIZON_LABELS } from "@/api/schemas/risk";
 import { Banner } from "@/components/ui/Banner";
@@ -429,25 +430,40 @@ function AccountsSection({
   streams: { trade_streams: TradeStreamStatus[] } | undefined;
 }): JSX.Element {
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Accounts</CardTitle>
-        <StatusBadge>{overview.broker_accounts.length}</StatusBadge>
-      </CardHeader>
-      <CardBody className={overview.broker_accounts.length === 0 ? "" : "grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3"}>
-        {overview.broker_accounts.length === 0 ? (
-          <EmptyState title="No Accounts" message="Add a broker Account to begin." />
-        ) : (
-          overview.broker_accounts.map((a) => (
-            <AccountSummaryCard
-              key={a.account_id}
-              account={a}
-              tradeStream={streams?.trade_streams.find((s) => s.account_id === a.account_id)}
-            />
-          ))
-        )}
-      </CardBody>
-    </Card>
+    <>
+      <Card>
+        <CardHeader>
+          <CardTitle>Accounts</CardTitle>
+          <StatusBadge>{overview.broker_accounts.length}</StatusBadge>
+        </CardHeader>
+        <CardBody className={overview.broker_accounts.length === 0 ? "" : "grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3"}>
+          {overview.broker_accounts.length === 0 ? (
+            <EmptyState title="No Accounts" message="Add a broker Account to begin." />
+          ) : (
+            overview.broker_accounts.map((a) => (
+              <AccountSummaryCard
+                key={a.account_id}
+                account={a}
+                tradeStream={streams?.trade_streams.find((s) => s.account_id === a.account_id)}
+              />
+            ))
+          )}
+        </CardBody>
+      </Card>
+      {overview.broker_accounts.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Daily Risk State</CardTitle>
+            <TrendingDown className="h-4 w-4 text-fg-subtle" aria-hidden="true" />
+          </CardHeader>
+          <CardBody className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
+            {overview.broker_accounts.map((a) => (
+              <DailyRiskStateCard key={a.account_id} accountId={a.account_id} />
+            ))}
+          </CardBody>
+        </Card>
+      )}
+    </>
   );
 }
 
@@ -594,6 +610,69 @@ function KeyValue({ label, value }: { label: string; value: React.ReactNode }): 
       <span className="text-fg-subtle">{label}</span>
       <span className="tabular text-fg">{value}</span>
     </div>
+  );
+}
+
+// ---------- Daily Risk State card ----------
+
+function DailyRiskStateCard({ accountId }: { accountId: string }): JSX.Element {
+  const { data, isLoading, isError } = useQuery<DailyRiskStateResponse>({
+    queryKey: ["operations", "daily-risk-state", accountId],
+    queryFn: () => OperationsApi.dailyRiskState(accountId),
+    refetchInterval: 5_000,
+  });
+
+  const idShort = accountId.slice(0, 8);
+  const state = data?.state ?? null;
+  const cooldown = data?.cooldown_remaining_minutes ?? null;
+
+  const pnl = state?.realized_pnl ?? null;
+  const drawdown = state?.drawdown_pct ?? null;
+  const marketDay = state?.market_day ?? null;
+  const updatedAt = state?.updated_at ?? null;
+
+  const pnlTone = pnl === null ? "muted" : pnl >= 0 ? "ok" : "danger";
+  const cooldownTone = cooldown !== null && cooldown > 0 ? "warn" : "ok";
+
+  return (
+    <Card>
+      <div className="flex items-start justify-between gap-3 px-4 pt-3">
+        <div>
+          <div className="font-semibold tracking-tight">{idShort}</div>
+          <div className="mt-1 flex flex-wrap items-center gap-1.5">
+            {isLoading ? (
+              <StatusBadge tone="muted">Loading…</StatusBadge>
+            ) : isError ? (
+              <StatusBadge tone="danger">Unavailable</StatusBadge>
+            ) : state === null ? (
+              <StatusBadge tone="muted">No fills today</StatusBadge>
+            ) : (
+              <StatusBadge tone={pnlTone}>
+                {pnl !== null ? (pnl >= 0 ? "+" : "") + formatCurrency(pnl) : "—"}
+              </StatusBadge>
+            )}
+            {cooldown !== null && cooldown > 0 && (
+              <StatusBadge tone="warn">
+                <Clock className="mr-1 inline h-3 w-3" aria-hidden="true" />
+                Cooldown {Math.ceil(cooldown)}m
+              </StatusBadge>
+            )}
+            {cooldown !== null && cooldown <= 0 && state !== null && (
+              <StatusBadge tone={cooldownTone}>Cooldown clear</StatusBadge>
+            )}
+          </div>
+        </div>
+      </div>
+      <div className="grid grid-cols-3 gap-2 px-4 py-3 text-xs">
+        <KeyValue label="Realized P&L" value={pnl !== null ? formatCurrency(pnl) : "—"} />
+        <KeyValue label="Drawdown" value={drawdown !== null ? `${drawdown.toFixed(2)}%` : "—"} />
+        <KeyValue label="Day" value={marketDay ?? "—"} />
+        <KeyValue label="Updated" value={updatedAt ? relativeTime(updatedAt) : "—"} />
+        {cooldown !== null && cooldown > 0 && (
+          <KeyValue label="Cooldown remaining" value={`${Math.ceil(cooldown)}m`} />
+        )}
+      </div>
+    </Card>
   );
 }
 

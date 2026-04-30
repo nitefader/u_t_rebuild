@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from backend.app.operations.models import (
     AccountOperations,
     AccountSignalPlanEvaluationListResponse,
+    DailyRiskStateResponse,
     DeploymentOperations,
     FlattenRequestResponse,
     OrderDetail,
@@ -107,6 +108,14 @@ def get_account_operations(account_id: UUID, service: OperationsServiceDependenc
         return service.get_account_operations(account_id)
     except Exception as exc:  # noqa: BLE001
         raise _operator_error(f"Unable to load account operations for {account_id}", exc) from exc
+
+
+@router.get("/accounts/{account_id}/daily-risk-state", response_model=DailyRiskStateResponse)
+def get_account_daily_risk_state(account_id: UUID, service: OperationsServiceDependency) -> DailyRiskStateResponse:
+    try:
+        return service.get_daily_risk_state(account_id)
+    except Exception as exc:  # noqa: BLE001
+        raise _operator_error(f"Unable to load daily risk state for {account_id}", exc) from exc
 
 
 @router.get("/deployments/{deployment_id}", response_model=DeploymentOperations)

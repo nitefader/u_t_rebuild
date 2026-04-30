@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from backend.app.domain import IntentType
+from backend.app.domain._base import utc_now
 from backend.app.orders.models import InternalOrderIntent
 
 from .models import GovernorDecision, GovernorPolicy, GovernorRequest
@@ -130,6 +131,37 @@ class PortfolioGovernor:
                 rule_id="max_open_risk_pct",
                 projected_state=projected_state,
             )
+        # T-7: daily loss / drawdown / cooldown checks — OPEN intents only.
+        # Protective exits are already bypassed at the top of evaluate().
+        # daily_state=None means no fills have been recorded today; checks are
+        # skipped (not fail-closed) because portfolio_equity_unavailable
+        # already blocks opens when equity is unknown.
+        if request.daily_state is not None:
+            daily = request.daily_state
+            equity = request.portfolio.equity
+            if active_policy.max_daily_loss_pct is not None and equity is not None:
+                daily_loss_pct = (-daily.realized_pnl / equity * 100) if daily.realized_pnl < 0 else 0.0
+                if daily_loss_pct >= active_policy.max_daily_loss_pct:
+                    return GovernorDecision.reject(
+                        reason="daily_loss_limit_exceeded",
+                        rule_id="daily_loss_pct_exceeded",
+                        projected_state=projected_state,
+                    )
+            if active_policy.max_drawdown_pct is not None:
+                if daily.drawdown_pct >= active_policy.max_drawdown_pct:
+                    return GovernorDecision.reject(
+                        reason="daily_drawdown_limit_exceeded",
+                        rule_id="drawdown_pct_exceeded",
+                        projected_state=projected_state,
+                    )
+            if active_policy.cooldown_after_loss_minutes is not None and daily.last_loss_at is not None:
+                elapsed_minutes = (utc_now() - daily.last_loss_at).total_seconds() / 60.0
+                if elapsed_minutes < active_policy.cooldown_after_loss_minutes:
+                    return GovernorDecision.reject(
+                        reason="cooldown_after_loss_active",
+                        rule_id="cooldown_after_loss_active",
+                        projected_state=projected_state,
+                    )
         return GovernorDecision.approve(projected_state=projected_state)
 
     def approve(self, *, request: GovernorRequest, policy_override: GovernorPolicy | None = None) -> tuple[bool, str]:

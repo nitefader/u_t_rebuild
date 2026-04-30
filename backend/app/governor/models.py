@@ -8,6 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from backend.app.domain._base import utc_now
 from backend.app.orders.models import InternalOrderIntent
+from backend.app.runtime.daily_account_state import DailyAccountState
 
 
 class GovernorPolicy(BaseModel):
@@ -27,6 +28,10 @@ class GovernorPolicy(BaseModel):
     # entry signals with rule_id="account_missing_risk_plan_for_horizon" when
     # this flag is True. Defaults False so legacy callers are unaffected.
     requires_risk_plan: bool = False
+    # T-7: daily risk guardrails. All default None so existing callers are unaffected.
+    max_daily_loss_pct: float | None = Field(default=None, gt=0, le=100)
+    max_drawdown_pct: float | None = Field(default=None, gt=0, le=100)
+    cooldown_after_loss_minutes: int | None = Field(default=None, gt=0)
 
 
 class BrokerSyncFreshness(BaseModel):
@@ -112,6 +117,7 @@ class GovernorRequest(BaseModel):
     order_intent: InternalOrderIntent | None = None
     candidate_market_value: float = Field(default=0, ge=0)
     candidate_open_risk: float = Field(default=0, ge=0)
+    daily_state: DailyAccountState | None = None
 
     @model_validator(mode="before")
     @classmethod

@@ -22,6 +22,7 @@ from backend.app.runtime.models import DeploymentContext, RuntimeEvent, RuntimeE
 from .models import (
     AccountOperations,
     AccountSummary,
+    DailyRiskStateResponse,
     DeploymentOperations,
     DeploymentSummary,
     FlattenRequestResponse,
@@ -385,6 +386,33 @@ class OperationsCenterService:
         if self._runtime_store is None or not hasattr(self._runtime_store, "load_research_evidence"):
             raise KeyError(f"unknown research evidence: {evidence_id}")
         return self._runtime_store.load_research_evidence(evidence_id)
+
+    def get_daily_risk_state(self, account_id: UUID) -> DailyRiskStateResponse:
+        from backend.app.domain._base import utc_now
+        from backend.app.runtime.daily_account_state import _et_market_day
+
+        state = None
+        if self._runtime_store is not None and hasattr(self._runtime_store, "load_daily_account_state"):
+            today = _et_market_day(utc_now())
+            try:
+                state = self._runtime_store.load_daily_account_state(account_id, today)
+            except KeyError:
+                state = None
+
+        cooldown_remaining: float | None = None
+        if state is not None and state.last_loss_at is not None:
+            policy = self._governor_state
+            if policy is not None and policy.cooldown_after_loss_minutes is not None:
+                elapsed = (utc_now() - state.last_loss_at).total_seconds() / 60.0
+                remaining = policy.cooldown_after_loss_minutes - elapsed
+                if remaining > 0:
+                    cooldown_remaining = remaining
+
+        return DailyRiskStateResponse(
+            account_id=account_id,
+            state=state,
+            cooldown_remaining_minutes=cooldown_remaining,
+        )
 
     def pause_deployment(self, deployment_id: UUID, reason: str) -> None:
         _ = reason

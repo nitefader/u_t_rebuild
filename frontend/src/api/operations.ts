@@ -11,6 +11,10 @@ import {
   type OrderDetail,
   type RuntimeOverview,
 } from "./schemas/operations";
+import {
+  DailyRiskStateResponseSchema,
+  type DailyRiskStateResponse,
+} from "./schemas/dailyRiskState";
 
 export interface ControlCommandPayload {
   reason: string;
@@ -71,4 +75,7 @@ export const OperationsApi = {
       OrderDetailSchema,
       `/api/v1/operations/broker-orders/${encodeURIComponent(brokerOrderId)}`,
     ),
+
+  dailyRiskState: (accountId: string): Promise<DailyRiskStateResponse> =>
+    api.get(DailyRiskStateResponseSchema, `/api/v1/operations/accounts/${accountId}/daily-risk-state`),
 };
