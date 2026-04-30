@@ -15,7 +15,7 @@ from backend.app.brokers import (
 from backend.app.domain import TradingMode
 from backend.app.domain._base import utc_now
 from backend.app.features import NormalizedBar
-from backend.app.governor import GovernorPolicy, PortfolioGovernor
+from backend.app.governor import GovernorPolicy, PortfolioGovernor, PortfolioSnapshot
 from backend.app.orders import InternalOrder, OrderManager
 from backend.app.pipeline import RuntimeOrchestrator
 import tools.check_alpaca_readiness as readiness
@@ -381,6 +381,7 @@ def test_runtime_smoke_governor_blocks_when_required() -> None:
         deployment=deployment,
         components=components,
         governor=PortfolioGovernor(GovernorPolicy(global_kill_active=True)),
+        portfolio_snapshot=PortfolioSnapshot(equity=100_000),
     )
 
     result = orchestrator.process_bar(runtime_smoke._generated_completed_bars(symbol="SPY", count=1)[0])

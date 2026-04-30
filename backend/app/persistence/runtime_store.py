@@ -28,6 +28,9 @@ from backend.app.broker_accounts.risk_plan_map_models import (
 from backend.app.domain.strategy_controls import TradingHorizon
 from backend.app.control_plane.service import ControlPlaneState
 from backend.app.domain import (
+    AccountEvaluationStatus,
+    AccountParticipationDecision,
+    AccountSignalPlanEvaluation,
     BacktestRun,
     ChartLabPreviewEvidence,
     OptimizationRun,
@@ -1218,6 +1221,122 @@ class SQLiteRuntimeStore:
             tuple(str(version_id) for version_id in risk_plan_version_ids),
         )
         return tuple(_load_model(RiskDecisionCard, row["payload"]) for row in rows)
+
+    # -- W2-A-2 (audit P0 #2 — pre-T-7 bundle, 2026-04-30) -------------------
+    # Durable persistence for every AccountSignalPlanEvaluation. Pre-W2-A
+    # the orchestrator built these in memory and Operations reconstructed
+    # them from the order ledger only, so PARTICIPATE-without-order, REJECT,
+    # IGNORE, and DEFER decisions were invisible to Operations consumers.
+    # ------------------------------------------------------------------------
+
+    def save_account_signal_plan_evaluation(
+        self, evaluation: AccountSignalPlanEvaluation
+    ) -> AccountSignalPlanEvaluation:
+        """Insert an AccountSignalPlanEvaluation. Idempotent on evaluation_id.
+
+        ``persisted_at`` is assigned at write time and used as the stable
+        ordering key for Operations list reads (newest first). The Pydantic
+        model itself does not carry this field — it's a write-side metadata
+        column on the row only.
+        """
+
+        persisted_at = utc_now().isoformat()
+        governor_decision_id = (
+            str(evaluation.governor_decision.governor_decision_id)
+            if evaluation.governor_decision is not None
+            else None
+        )
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO account_signal_plan_evaluations
+                    (
+                        evaluation_id, account_id, signal_plan_id,
+                        deployment_id, strategy_id, status,
+                        participation_decision, governor_decision_id,
+                        evaluated_at, created_at, persisted_at, payload
+                    )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(evaluation_id) DO UPDATE SET
+                    account_id = excluded.account_id,
+                    signal_plan_id = excluded.signal_plan_id,
+                    deployment_id = excluded.deployment_id,
+                    strategy_id = excluded.strategy_id,
+                    status = excluded.status,
+                    participation_decision = excluded.participation_decision,
+                    governor_decision_id = excluded.governor_decision_id,
+                    evaluated_at = excluded.evaluated_at,
+                    created_at = excluded.created_at,
+                    persisted_at = excluded.persisted_at,
+                    payload = excluded.payload
+                """,
+                (
+                    str(evaluation.evaluation_id),
+                    str(evaluation.account_id),
+                    str(evaluation.signal_plan_id),
+                    str(evaluation.deployment_id),
+                    str(evaluation.strategy_id),
+                    evaluation.status.value,
+                    evaluation.participation_decision.value,
+                    governor_decision_id,
+                    evaluation.evaluated_at.isoformat() if evaluation.evaluated_at is not None else None,
+                    evaluation.created_at.isoformat(),
+                    persisted_at,
+                    _dump_model(evaluation),
+                ),
+            )
+        return evaluation
+
+    def load_account_signal_plan_evaluation(
+        self, evaluation_id: UUID
+    ) -> AccountSignalPlanEvaluation:
+        row = self._fetch_one(
+            "SELECT payload FROM account_signal_plan_evaluations WHERE evaluation_id = ?",
+            (str(evaluation_id),),
+        )
+        if row is None:
+            raise KeyError(f"unknown account signal-plan evaluation: {evaluation_id}")
+        return _load_model(AccountSignalPlanEvaluation, row["payload"])
+
+    def list_account_signal_plan_evaluations(
+        self,
+        *,
+        account_id: UUID | None = None,
+        deployment_id: UUID | None = None,
+        signal_plan_id: UUID | None = None,
+        limit: int = 100,
+    ) -> tuple[AccountSignalPlanEvaluation, ...]:
+        """List persisted evaluations, newest persisted first.
+
+        ``persisted_at DESC`` is the stable ordering — independent of
+        ``evaluated_at`` (which can be None on legacy paths). Limit is
+        capped between 1 and 500 so a hostile caller can't exhaust memory.
+        """
+
+        bounded_limit = max(1, min(int(limit), 500))
+        conditions: list[str] = []
+        params: list[object] = []
+        if account_id is not None:
+            conditions.append("account_id = ?")
+            params.append(str(account_id))
+        if deployment_id is not None:
+            conditions.append("deployment_id = ?")
+            params.append(str(deployment_id))
+        if signal_plan_id is not None:
+            conditions.append("signal_plan_id = ?")
+            params.append(str(signal_plan_id))
+        where = f" WHERE {' AND '.join(conditions)}" if conditions else ""
+        params.append(bounded_limit)
+        rows = self._fetch_all(
+            f"""
+            SELECT payload FROM account_signal_plan_evaluations
+            {where}
+            ORDER BY persisted_at DESC, evaluation_id
+            LIMIT ?
+            """,
+            tuple(params),
+        )
+        return tuple(_load_model(AccountSignalPlanEvaluation, row["payload"]) for row in rows)
 
     def save_historical_dataset(self, payload: dict[str, Any], *, dataset_id: str) -> None:
         with self._connect() as connection:

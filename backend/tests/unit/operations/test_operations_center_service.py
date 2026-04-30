@@ -764,3 +764,145 @@ def test_order_detail_unknown_broker_state_renders_unknown_stale(tmp_path) -> No
 
     assert detail.broker_mapping is None
     assert detail.broker_status == "unknown_stale"
+
+
+# ---------------------------------------------------------------------------
+# W2-A-3 (audit P0 #2 — pre-T-7 bundle, 2026-04-30):
+# OperationsCenterService.list_account_signal_plan_evaluations reads the
+# persisted store first; falls back to order-projection only when the
+# store has no rows for the filter (legacy data).
+# ---------------------------------------------------------------------------
+
+
+def test_evaluations_read_from_persisted_store_when_present(tmp_path) -> None:
+    """Audit-headline gap: REJECT/IGNORE outcomes that never created an
+    order are now visible because the persisted store carries them."""
+    from backend.app.domain import (
+        AccountEvaluationStatus,
+        AccountParticipationDecision,
+        AccountSignalPlanEvaluation,
+    )
+    store, _ = _store(tmp_path)
+    rejected = AccountSignalPlanEvaluation(
+        evaluation_id=uuid4(),
+        account_id=ACCOUNT_ID,
+        signal_plan_id=uuid4(),
+        deployment_id=DEPLOYMENT_ID,
+        strategy_id=PROGRAM_ID,
+        status=AccountEvaluationStatus.BLOCKED,
+        participation_decision=AccountParticipationDecision.REJECT,
+        evaluated_at=NOW,
+        rejection_reasons=("portfolio_equity_unavailable",),
+    )
+    ignored = AccountSignalPlanEvaluation(
+        evaluation_id=uuid4(),
+        account_id=ACCOUNT_ID,
+        signal_plan_id=uuid4(),
+        deployment_id=DEPLOYMENT_ID,
+        strategy_id=PROGRAM_ID,
+        status=AccountEvaluationStatus.REJECTED,
+        participation_decision=AccountParticipationDecision.IGNORE,
+        evaluated_at=NOW,
+        rejection_reasons=("account_has_no_matching_position",),
+    )
+    store.save_account_signal_plan_evaluation(rejected)
+    store.save_account_signal_plan_evaluation(ignored)
+    service = OperationsCenterService(control_plane=ControlPlane(state_store=store), runtime_store=store)
+
+    rows = service.list_account_signal_plan_evaluations(account_id=ACCOUNT_ID)
+
+    decisions = {row.participation_decision for row in rows}
+    assert AccountParticipationDecision.REJECT in decisions
+    assert AccountParticipationDecision.IGNORE in decisions
+
+
+def test_evaluations_falls_back_to_order_projection_when_store_empty(tmp_path) -> None:
+    """Backwards-compat: pre-W2-A databases have orders but no evaluation
+    rows. The legacy order-projection path must still render those."""
+    store, _ = _store(tmp_path)
+    legacy_order = _signal_plan_order(created_at=NOW)
+    store.save_order(legacy_order)
+    # NO save_account_signal_plan_evaluation call — simulates legacy data.
+    service = OperationsCenterService(control_plane=ControlPlane(state_store=store), runtime_store=store)
+
+    rows = service.list_account_signal_plan_evaluations(account_id=ACCOUNT_ID)
+
+    assert len(rows) == 1
+    assert rows[0].evaluation_id == legacy_order.account_evaluation_id
+
+
+def test_evaluations_persisted_path_does_not_pull_in_legacy_orders(tmp_path) -> None:
+    """When the persisted store has rows for an account, the legacy order
+    projection is NOT also stitched in — that would be a hybrid contract.
+    Operations sees what the orchestrator decided, not a mix.
+    """
+    from backend.app.domain import (
+        AccountEvaluationStatus,
+        AccountParticipationDecision,
+        AccountSignalPlanEvaluation,
+    )
+    store, _ = _store(tmp_path)
+    # Persist one evaluation row.
+    persisted_eval = AccountSignalPlanEvaluation(
+        evaluation_id=uuid4(),
+        account_id=ACCOUNT_ID,
+        signal_plan_id=uuid4(),
+        deployment_id=DEPLOYMENT_ID,
+        strategy_id=PROGRAM_ID,
+        status=AccountEvaluationStatus.BLOCKED,
+        participation_decision=AccountParticipationDecision.REJECT,
+        evaluated_at=NOW,
+        rejection_reasons=("portfolio_equity_unavailable",),
+    )
+    store.save_account_signal_plan_evaluation(persisted_eval)
+    # Also save a legacy-style order with a different evaluation_id.
+    legacy_order = _signal_plan_order(created_at=NOW)
+    store.save_order(legacy_order)
+    service = OperationsCenterService(control_plane=ControlPlane(state_store=store), runtime_store=store)
+
+    rows = service.list_account_signal_plan_evaluations(account_id=ACCOUNT_ID)
+
+    # Only the persisted row appears; the legacy order projection does NOT
+    # also show up alongside it.
+    assert len(rows) == 1
+    assert rows[0].evaluation_id == persisted_eval.evaluation_id
+
+
+def test_evaluations_filter_by_signal_plan_id_through_persisted_store(tmp_path) -> None:
+    """Filter still works when reading through the persisted store."""
+    from backend.app.domain import (
+        AccountEvaluationStatus,
+        AccountParticipationDecision,
+        AccountSignalPlanEvaluation,
+    )
+    store, _ = _store(tmp_path)
+    target_plan = uuid4()
+    other_plan = uuid4()
+    target = AccountSignalPlanEvaluation(
+        evaluation_id=uuid4(),
+        account_id=ACCOUNT_ID,
+        signal_plan_id=target_plan,
+        deployment_id=DEPLOYMENT_ID,
+        strategy_id=PROGRAM_ID,
+        status=AccountEvaluationStatus.ACCEPTED,
+        participation_decision=AccountParticipationDecision.PARTICIPATE,
+        evaluated_at=NOW,
+    )
+    other = AccountSignalPlanEvaluation(
+        evaluation_id=uuid4(),
+        account_id=ACCOUNT_ID,
+        signal_plan_id=other_plan,
+        deployment_id=DEPLOYMENT_ID,
+        strategy_id=PROGRAM_ID,
+        status=AccountEvaluationStatus.ACCEPTED,
+        participation_decision=AccountParticipationDecision.PARTICIPATE,
+        evaluated_at=NOW,
+    )
+    store.save_account_signal_plan_evaluation(target)
+    store.save_account_signal_plan_evaluation(other)
+    service = OperationsCenterService(control_plane=ControlPlane(state_store=store), runtime_store=store)
+
+    rows = service.list_account_signal_plan_evaluations(signal_plan_id=target_plan)
+
+    assert len(rows) == 1
+    assert rows[0].signal_plan_id == target_plan

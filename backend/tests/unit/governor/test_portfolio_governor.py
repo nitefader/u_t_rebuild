@@ -61,12 +61,18 @@ def _request(
     candidate_open_risk: float = 0,
 ) -> GovernorRequest:
     execution_intent = intent or _intent()
+    # W2-A-1b: tests that don't intentionally exercise the equity=None
+    # fail-closed path get a non-None default equity so the new
+    # portfolio_equity_unavailable rule does not pre-empt the rule each test
+    # is actually checking. Tests that specifically test percentage gates set
+    # their own equity (10_000 etc.). Tests that exercise the new fail-closed
+    # rule pass an explicit ``portfolio=PortfolioSnapshot()`` (equity=None).
     return GovernorRequest(
         account_id=account_id,
         execution_intent=execution_intent,
         runtime_state=RuntimeState(deployment_id=execution_intent.deployment_id),
         broker_sync=broker_sync or BrokerSyncFreshness(),
-        portfolio=portfolio or PortfolioSnapshot(),
+        portfolio=portfolio if portfolio is not None else PortfolioSnapshot(equity=100_000),
         order_intent=order_intent,
         candidate_market_value=candidate_market_value,
         candidate_open_risk=candidate_open_risk,
@@ -92,7 +98,7 @@ def test_governor_accepts_canonical_request_without_execution_intent() -> None:
             symbol="spy",
             runtime_state=RuntimeState(deployment_id=DEPLOYMENT_ID),
             broker_sync=BrokerSyncFreshness(),
-            portfolio=PortfolioSnapshot(),
+            portfolio=PortfolioSnapshot(equity=100_000),
             order_intent=InternalOrderIntent.OPEN,
         )
     )
@@ -199,6 +205,7 @@ def test_all_position_management_intents_allowed_during_pause(order_intent: Inte
 
 def test_max_positions_rejects() -> None:
     portfolio = PortfolioSnapshot(
+        equity=100_000,
         positions=(
             PositionSummary(
                 account_id=ACCOUNT_ID,
@@ -208,7 +215,7 @@ def test_max_positions_rejects() -> None:
                 quantity=10,
                 market_value=1000,
             ),
-        )
+        ),
     )
     governor = PortfolioGovernor(GovernorPolicy(max_open_positions=1))
 
@@ -503,3 +510,166 @@ def test_missing_risk_plan_false_does_not_block() -> None:
     decision = governor.evaluate(_request(), policy_override=policy)
 
     assert decision.approved is True
+
+
+# ---------------------------------------------------------------------------
+# W2-A-1b (audit P0 #2 — pre-T-7 bundle, operator decision 2026-04-30):
+# PortfolioSnapshot.equity=None must fail-closed for OPEN intents because
+# percentage gates collapse to zero via _pct() when equity is falsy. The
+# new rule must fire AFTER protective-exit bypass and AFTER kill/pause/stale
+# rules so existing higher-priority rejections still surface their reason.
+# ---------------------------------------------------------------------------
+
+
+def test_equity_none_rejects_open_with_portfolio_equity_unavailable() -> None:
+    """Without equity, percentage gates cannot be trusted; open must fail closed."""
+    governor = PortfolioGovernor()
+
+    decision = governor.evaluate(_request(portfolio=PortfolioSnapshot()))
+
+    assert decision.approved is False
+    assert decision.reason == "portfolio_equity_unavailable"
+    assert decision.rule_id == "portfolio_equity_unavailable"
+
+
+def test_equity_none_does_not_block_protective_exit() -> None:
+    """Protective exits bypass equity check the same way they bypass everything else."""
+    governor = PortfolioGovernor()
+    exit_intent = _intent(intent_type=IntentType.EXIT)
+
+    decision = governor.evaluate(
+        _request(
+            intent=exit_intent,
+            order_intent=InternalOrderIntent.STOP_LOSS,
+            portfolio=PortfolioSnapshot(),
+        )
+    )
+
+    assert decision.approved is True
+    assert decision.reason == "protective_exit_allowed"
+
+
+def test_equity_none_fires_after_kill_switch() -> None:
+    """Global kill is stricter than equity-unavailable; kill rule must surface first."""
+    governor = PortfolioGovernor(GovernorPolicy(global_kill_active=True))
+
+    decision = governor.evaluate(_request(portfolio=PortfolioSnapshot()))
+
+    assert decision.approved is False
+    assert decision.rule_id == "global_kill_blocks_open"
+
+
+def test_equity_none_fires_after_stale_broker_sync() -> None:
+    """Stale sync is stricter than equity-unavailable; stale rule must surface first."""
+    governor = PortfolioGovernor()
+
+    decision = governor.evaluate(
+        _request(
+            broker_sync=BrokerSyncFreshness(is_stale=True, reason="timeout"),
+            portfolio=PortfolioSnapshot(),
+        )
+    )
+
+    assert decision.approved is False
+    assert decision.rule_id == "stale_broker_sync_blocks_open"
+
+
+def test_equity_none_does_not_block_when_intent_is_open_with_explicit_intent() -> None:
+    """Confirm fail-closed fires when explicit OPEN intent is set, not just default."""
+    governor = PortfolioGovernor()
+
+    decision = governor.evaluate(
+        _request(
+            order_intent=InternalOrderIntent.OPEN,
+            portfolio=PortfolioSnapshot(),
+        )
+    )
+
+    assert decision.approved is False
+    assert decision.rule_id == "portfolio_equity_unavailable"
+
+
+# ---------------------------------------------------------------------------
+# W2-A-1a (audit P0 #1 — pre-T-7 bundle):
+# GovernorRequest must carry non-zero candidate_market_value /
+# candidate_open_risk on opening evaluations so the percentage gates evaluate
+# against real incremental exposure. The audit's confirmed silent-no-op was
+# that the orchestrator built GovernorRequest with these fields at their
+# zero default and so max_gross_exposure_pct / max_open_risk_pct never fired.
+# This test set guards against regressing back to that silent behavior.
+# ---------------------------------------------------------------------------
+
+
+def test_zero_candidate_market_value_skips_gross_exposure_cap_silently() -> None:
+    """Regression guard: with candidate_market_value=0, an OPEN that should
+    breach the cap is silently approved. This documents the broken pre-fix
+    behavior so any future regression is visible.
+
+    The orchestrator's _governor_candidate_inputs helper is what makes this
+    not happen in production — see test_runtime_orchestrator.py for that
+    integration test. This unit test just locks the math contract.
+    """
+    portfolio = PortfolioSnapshot(equity=10_000)
+    governor = PortfolioGovernor(GovernorPolicy(max_gross_exposure_pct=50))
+
+    # candidate_market_value=0 — the broken pre-fix shape.
+    decision = governor.evaluate(_request(portfolio=portfolio, candidate_market_value=0))
+
+    # With zero candidate exposure, the projected gross is 0/10_000 = 0% which
+    # is under the 50% cap. The cap silently does not fire.
+    assert decision.approved is True
+    assert decision.projected_state is not None
+    assert decision.projected_state["gross_exposure_pct"] == 0
+
+
+def test_populated_candidate_market_value_makes_gross_exposure_cap_fire() -> None:
+    """The cap fires once candidate_market_value carries the real qty*price."""
+    portfolio = PortfolioSnapshot(equity=10_000)
+    governor = PortfolioGovernor(GovernorPolicy(max_gross_exposure_pct=50))
+
+    # qty=100 @ $60 = $6_000 = 60% of $10_000 equity → exceeds 50% cap.
+    decision = governor.evaluate(_request(portfolio=portfolio, candidate_market_value=6_000))
+
+    assert decision.approved is False
+    assert decision.rule_id == "max_gross_exposure_pct"
+    assert decision.projected_state is not None
+    assert decision.projected_state["gross_exposure_pct"] == 60
+
+
+def test_populated_candidate_open_risk_makes_open_risk_cap_fire() -> None:
+    """The open_risk cap fires once candidate_open_risk carries qty * stop_distance."""
+    portfolio = PortfolioSnapshot(equity=10_000)
+    governor = PortfolioGovernor(GovernorPolicy(max_open_risk_pct=2))
+
+    # qty=100 with $3 stop distance → $300 candidate open risk = 3% of equity → exceeds 2%.
+    decision = governor.evaluate(_request(portfolio=portfolio, candidate_open_risk=300))
+
+    assert decision.approved is False
+    assert decision.rule_id == "max_open_risk_pct"
+    assert decision.projected_state is not None
+    assert decision.projected_state["open_risk_pct"] == 3
+
+
+def test_candidate_inputs_zero_for_protective_exit_intents() -> None:
+    """Protective exits never contribute candidate exposure; _projected_state
+    zeros these fields anyway, but the orchestrator helper short-circuits
+    before that. This test pins the protective-exit math contract."""
+    portfolio = PortfolioSnapshot(equity=10_000)
+    governor = PortfolioGovernor(GovernorPolicy(max_gross_exposure_pct=50))
+
+    # Even with a hostile candidate_market_value passed in, a protective exit
+    # bypasses all numeric checks via _is_protective_exit() at the top of
+    # evaluate(). Operator can rely on this when a partial-fill exit lands
+    # on a fully-loaded book.
+    decision = governor.evaluate(
+        _request(
+            intent=_intent(intent_type=IntentType.EXIT),
+            order_intent=InternalOrderIntent.STOP_LOSS,
+            portfolio=portfolio,
+            candidate_market_value=100_000,
+            candidate_open_risk=100_000,
+        )
+    )
+
+    assert decision.approved is True
+    assert decision.reason == "protective_exit_allowed"

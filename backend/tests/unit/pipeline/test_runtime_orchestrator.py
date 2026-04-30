@@ -38,7 +38,7 @@ from backend.app.domain.risk_profile import PositionSizingMethod
 from backend.app.domain.strategy import SignalRule
 from backend.app.domain.strategy_controls import TradingHorizon
 from backend.app.features import IncrementalFeatureEngine, NormalizedBar, ResolvedDeploymentComponents
-from backend.app.governor import BrokerSyncFreshness, GovernorPolicy, PortfolioGovernor
+from backend.app.governor import BrokerSyncFreshness, GovernorPolicy, PortfolioGovernor, PortfolioSnapshot
 from backend.app.orders import InternalOrderIntent, InternalOrderStatus, OrderManager
 from backend.app.pipeline import PipelineEventType, RuntimeOrchestrator
 from backend.app.runtime import DeploymentContext
@@ -232,8 +232,13 @@ def _orchestrator(
     account_ids: tuple[UUID, ...] | None = None,
     position_reader: object | None = None,
     signal_engine: object | None = None,
+    portfolio_snapshot: PortfolioSnapshot | None = None,
 ) -> RuntimeOrchestrator:
     resolved = components or _components()
+    # W2-A-1b: tests that don't intentionally exercise the new
+    # portfolio_equity_unavailable fail-closed rule get a default snapshot
+    # with non-None equity. Tests that probe equity=None must pass an
+    # explicit ``portfolio_snapshot=PortfolioSnapshot()``.
     return RuntimeOrchestrator(
         account_id=ACCOUNT_ID,
         account_ids=account_ids,
@@ -245,6 +250,11 @@ def _orchestrator(
         control_plane=control_plane,
         position_reader=position_reader,
         signal_engine=signal_engine,  # type: ignore[arg-type]
+        portfolio_snapshot=(
+            portfolio_snapshot
+            if portfolio_snapshot is not None
+            else PortfolioSnapshot(equity=100_000)
+        ),
     )
 
 
@@ -734,6 +744,7 @@ def test_multi_account_governor_uses_account_specific_broker_freshness() -> None
             ACCOUNT_ID: BrokerSyncFreshness(is_stale=False),
             OTHER_ACCOUNT_ID: BrokerSyncFreshness(is_stale=True, reason="other_account_stale"),
         },
+        portfolio_snapshot=PortfolioSnapshot(equity=100_000),
     )
 
     result = pipeline.process_bar(_bar())
@@ -770,6 +781,7 @@ def test_reprocessing_same_account_signal_plan_does_not_resubmit_broker_order() 
         components=resolved,
         broker_adapter=broker,
         signal_plan_builder=FixedSignalPlanBuilder(),  # type: ignore[arg-type]
+        portfolio_snapshot=PortfolioSnapshot(equity=100_000),
     )
 
     first = pipeline.process_bar(_bar())
@@ -811,6 +823,7 @@ def test_live_broker_adapter_submits_when_runtime_submit_is_explicitly_enabled()
         components=resolved,
         broker_adapter=broker,
         live_order_submission_enabled=True,
+        portfolio_snapshot=PortfolioSnapshot(equity=100_000),
     )
 
     result = pipeline.process_bar(_bar())
@@ -1118,13 +1131,20 @@ def _portfolio_with_one_open_position():
 
 def _orchestrator_with_resolver(*, resolver, components=None, broker_adapter=None, portfolio_snapshot=None):
     resolved = components or _components()
+    # W2-A-1b: default to a non-None equity snapshot so the new
+    # portfolio_equity_unavailable rule does not pre-empt the resolver tests
+    # (which probe per-Account / per-Plan policy, not equity availability).
     return RuntimeOrchestrator(
         account_id=ACCOUNT_ID,
         deployment=_deployment(resolved),
         components=resolved,
         broker_adapter=broker_adapter,
         governor_policy_resolver=resolver,
-        portfolio_snapshot=portfolio_snapshot,
+        portfolio_snapshot=(
+            portfolio_snapshot
+            if portfolio_snapshot is not None
+            else PortfolioSnapshot(equity=100_000)
+        ),
     )
 
 
@@ -1252,6 +1272,7 @@ def test_resolver_handles_multi_account_fanout_independently() -> None:
         deployment=_deployment(resolved),
         components=resolved,
         governor_policy_resolver=resolver,
+        portfolio_snapshot=PortfolioSnapshot(equity=100_000),
     )
     result = pipeline.process_bar(_bar())
     # Two governor decisions, one per account, both approved (cap is 10).
@@ -1311,6 +1332,7 @@ def test_resolver_missing_plan_rejects_entry_signal() -> None:
         deployment=deployment,
         components=resolved,
         governor_policy_resolver=resolver,
+        portfolio_snapshot=PortfolioSnapshot(equity=100_000),
     )
 
     result = pipeline.process_bar(_bar())
@@ -1323,6 +1345,52 @@ def test_resolver_missing_plan_rejects_entry_signal() -> None:
     assert result.governor_decisions[0].rule_id == "account_missing_risk_plan_for_horizon"
     # No order should be created.
     assert result.orders == ()
+
+
+# ---------------------------------------------------------------------------
+# W2-A adversarial-critic fix #4: post_fill_pct cap at 100 in the Governor
+# proxy. Direct unit test on _governor_candidate_inputs so the cap doesn't
+# require running the downstream protective placer (which has its own
+# constraint that stop_price > 0).
+# ---------------------------------------------------------------------------
+
+
+def test_governor_candidate_inputs_caps_post_fill_pct_at_100() -> None:
+    from backend.app.domain import (
+        SignalPlan,
+        SignalPlanIntent,
+        SignalPlanSide,
+        SignalPlanStop,
+    )
+    from backend.app.decision.signal_plan_builder import post_fill_pct_rule
+
+    pipeline = _orchestrator()  # equity=100k default
+    plan = SignalPlan(
+        signal_plan_id=uuid4(),
+        deployment_id=DEPLOYMENT_ID,
+        strategy_id=uuid4(),
+        strategy_version_id=uuid4(),
+        watchlist_snapshot_id=uuid4(),
+        symbol="SPY",
+        side=SignalPlanSide.LONG,
+        intent=SignalPlanIntent.OPEN,
+        stop=SignalPlanStop(type="none", rule=post_fill_pct_rule(200.0)),
+    )
+    market_value, open_risk = pipeline._governor_candidate_inputs(  # type: ignore[attr-defined]
+        account_id=ACCOUNT_ID,
+        signal_plan=plan,
+        order_intent=InternalOrderIntent.OPEN,
+        candidate_quantity=10.0,
+        reference_price=100.0,
+        risk_result_stop_distance=None,
+        timestamp=None,
+    )
+    # qty * ref = 10 * 100 = 1000.
+    assert market_value == 1000.0
+    # Cap at 100% means proxy_stop_distance = 100 * (100/100) = 100;
+    # candidate_open_risk = 10 * 100 = 1000 (NOT 2000 which would be the
+    # uncapped 200% calc).
+    assert open_risk == 1000.0
 
 
 def test_resolver_missing_plan_does_not_block_protective_exit() -> None:

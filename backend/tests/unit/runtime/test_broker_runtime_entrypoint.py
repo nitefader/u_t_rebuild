@@ -284,3 +284,127 @@ def test_parse_args_explicit_sqlite_path_overrides_env(tmp_path, monkeypatch) ->
     args = account_trading_entrypoint._parse_args(["--sqlite-path", str(explicit)])
     resolved = args.sqlite_path if args.sqlite_path is not None else str(get_runtime_db_path())
     assert resolved == str(explicit)
+
+
+# ---------------------------------------------------------------------------
+# W2-A architecture-critic fix #1 + #2: build_portfolio_snapshot_factory
+# (audit P0 #1, pre-T-7 bundle, 2026-04-30)
+# ---------------------------------------------------------------------------
+
+
+def test_build_portfolio_snapshot_factory_returns_equity_when_snapshot_present(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    from datetime import datetime, timezone
+    from uuid import uuid4
+
+    from backend.app.brokers import BrokerAccountSnapshot
+    from backend.app.governor import PortfolioSnapshot
+    from backend.app.persistence import SQLiteRuntimeStore
+    from backend.app.runtime.account_trading_entrypoint import build_portfolio_snapshot_factory
+
+    store = SQLiteRuntimeStore(tmp_path / "factory.sqlite")
+    account_id = uuid4()
+    snapshot = BrokerAccountSnapshot(
+        account_id=account_id,
+        equity=125_432.10,
+        cash=50_000.0,
+        buying_power=125_432.10,
+        last_equity=125_000.0,
+        last_synced_at=datetime(2026, 4, 30, 14, 0, tzinfo=timezone.utc),
+    )
+    store.save_broker_account_snapshot(snapshot)
+
+    factory = build_portfolio_snapshot_factory(store)
+    result = factory(account_id)
+
+    assert isinstance(result, PortfolioSnapshot)
+    assert result.equity == 125_432.10
+
+
+def test_build_portfolio_snapshot_factory_returns_equity_none_when_no_snapshot(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    from uuid import uuid4
+
+    from backend.app.governor import PortfolioSnapshot
+    from backend.app.persistence import SQLiteRuntimeStore
+    from backend.app.runtime.account_trading_entrypoint import build_portfolio_snapshot_factory
+
+    store = SQLiteRuntimeStore(tmp_path / "factory.sqlite")
+    factory = build_portfolio_snapshot_factory(store)
+
+    result = factory(uuid4())
+
+    assert isinstance(result, PortfolioSnapshot)
+    assert result.equity is None  # fail-closed via portfolio_equity_unavailable
+
+
+def test_build_portfolio_snapshot_factory_maps_zero_equity_to_none(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    """W2-A adversarial-critic fix #1: BrokerAccountSnapshot.equity is ``ge=0``
+    but PortfolioSnapshot.equity is ``gt=0``. A stale-and-flat poll, blocked
+    account, post-liquidation account, or fresh-unfunded account can carry
+    equity=0 and would (a) crash PortfolioSnapshot construction, (b) silently
+    bypass percentage gates via _pct(value, 0)=0. Factory must map to None.
+    """
+    from datetime import datetime, timezone
+    from uuid import uuid4
+
+    from backend.app.brokers import BrokerAccountSnapshot
+    from backend.app.governor import PortfolioSnapshot
+    from backend.app.persistence import SQLiteRuntimeStore
+    from backend.app.runtime.account_trading_entrypoint import build_portfolio_snapshot_factory
+
+    store = SQLiteRuntimeStore(tmp_path / "factory.sqlite")
+    account_id = uuid4()
+    snapshot = BrokerAccountSnapshot(
+        account_id=account_id,
+        equity=0.0,
+        cash=0.0,
+        buying_power=0.0,
+        last_equity=None,
+        last_synced_at=datetime(2026, 4, 30, 14, 0, tzinfo=timezone.utc),
+    )
+    store.save_broker_account_snapshot(snapshot)
+
+    factory = build_portfolio_snapshot_factory(store)
+    result = factory(account_id)
+
+    assert isinstance(result, PortfolioSnapshot)
+    assert result.equity is None
+
+
+def test_factory_is_called_per_invocation_not_cached(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    """W2-A architecture-critic fix #2: snapshot resolution must be per-call,
+    not cached at construction. Equity changes mid-loop must be visible to
+    subsequent Governor evaluations."""
+    from datetime import datetime, timezone
+    from uuid import uuid4
+
+    from backend.app.brokers import BrokerAccountSnapshot
+    from backend.app.persistence import SQLiteRuntimeStore
+    from backend.app.runtime.account_trading_entrypoint import build_portfolio_snapshot_factory
+
+    store = SQLiteRuntimeStore(tmp_path / "factory.sqlite")
+    account_id = uuid4()
+    initial = BrokerAccountSnapshot(
+        account_id=account_id,
+        equity=100_000.0,
+        cash=50_000.0,
+        buying_power=100_000.0,
+        last_synced_at=datetime(2026, 4, 30, 14, 0, tzinfo=timezone.utc),
+    )
+    store.save_broker_account_snapshot(initial)
+
+    factory = build_portfolio_snapshot_factory(store)
+    first = factory(account_id)
+    assert first.equity == 100_000.0
+
+    # Mutate the broker snapshot — the factory's next call must see the new value.
+    updated = BrokerAccountSnapshot(
+        account_id=account_id,
+        equity=50_000.0,
+        cash=25_000.0,
+        buying_power=50_000.0,
+        last_synced_at=datetime(2026, 4, 30, 14, 5, tzinfo=timezone.utc),
+    )
+    store.save_broker_account_snapshot(updated)
+
+    second = factory(account_id)
+    assert second.equity == 50_000.0

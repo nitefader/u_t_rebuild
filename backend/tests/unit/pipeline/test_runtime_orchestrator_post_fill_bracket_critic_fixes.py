@@ -13,6 +13,7 @@ from uuid import UUID, uuid4
 import pytest
 
 from backend.app.brokers import BrokerOrderResult, BrokerOrderStatus, FakeBrokerAdapter
+from backend.app.governor import PortfolioSnapshot
 from backend.app.domain import (
     CandidateSide,
     ConditionNode,
@@ -161,6 +162,7 @@ def test_critic_fix_1_protection_placed_does_not_fire_when_all_children_rejected
         deployment=_deployment(components),
         components=components,
         broker_adapter=broker,
+        portfolio_snapshot=PortfolioSnapshot(equity=100_000),
     )
 
     result = pipeline.process_bar(_bar())
@@ -191,6 +193,7 @@ def test_critic_fix_2_stop_leg_rejection_aborts_target_submit() -> None:
         deployment=_deployment(components),
         components=components,
         broker_adapter=broker,
+        portfolio_snapshot=PortfolioSnapshot(equity=100_000),
     )
 
     result = pipeline.process_bar(_bar())
@@ -281,6 +284,7 @@ def test_critic_fix_6_post_fill_skipped_when_entry_has_order_class_bracket() -> 
         deployment=_deployment(components),
         components=components,
         broker_adapter=broker,
+        portfolio_snapshot=PortfolioSnapshot(equity=100_000),
     )
 
     result = pipeline.process_bar(_bar())

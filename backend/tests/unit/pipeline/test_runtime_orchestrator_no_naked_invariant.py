@@ -28,6 +28,7 @@ from uuid import UUID, uuid4
 import pytest
 
 from backend.app.brokers import BrokerOrderResult, BrokerOrderStatus, FakeBrokerAdapter
+from backend.app.governor import PortfolioSnapshot
 from backend.app.domain import (
     CandidateSide,
     ConditionNode,
@@ -190,6 +191,7 @@ def test_no_naked_invariant_emits_alarm_when_protective_child_rejected() -> None
         deployment=_deployment(components),
         components=components,
         broker_adapter=broker,
+        portfolio_snapshot=PortfolioSnapshot(equity=100_000),
     )
 
     result = pipeline.process_bar(_bar())
@@ -235,6 +237,7 @@ def test_no_naked_invariant_alarm_on_missing_fill_price() -> None:
         deployment=_deployment(components),
         components=components,
         broker_adapter=broker,
+        portfolio_snapshot=PortfolioSnapshot(equity=100_000),
     )
 
     result = pipeline.process_bar(_bar())
@@ -267,6 +270,7 @@ def test_no_naked_invariant_logs_naked_when_signal_plan_intent_produces_no_legs(
         deployment=_deployment(components),
         components=components,
         broker_adapter=broker,
+        portfolio_snapshot=PortfolioSnapshot(equity=100_000),
     )
 
     # Force ProtectivePlacer to return an empty plan even though the

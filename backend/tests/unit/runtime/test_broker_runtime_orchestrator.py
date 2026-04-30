@@ -27,7 +27,7 @@ from backend.app.domain import (
 from backend.app.domain.risk_profile import PositionSizingMethod
 from backend.app.domain.strategy import SignalRule
 from backend.app.features import NormalizedBar, ResolvedDeploymentComponents
-from backend.app.governor import GovernorPolicy, PortfolioGovernor
+from backend.app.governor import GovernorPolicy, PortfolioGovernor, PortfolioSnapshot
 from backend.app.orders import OrderManager, OrderManagerError
 from backend.app.persistence import SQLiteOrderLedger, SQLiteRuntimeStore
 from backend.app.runtime import BrokerRuntimeDeployment, BrokerRuntimeOrchestrator, DeploymentContext, RuntimeState, RuntimeStatus
@@ -193,6 +193,11 @@ def _runtime(
     manager = order_manager or OrderManager(ledger=ledger, control_plane=control_plane)
     adapter = broker or FakeBrokerAdapter([BrokerOrderStatus.ACCEPTED])
     sync = broker_sync or BrokerSync(ledger=ledger, adapter=adapter, runtime_store=store, provider="alpaca")
+    # W2-A-1b (audit P0 #2): provide a non-None equity factory so the new
+    # portfolio_equity_unavailable rule does not pre-empt every test that
+    # creates the orchestrator without explicit equity. Production wires a
+    # real factory backed by BrokerSync account snapshots; this fixture
+    # matches that contract by always returning a fixed equity value.
     runtime = BrokerRuntimeOrchestrator(
         deployments=(
             BrokerRuntimeDeployment(
@@ -209,6 +214,7 @@ def _runtime(
         control_plane=control_plane or ControlPlane(state_store=store),
         governor=governor,
         bar_source=bar_source,
+        portfolio_snapshot_factory=lambda _aid: PortfolioSnapshot(equity=100_000),
     )
     return runtime, store, adapter
 
@@ -366,6 +372,7 @@ def test_broker_sync_is_called_after_broker_submit_result(tmp_path) -> None:
         broker_sync=sync,
         order_manager=OrderManager(ledger=ledger),
         control_plane=ControlPlane(state_store=store),
+        portfolio_snapshot_factory=lambda _aid: PortfolioSnapshot(equity=100_000),
     )
 
     runtime.process_completed_bar(DEPLOYMENT_ID, _bar())
@@ -386,6 +393,7 @@ def test_broker_sync_failure_marks_runtime_degraded_and_blocks_further_opens(tmp
         broker_sync=FailingBrokerSync(ledger=ledger, adapter=broker, runtime_store=store),
         order_manager=OrderManager(ledger=ledger),
         control_plane=ControlPlane(state_store=store),
+        portfolio_snapshot_factory=lambda _aid: PortfolioSnapshot(equity=100_000),
     )
 
     assert runtime.process_completed_bar(DEPLOYMENT_ID, _bar()) is None
@@ -466,6 +474,7 @@ def test_one_deployment_can_fan_out_signal_plan_to_multiple_accounts(tmp_path) -
         broker_sync=BrokerSync(ledger=order_manager.ledger, adapter=broker, runtime_store=store),
         order_manager=order_manager,
         control_plane=ControlPlane(state_store=store),
+        portfolio_snapshot_factory=lambda _aid: PortfolioSnapshot(equity=100_000),
     )
 
     result = runtime.process_completed_bar(DEPLOYMENT_ID, _bar())

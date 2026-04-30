@@ -26,11 +26,14 @@ import threading
 from collections.abc import Iterable
 from pathlib import Path
 
+from uuid import UUID
+
 from backend.app.brokers import (
     AlpacaBrokerAdapter,
     BrokerSync,
 )
 from backend.app.control_plane import ControlPlane
+from backend.app.governor import PortfolioSnapshot, PositionSummary
 from backend.app.market_data import MarketDataStreamHub
 from backend.app.orders import OrderManager
 from backend.app.config.runtime_paths import get_runtime_db_path
@@ -45,6 +48,45 @@ logger = logging.getLogger(__name__)
 
 class BrokerRuntimeEntrypointError(RuntimeError):
     """Raised when the runtime cannot start safely (missing env, bad store, etc.)."""
+
+
+def build_portfolio_snapshot_factory(runtime_store: SQLiteRuntimeStore):
+    """Build the production-grade PortfolioSnapshot factory.
+
+    W2-A-1 (audit P0 #1 — pre-T-7 bundle, operator decision 2026-04-30):
+    Closes the audit's silent-no-op where the Governor's percentage gates
+    silently saw zero incremental candidate exposure. Production used to
+    default to ``PortfolioSnapshot()`` (equity=None) which collapsed every
+    percentage gate via ``_pct(value, None) -> 0``. This factory reads the
+    BrokerSync-persisted account snapshot and returns a usable equity.
+
+    Three exit shapes:
+    1. No BrokerSync snapshot yet (``KeyError``) → ``PortfolioSnapshot()``
+       so the new ``portfolio_equity_unavailable`` fail-closed rule rejects
+       opens until BrokerSync seeds.
+    2. Snapshot exists but equity<=0 (stale poll, blocked account, fresh
+       unfunded account, post-liquidation) → ``PortfolioSnapshot()`` for
+       the same reason. Operationally indistinguishable from "we don't
+       know" + ``PortfolioSnapshot.equity`` is ``gt=0`` so passing 0 would
+       crash construction.
+    3. Snapshot exists with equity>0 → ``PortfolioSnapshot(equity=...)``.
+       Positions are intentionally empty until ``BrokerPositionSnapshot``
+       carries ``program_id`` (deferred to a follow-up slice); the
+       Governor still enforces equity-bounded percentage gates against
+       incremental candidate exposure (the core W2-A-1a fix).
+    """
+
+    def _factory(account_id: UUID) -> PortfolioSnapshot:
+        try:
+            account_snapshot = runtime_store.load_broker_account_snapshot(account_id)
+        except KeyError:
+            return PortfolioSnapshot()
+        equity = float(account_snapshot.equity)
+        if equity <= 0:
+            return PortfolioSnapshot()
+        return PortfolioSnapshot(equity=equity)
+
+    return _factory
 
 
 def run_account_trading(
@@ -108,6 +150,7 @@ def run_account_trading(
         broker_sync=broker_sync,
         order_manager=order_manager,
         control_plane=control_plane,
+        portfolio_snapshot_factory=build_portfolio_snapshot_factory(runtime_store),
     )
 
     active_entries = account_trading.load_active_account_deployments()

@@ -1,13 +1,53 @@
 # Operations Production Readiness Status
 
-Last updated: 2026-04-30 06:30:00 -04:00
+Last updated: 2026-04-30 10:30:00 -04:00
 
 ## Active Slice — Bracket Execution Program (operator override end-to-end)
 
 ```text
-Work session status: in_progress (T-1..T-6 SHIPPED; T-7, Wiggum 2/3 pending)
+Work session status: in_progress (T-1..T-6 + W2-A SHIPPED; T-7 + Wiggum 2/3 pending)
 Started at: 2026-04-29 21:52:19 -04:00
-Last heartbeat: 2026-04-30 06:30:00 -04:00
+Last heartbeat: 2026-04-30 10:30:00 -04:00
+W2-A result: pre-T-7 audit P0 silent-no-op bundle SHIPPED. Closes 3
+  confirmed P0 findings from docs/audits/WHOLE_SYSTEM_AUDIT.md as one
+  slice before T-7. Operator decisions 2026-04-30: (a) Governor proxy
+  candidate_open_risk from gating-time ref price for post_fill_pct
+  stops; never reject post_fill_pct entries before fill; (b) equity=None
+  fail-closed reject rule_id=portfolio_equity_unavailable. W2-A-1 wires
+  GovernorRequest candidate inputs at the orchestrator + adds the
+  fail-closed rule + builds production portfolio_snapshot_factory in
+  account_trading_entrypoint (closes audit's "verify each composition
+  site" — production was running on equity=None). W2-A-2 adds
+  account_signal_plan_evaluations table + repo + orchestrator persists
+  every evaluation outcome at all 5 emit sites. W2-A-3 rewires
+  OperationsCenterService.list_account_signal_plan_evaluations to read
+  persisted store first with order-projection fallback for legacy data.
+  Two parallel sonnet critics (architecture/adversarial; UX skipped —
+  no operator-facing UI surface) at closeout; 4 fix-in-slice items
+  shipped: equity≤0 maps to PortfolioSnapshot() (both critics agreed),
+  per-call factory threading (closes TOCTOU window), cross-account
+  persist failure becomes EVALUATION_PERSIST_FAILED structured event
+  (loop continues), post_fill_pct cap at 100% in proxy. 8 deferred
+  findings documented in agent log Pass 10 with explicit rationale.
+Verification: pytest backend/tests/unit -q -> 1608 passed (+38 over T-6
+  baseline 1570; +232 over original Bracket Program baseline 1376).
+  npx tsc --noEmit clean. npx vitest run -> 399 passed across 54 test
+  files (no change — frontend already shape-correct for non-order
+  evaluation rows). npm run lint:names clean. pytest backend/tests/
+  unit/lint -q -> 229 passed (banned-name guard).
+T-1..T-6 are committed; W2-A commit pending immediately after this
+  status refresh.
+MAP: Operations_Turtle_Shell_Artifacts/STRATEGY_TO_BROKER_BRACKET_PROGRAM.md.
+Audit: docs/audits/WHOLE_SYSTEM_AUDIT.md.
+Log: docs/agent_logs/2026-04-29_21-52-19_bracket_execution.md (Pass 9 + Pass 10).
+Next: T-7 daily-state aggregator + cooldown (DailyAccountState snapshot
+  on BrokerSync fills, daily_loss_pct + drawdown_pct + cooldown checks
+  in PortfolioGovernor.evaluate, Operations Daily Risk State card).
+```
+
+## Previous Active Slice (archived 2026-04-30 06:30:00) — T-6 SHIPPED
+
+```text
 T-6 result: TOCTOU hardening shipped per locked MAP §7 D7 (single-conn +
   WAL mode + explicit read transaction; no optimistic locking, no
   risk_plan_map_concurrent_modification rejection rule per operator

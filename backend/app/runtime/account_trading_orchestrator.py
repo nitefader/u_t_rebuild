@@ -250,11 +250,10 @@ class BrokerRuntimeOrchestrator:
                 account_id: self._governor_freshness(account_id)
                 for account_id in (entry.account_ids or (entry.account_id,))
             },
-            portfolio_snapshot=self._portfolio_snapshot_factory(entry.account_id),
-            portfolio_snapshot_by_account={
-                account_id: self._portfolio_snapshot_factory(account_id)
-                for account_id in (entry.account_ids or (entry.account_id,))
-            },
+            # W2-A architecture-critic fix #2: thread the factory itself
+            # (not a snapshot pre-resolved at construction time) so each
+            # Governor evaluation gets a fresh broker-account snapshot.
+            portfolio_snapshot_factory=self._portfolio_snapshot_factory,
             feature_cache=cache,
             control_plane=self._control_plane,
             runtime_store=self._runtime_store,

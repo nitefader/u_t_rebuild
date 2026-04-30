@@ -275,7 +275,43 @@ class OperationsCenterService:
         signal_plan_id: UUID | None = None,
         limit: int = 100,
     ) -> tuple[AccountSignalPlanEvaluation, ...]:
+        """List evaluations, persisted-store-first with order-projection fallback.
+
+        W2-A-3 (audit P0 #2 — pre-T-7 bundle, 2026-04-30):
+
+        - Primary path reads from the new ``account_signal_plan_evaluations``
+          table. Pre-W2-A this table did not exist; reads were a projection
+          of the order ledger only and missed every PARTICIPATE-without-order,
+          REJECT, IGNORE, and DEFER outcome.
+        - Backwards-compat fallback: when the persisted store has no rows
+          for a given filter (legacy data from before W2-A-2), fall back
+          to the order-projection path so historical evaluations still
+          render. The fallback is per-filter, not global — a filter that
+          finds *some* persisted rows does NOT also pull in legacy rows.
+          That keeps the new path's contract clean (Operations sees what
+          the orchestrator actually decided, not a hybrid).
+        - Ordering uses ``persisted_at DESC`` from the store path; the
+          fallback retains the legacy ``evaluated_at`` ordering.
+        - The result is bounded by the same ``limit`` as before; both
+          paths cap independently.
+        """
+
         bounded_limit = max(1, min(limit, 500))
+        # Primary path: persisted store.
+        if self._runtime_store is not None and hasattr(
+            self._runtime_store, "list_account_signal_plan_evaluations"
+        ):
+            persisted = self._runtime_store.list_account_signal_plan_evaluations(
+                account_id=account_id,
+                deployment_id=deployment_id,
+                signal_plan_id=signal_plan_id,
+                limit=bounded_limit,
+            )
+            if persisted:
+                return persisted
+        # Backwards-compat fallback for legacy data: the order-projection
+        # path. Only invoked when the persisted store has no rows for this
+        # filter — which is the pre-W2-A-2 state.
         evaluations_by_id: dict[UUID, AccountSignalPlanEvaluation] = {}
         for order in self._all_orders():
             if order.signal_plan_id is None:

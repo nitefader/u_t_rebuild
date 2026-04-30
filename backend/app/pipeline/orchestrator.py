@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from datetime import datetime
 from uuid import UUID, uuid4
 
@@ -27,6 +27,7 @@ from backend.app.decision import (
     SignalEvaluationError,
     SignalPlanBuilder,
 )
+from backend.app.decision.signal_plan_builder import parse_post_fill_pct
 from backend.app.domain import (
     AccountEvaluationStatus,
     AccountParticipationDecision,
@@ -157,6 +158,7 @@ class RuntimeOrchestrator:
         broker_freshness_by_account: Mapping[UUID, BrokerSyncFreshness] | None = None,
         portfolio_snapshot: PortfolioSnapshot | None = None,
         portfolio_snapshot_by_account: Mapping[UUID, PortfolioSnapshot] | None = None,
+        portfolio_snapshot_factory: "Callable[[UUID], PortfolioSnapshot] | None" = None,
         feature_cache: FeatureCache | None = None,
         control_plane: ControlPlane | None = None,
         runtime_store: object | None = None,
@@ -222,6 +224,14 @@ class RuntimeOrchestrator:
         self._broker_freshness_by_account = dict(broker_freshness_by_account or {})
         self._portfolio_snapshot = portfolio_snapshot or PortfolioSnapshot()
         self._portfolio_snapshot_by_account = dict(portfolio_snapshot_by_account or {})
+        # W2-A architecture-critic fix #2: a per-call factory closes the
+        # TOCTOU window where a cached snapshot ages relative to the live
+        # broker-account equity. When supplied, the factory wins over
+        # ``portfolio_snapshot_by_account`` (the dict still seeds the
+        # initial map for back-compat with tests that supply only static
+        # values). Production wires this from
+        # ``backend/app/runtime/account_trading_entrypoint.build_portfolio_snapshot_factory``.
+        self._portfolio_snapshot_factory: Callable[[UUID], PortfolioSnapshot] | None = portfolio_snapshot_factory
         self._feature_cache = feature_cache or FeatureCache()
         self._control_plane = control_plane or ControlPlane()
         self._runtime_store = runtime_store
@@ -361,10 +371,26 @@ class RuntimeOrchestrator:
                     signal_plan=signal_plan,
                     sizing=lifecycle_sizing,
                 )
+                # W2-A-1a: pass concrete candidate inputs so the Governor can
+                # evaluate exposure / open-risk percentage gates against real
+                # numbers. RiskResolver has already produced resolved_quantity
+                # and stop_distance (when stop is concrete); the entry's
+                # reference price is the signal-plan limit when present, else
+                # the latest bar's close (same fallback the native bracket
+                # placer uses). When stop is post_fill_pct, the helper proxies.
+                entry_reference_price = (
+                    signal_plan.entry.limit_price
+                    if signal_plan.entry is not None and signal_plan.entry.limit_price is not None
+                    else normalized_bar.close
+                )
                 decision = self._evaluate_governor_for_signal_plan(
                     account_id=account_id,
                     signal_plan=signal_plan,
                     order_intent=InternalOrderIntent.OPEN,
+                    candidate_quantity=risk_result.resolved_quantity,
+                    reference_price=entry_reference_price,
+                    risk_result_stop_distance=risk_result.stop_distance,
+                    timestamp=normalized_bar.timestamp,
                 )
                 governor_decisions.append(decision)
                 self._emit_governor_decision(timestamp=signal_plan.created_at, symbol=signal_plan.symbol, decision=decision)
@@ -382,7 +408,7 @@ class RuntimeOrchestrator:
                     evaluated_at=normalized_bar.timestamp,
                     rejection_reasons=() if risk_result.allowed and decision.approved else tuple(risk_result.violations) + (self._account_rejection_reason(account_id, decision),),
                 )
-                account_evaluations.append(account_evaluation)
+                self._record_account_evaluation(account_evaluations, account_evaluation)
                 if not risk_result.allowed:
                     continue
                 if not decision.approved:
@@ -510,44 +536,48 @@ class RuntimeOrchestrator:
             for account_id in self._account_ids:
                 account_active_positions = tuple(active_positions_by_account.get(account_id, ()))
                 if len(account_active_positions) > 1:
-                    account_evaluations.append(
+                    self._record_account_evaluation(
+                        account_evaluations,
                         self._blocked_position_management_evaluation(
                             account_id=account_id,
                             signal_plan=signal_plan,
                             timestamp=normalized_bar.timestamp,
                             reason="multiple_active_position_lineages_for_account",
-                        )
+                        ),
                     )
                     continue
                 position = account_active_positions[0] if account_active_positions else inactive_positions_by_account.get(account_id)
                 if position is None:
-                    account_evaluations.append(
+                    self._record_account_evaluation(
+                        account_evaluations,
                         self._ignored_position_management_evaluation(
                             account_id=account_id,
                             signal_plan=signal_plan,
                             timestamp=normalized_bar.timestamp,
                             reason="account_has_no_matching_position",
-                        )
+                        ),
                     )
                     continue
                 if not self._position_is_active(position):
-                    account_evaluations.append(
+                    self._record_account_evaluation(
+                        account_evaluations,
                         self._ignored_position_management_evaluation(
                             account_id=account_id,
                             signal_plan=signal_plan,
                             timestamp=normalized_bar.timestamp,
                             reason="position_already_closed",
-                        )
+                        ),
                     )
                     continue
                 if position.position_lineage_id is None:
-                    account_evaluations.append(
+                    self._record_account_evaluation(
+                        account_evaluations,
                         self._blocked_position_management_evaluation(
                             account_id=account_id,
                             signal_plan=signal_plan,
                             timestamp=normalized_bar.timestamp,
                             reason="position_missing_lineage",
-                        )
+                        ),
                     )
                     continue
 
@@ -585,7 +615,7 @@ class RuntimeOrchestrator:
                     evaluated_at=normalized_bar.timestamp,
                     rejection_reasons=() if accepted else tuple(risk_result.violations) + (self._account_rejection_reason(account_id, decision),),
                 )
-                account_evaluations.append(account_evaluation)
+                self._record_account_evaluation(account_evaluations, account_evaluation)
                 if not accepted:
                     continue
 
@@ -719,6 +749,59 @@ class RuntimeOrchestrator:
             rejection_reasons=(reason,),
         )
 
+    def _record_account_evaluation(
+        self,
+        bucket: list[AccountSignalPlanEvaluation],
+        evaluation: AccountSignalPlanEvaluation,
+    ) -> AccountSignalPlanEvaluation:
+        """Append an evaluation to the in-memory bucket AND persist it.
+
+        W2-A-2 (audit P0 #2 — pre-T-7 bundle): every evaluation outcome
+        — PARTICIPATE / REJECT / IGNORE / DEFER — must reach the persisted
+        store so Operations can render the full decision picture, not just
+        the order-creating decisions. Non-order outcomes were the headline
+        gap pre-W2-A.
+
+        The store-side write is best-effort under a guarded ``hasattr`` so
+        in-process / in-memory test runtimes (no SQLite store) keep working.
+
+        W2-A adversarial-critic fix #3: persistence failures emit an
+        ``EVALUATION_PERSIST_FAILED`` pipeline event and continue. They do
+        NOT re-raise. Pre-fix, an IntegrityError on account #3 of a 10-
+        account fanout would propagate out of ``process_bar`` while
+        accounts #1 and #2 already had their evaluations in the in-memory
+        bucket AND in the persisted store — the loop never reached #4..#10
+        to even build their evaluations, leaving Operations with a partial
+        picture that desynced from the (also partial) order ledger. By
+        emitting an event and continuing, every account in the fanout gets
+        a chance to evaluate; Operations sees the durable persist gap as
+        an explicit event, not a silent missing row. The in-memory
+        ``PipelineResult`` is still complete (bucket append happens first).
+        """
+
+        bucket.append(evaluation)
+        if self._runtime_store is None or not hasattr(self._runtime_store, "save_account_signal_plan_evaluation"):
+            return evaluation
+        try:
+            self._runtime_store.save_account_signal_plan_evaluation(evaluation)
+        except Exception as exc:  # noqa: BLE001 — see docstring; structured event over re-raise
+            self._event_log.append(
+                timestamp=evaluation.evaluated_at or evaluation.created_at,
+                event_type=PipelineEventType.EVALUATION_PERSIST_FAILED,
+                symbol=None,
+                message="account evaluation persisted failed; in-memory result preserved",
+                details={
+                    "evaluation_id": str(evaluation.evaluation_id),
+                    "account_id": str(evaluation.account_id),
+                    "signal_plan_id": str(evaluation.signal_plan_id),
+                    "deployment_id": str(evaluation.deployment_id),
+                    "participation_decision": evaluation.participation_decision.value,
+                    "error_type": type(exc).__name__,
+                    "error": str(exc),
+                },
+            )
+        return evaluation
+
     def _load_runtime_state(self) -> RuntimeState | None:
         if self._runtime_store is None or not hasattr(self._runtime_store, "load_deployment_runtime_state"):
             return None
@@ -772,6 +855,7 @@ class RuntimeOrchestrator:
         )
         self._emit_governor_decision(timestamp=signal_plan.created_at, symbol=signal_plan.symbol, decision=decision)
         governor_trace = self._governor_trace_from_decision(account_id=self._account_id, signal_plan=signal_plan, decision=decision)
+        protective_evaluations: list[AccountSignalPlanEvaluation] = []
         account_evaluation = AccountSignalPlanEvaluation(
             evaluation_id=uuid4(),
             account_id=self._account_id,
@@ -785,6 +869,9 @@ class RuntimeOrchestrator:
             evaluated_at=signal_plan.created_at,
             rejection_reasons=() if risk_result.allowed and decision.approved else tuple(risk_result.violations) + (decision.reason,),
         )
+        # W2-A-2: persist the protective-path evaluation too. This is the
+        # single-account direct entry-point used by manual ops + tests.
+        self._record_account_evaluation(protective_evaluations, account_evaluation)
         if not risk_result.allowed or not decision.approved:
             return self._result(
                 signal_plans=[signal_plan],
@@ -1249,6 +1336,102 @@ class RuntimeOrchestrator:
             return SignalPlanIntent(order_intent.value)
         return SignalPlanIntent.CLOSE
 
+    def _governor_candidate_inputs(
+        self,
+        *,
+        account_id: UUID,
+        signal_plan: SignalPlan,
+        order_intent: InternalOrderIntent,
+        candidate_quantity: float | None,
+        reference_price: float | None,
+        risk_result_stop_distance: float | None,
+        timestamp: datetime | None,
+    ) -> tuple[float, float]:
+        """Resolve candidate_market_value + candidate_open_risk for the gate.
+
+        W2-A-1a (audit P0 #1, operator decision 2026-04-30):
+
+        - Non-OPEN intents (protective exits, position management) contribute
+          zero incremental candidate exposure; ``_projected_state`` zeros these
+          fields anyway. Returning (0, 0) keeps the request shape honest.
+        - OPEN intents must carry non-zero candidate inputs whenever a
+          quantity and a reference price are resolvable. Otherwise the
+          percentage gates silently evaluate against zero incremental
+          exposure, which is the audit's confirmed P0 silent-no-op.
+        - When ``risk_result_stop_distance`` is concrete (RiskResolver
+          computed it from a real ``candidate.stop_candidate``), use it
+          directly. When it is None and the SignalPlan stop is encoded as
+          ``post_fill_pct:<pct>`` (the bracket program's default mode), we
+          proxy: ``proxy_stop_distance = ref_price * stop_pct/100``. The
+          proxy is doctrinally honest — the gate is gating an *open*, not a
+          fill, and slippage is intrinsic. A structured audit event records
+          the proxy so Operations can see which evaluations ran on a proxy.
+        - When neither a concrete stop_distance nor a post_fill_pct is
+          available, ``candidate_open_risk`` falls back to zero with a
+          structured warning event; ``candidate_market_value`` still carries
+          the qty*price exposure so gross/net/concentration limits enforce.
+        """
+
+        if order_intent != InternalOrderIntent.OPEN:
+            return 0.0, 0.0
+        if candidate_quantity is None or candidate_quantity <= 0:
+            return 0.0, 0.0
+        if reference_price is None or reference_price <= 0:
+            return 0.0, 0.0
+        candidate_market_value = float(candidate_quantity) * float(reference_price)
+        if risk_result_stop_distance is not None and risk_result_stop_distance > 0:
+            candidate_open_risk = float(candidate_quantity) * float(risk_result_stop_distance)
+            return candidate_market_value, candidate_open_risk
+        stop_pct = parse_post_fill_pct(signal_plan.stop.rule) if signal_plan.stop is not None else None
+        if stop_pct is not None and stop_pct > 0:
+            # W2-A adversarial-critic fix #4: a malformed plan with
+            # post_fill_pct > 100 would yield proxy_stop_distance > ref_price
+            # (i.e. > 100% notional risk), which inflates candidate_open_risk
+            # absurdly and may cause the open_risk_pct cap to spuriously
+            # reject. Real loss can never exceed entry notional (loss = entry
+            # at stop=0), so cap at 100. parse_post_fill_pct already filters
+            # pct<=0; this caps the upper bound.
+            stop_pct = min(stop_pct, 100.0)
+            proxy_stop_distance = float(reference_price) * (stop_pct / 100.0)
+            candidate_open_risk = float(candidate_quantity) * proxy_stop_distance
+            event_timestamp = timestamp or signal_plan.created_at
+            self._event_log.append(
+                timestamp=event_timestamp,
+                event_type=PipelineEventType.GOVERNOR_CANDIDATE_OPEN_RISK_PROXIED,
+                symbol=signal_plan.symbol,
+                message="governor candidate_open_risk proxied from post_fill_pct",
+                details={
+                    "account_id": str(account_id),
+                    "signal_plan_id": str(signal_plan.signal_plan_id),
+                    "stop_pct": stop_pct,
+                    "reference_price": float(reference_price),
+                    "candidate_quantity": float(candidate_quantity),
+                    "proxy_stop_distance": proxy_stop_distance,
+                    "candidate_open_risk": candidate_open_risk,
+                },
+            )
+            return candidate_market_value, candidate_open_risk
+        # No concrete stop, no post_fill_pct intent — open_risk cannot be
+        # computed. Market value still enforces gross/net/concentration limits.
+        # Emit a structured warning so Operations can see the open_risk gate
+        # ran on zero contribution.
+        event_timestamp = timestamp or signal_plan.created_at
+        self._event_log.append(
+            timestamp=event_timestamp,
+            event_type=PipelineEventType.GOVERNOR_CANDIDATE_OPEN_RISK_PROXIED,
+            symbol=signal_plan.symbol,
+            message="governor candidate_open_risk unresolved; market_value populated only",
+            details={
+                "account_id": str(account_id),
+                "signal_plan_id": str(signal_plan.signal_plan_id),
+                "reason": "no_concrete_stop_and_no_post_fill_pct",
+                "candidate_market_value": candidate_market_value,
+                "reference_price": float(reference_price),
+                "candidate_quantity": float(candidate_quantity),
+            },
+        )
+        return candidate_market_value, 0.0
+
     def _evaluate_governor_for_signal_plan(
         self,
         *,
@@ -1256,7 +1439,20 @@ class RuntimeOrchestrator:
         signal_plan: SignalPlan,
         position_lineage_id: UUID | None = None,
         order_intent: InternalOrderIntent,
+        candidate_quantity: float | None = None,
+        reference_price: float | None = None,
+        risk_result_stop_distance: float | None = None,
+        timestamp: datetime | None = None,
     ) -> GovernorDecision:
+        candidate_market_value, candidate_open_risk = self._governor_candidate_inputs(
+            account_id=account_id,
+            signal_plan=signal_plan,
+            order_intent=order_intent,
+            candidate_quantity=candidate_quantity,
+            reference_price=reference_price,
+            risk_result_stop_distance=risk_result_stop_distance,
+            timestamp=timestamp,
+        )
         request = GovernorRequest(
             account_id=account_id,
             deployment_id=signal_plan.deployment_id,
@@ -1267,6 +1463,8 @@ class RuntimeOrchestrator:
             broker_sync=self._broker_freshness_for(account_id),
             portfolio=self._portfolio_snapshot_for(account_id),
             order_intent=order_intent,
+            candidate_market_value=candidate_market_value,
+            candidate_open_risk=candidate_open_risk,
         )
         # When a resolver is wired, build a per-(account, horizon) policy from
         # AccountRiskConfig + the Account's RiskPlan-for-this-horizon, then
@@ -1296,6 +1494,15 @@ class RuntimeOrchestrator:
         return self._broker_freshness_by_account.get(account_id, self._broker_freshness)
 
     def _portfolio_snapshot_for(self, account_id: UUID) -> PortfolioSnapshot:
+        # W2-A architecture-critic fix #2: when a factory is wired the
+        # snapshot is recomputed PER GOVERNOR EVALUATION, not cached at
+        # orchestrator construction. This closes the TOCTOU window where
+        # equity changes mid-loop would otherwise be invisible to the
+        # gate. Static ``portfolio_snapshot_by_account`` / ``portfolio_snapshot``
+        # remain as a back-compat fallback for tests that supply only a
+        # static value.
+        if self._portfolio_snapshot_factory is not None:
+            return self._portfolio_snapshot_factory(account_id)
         return self._portfolio_snapshot_by_account.get(account_id, self._portfolio_snapshot)
 
     def _account_rejection_reason(self, account_id: UUID, decision: GovernorDecision) -> str:

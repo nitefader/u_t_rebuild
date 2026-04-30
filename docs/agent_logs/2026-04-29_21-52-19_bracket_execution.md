@@ -393,3 +393,123 @@ Also updated `STRATEGY_TO_BROKER_BRACKET_PROGRAM.md` §7 D7 with a clarifying pa
 - next action: append LEDGER entry; release T-6 leases; update OPERATION_STATUS to T-6 SHIPPED; file INBOX_CODEX heads-up; commit T-6 as a single commit; proceed to T-7 (Daily-state aggregator + cooldown).
 
 ---
+
+## Pass 9 — W2-A pre-T-7 Audit P0 Bundle (baseline)
+
+**Timestamp:** 2026-04-30 07:00 → 09:30 -04:00
+**Pass type:** baseline implementation of the W2-A pre-T-7 audit P0 bundle.
+**Operator directive 2026-04-30:** "Proceed with W2-A before T-7. Decision (a): compute proxy candidate_open_risk from gating-time reference price; do NOT reject post_fill_pct entries before fill. Decision (b): fail-closed reject rule_id=portfolio_equity_unavailable when equity is None."
+**Driving artifact:** `docs/audits/WHOLE_SYSTEM_AUDIT.md` (2026-04-30) — three confirmed P0 silent-no-op findings: §6 + Silent §1 (GovernorRequest candidate exposure fields default zero), §1 (AccountSignalPlanEvaluation projected from orders only — REJECT/IGNORE invisible), and corollary stable ordering for the persisted store.
+
+### Files changed (W2-A baseline)
+
+- `backend/app/governor/service.py` — new fail-closed rule `portfolio_equity_unavailable` between stale-broker-sync and `requires_risk_plan`; only fires for OPEN intents per W2-A-1b doctrine.
+- `backend/app/pipeline/orchestrator.py` — new helper `_governor_candidate_inputs(...)` resolves `candidate_market_value` + `candidate_open_risk` from `risk_result.resolved_quantity`, an entry reference price (limit-or-bar-close, same fallback as the native bracket placer), and either `risk_result.stop_distance` (concrete) or a `parse_post_fill_pct(...)` proxy. Emits `GOVERNOR_CANDIDATE_OPEN_RISK_PROXIED` pipeline event with full math context. New helper `_record_account_evaluation(bucket, evaluation)` wraps every in-memory append with a persisted-store write — 5 emit sites covered (entry-path accept/reject, position-mgmt accept/reject, blocked-twice and ignored-twice helpers, single-account `process_protective_signal_plan`).
+- `backend/app/pipeline/models.py` — new `PipelineEventType.GOVERNOR_CANDIDATE_OPEN_RISK_PROXIED` (W2-A-1a audit event) and `PipelineEventType.EVALUATION_PERSIST_FAILED` (W2-A adversarial-critic fix #3).
+- `backend/app/persistence/models.py` — new `account_signal_plan_evaluations` table at end of `RUNTIME_SCHEMA` (PK `evaluation_id`, indices on `account_id+persisted_at DESC`, `signal_plan_id`, `deployment_id`, and `persisted_at DESC`).
+- `backend/app/persistence/runtime_store.py` — new repo methods `save_account_signal_plan_evaluation`, `load_account_signal_plan_evaluation`, `list_account_signal_plan_evaluations(account_id?, deployment_id?, signal_plan_id?, limit)` on `SQLiteRuntimeStore`. `persisted_at` is write-side metadata (assigned at INSERT time, not on the Pydantic model). `limit` clamps to `[1, 500]`.
+- `backend/app/operations/service.py` — `list_account_signal_plan_evaluations` rewritten to read persisted store first; falls back to legacy order-projection only when the store has no rows for the filter. No hybrid stitching when both paths have rows.
+- `backend/app/runtime/account_trading_entrypoint.py` — extracted `build_portfolio_snapshot_factory(runtime_store)` helper; `run_account_trading` now wires it. Closes the audit's "verify each composition site" — production was previously running on `lambda: PortfolioSnapshot()` with equity=None.
+- `backend/app/runtime/account_trading_orchestrator.py` — `BrokerRuntimeOrchestrator._build_pipeline` now threads the factory itself (kwarg `portfolio_snapshot_factory=`) instead of pre-resolving snapshots at construction.
+- `tools/run_runtime_smoke.py` + `tools/run_runtime_dry_run.py` — both `_portfolio_snapshot` helpers now return `PortfolioSnapshot(equity=100_000, ...)` instead of equity=None so smoke + dry-run flows don't trip the new fail-closed rule.
+- 8 test fixture updates across `backend/tests/unit/{governor,pipeline,runtime,tools}` to declare equity in the new fail-closed regime.
+
+### New test files (W2-A)
+
+- `backend/tests/unit/persistence/test_w2a_account_signal_plan_evaluations.py` — 10 tests (round-trip restart, idempotent upsert, account/deployment/signal_plan filters, persisted_at ordering, REJECT/IGNORE/DEFER round-trip, limit clamping at both bounds).
+- `backend/tests/unit/pipeline/test_runtime_orchestrator_persists_account_evaluations.py` — 5 tests at baseline (entry persist, governor reject persist, equity-unavailable persist, multi-account persist, restart persist) + 2 additional from Pass 10 critic fixes.
+
+### New tests appended to existing files (W2-A)
+
+- `backend/tests/unit/governor/test_portfolio_governor.py` — +12 tests (fail-closed rule + populated candidate-inputs regression guards).
+- `backend/tests/unit/pipeline/test_runtime_orchestrator_post_fill_bracket.py` — +2 integration tests (proxy event emitted, projected_state non-zero gross_exposure_pct) + 1 cap-breach test from Pass 10.
+- `backend/tests/unit/operations/test_operations_center_service.py` — +4 W2-A-3 tests (persisted-first read, fallback to projection when store empty, no hybrid stitching, signal_plan_id filter through persisted store).
+- `backend/tests/unit/pipeline/test_runtime_orchestrator.py` — +1 cap-at-100 unit test on `_governor_candidate_inputs` from Pass 10.
+- `backend/tests/unit/runtime/test_broker_runtime_entrypoint.py` — +4 factory tests (equity-present, no-snapshot KeyError, equity=0 maps to None, factory called per invocation).
+
+### Doctrine decisions made
+
+- **D-W2-A-a (locked by operator 2026-04-30):** When SignalPlan stop is `post_fill_pct:N`, the Governor proxy uses `qty * ref_price * (N/100)` for `candidate_open_risk`. Never reject post_fill_pct entries before fill (would break the default bracket mode). Emit `GOVERNOR_CANDIDATE_OPEN_RISK_PROXIED` audit event so Operations sees the proxy path.
+- **D-W2-A-b (locked by operator 2026-04-30):** `PortfolioSnapshot.equity is None` for an OPEN intent is a fail-closed reject with `rule_id="portfolio_equity_unavailable"`. Percentage gates cannot be trusted without equity.
+- **Persistence boundary:** `account_signal_plan_evaluations` is *runtime decision truth*, not *broker truth*. Guardrails §39 ("BrokerSync is the only broker truth writer") preserved — the new write is through `runtime_store.save_account_signal_plan_evaluation`, not through any broker channel.
+- **Operations read contract:** persisted-store-first with order-projection fallback for legacy data only. No hybrid stitching when both have rows.
+
+### Tests run (W2-A baseline)
+
+- `pytest backend/tests/unit -q` → **1601 passed** (+31 over T-6 baseline 1570).
+- `npx tsc --noEmit` → clean.
+- `npx vitest run` → **399 passed across 54 files** (no change — frontend already shape-correct for non-order rows).
+- `npm run lint:names` → clean.
+- `pytest backend/tests/unit/lint -q` → **229 passed** (banned-name guard).
+
+### Blockers
+
+None — slice landed clean before critic recursion.
+
+### Next action
+
+Spawn Architecture critic + Adversarial critic in parallel; ship fix-in-slice items as Pass 10. UX critic skipped per resume prompt (only operator-facing change is "rejected/blocked evaluations now appear on Operations" and the existing schema/UI was verified by inspection to handle non-order rows correctly).
+
+---
+
+## Pass 10 — W2-A Critic Pass (Architecture + Adversarial)
+
+**Timestamp:** 2026-04-30 09:30 → 10:30 -04:00
+**Pass type:** parallel sonnet critics against the W2-A baseline.
+
+### Architecture critic verdict: FIX-IN-SLICE
+
+Confirmed the persistence boundary is doctrinally clean (runtime decision truth, not broker truth). `_record_account_evaluation` correctly appends-then-persists. `persisted_at` correctly stays write-side only. Operations read path stays read-only. Two BUGs identified for in-slice fix.
+
+### Adversarial critic verdict: FINDINGS-PRESENT
+
+Three concrete failure modes found. Highest-impact: cross-account persistence-vs-result divergence on partial failure (one Account's persist raise breaks the loop for accounts later in the fanout).
+
+### Fix-in-slice items shipped (4):
+
+1. **Fix #1 — `_portfolio_snapshot_factory` maps equity≤0 to None** (Architecture BUG-1 + Adversarial BUG-2 — both critics flagged): `BrokerAccountSnapshot.equity` is `ge=0` (allows 0.0 from a stale-and-flat poll, blocked account, post-liquidation, or fresh unfunded account), but `PortfolioSnapshot.equity` is `gt=0` so `PortfolioSnapshot(equity=0.0)` raises `ValidationError`. AND even if construction succeeded, `_pct(value, equity=0)` collapses every percentage gate to zero — operationally indistinguishable from "we don't know." Fix: factory checks `equity <= 0` and returns `PortfolioSnapshot()` (None). The W2-A-1b fail-closed rule then fires deterministically. Test: `test_build_portfolio_snapshot_factory_maps_zero_equity_to_none`.
+
+2. **Fix #2 — Per-call factory threading (not cached at construction)** (Architecture BUG-2): pre-fix, `BrokerRuntimeOrchestrator._build_pipeline` called the factory eagerly and stored the result in `portfolio_snapshot_by_account` dict; subsequent equity changes were invisible. The audit's TOCTOU concern was only partially closed at first-boot. Fix: `RuntimeOrchestrator.__init__` accepts `portfolio_snapshot_factory=` kwarg; `_portfolio_snapshot_for(account_id)` invokes it on every call when present. `BrokerRuntimeOrchestrator` threads the factory directly. Test: `test_factory_is_called_per_invocation_not_cached`.
+
+3. **Fix #3 — Cross-account persist failure becomes a structured event, not a re-raise** (Adversarial BUG-1): pre-fix, an `IntegrityError` on account #3 of a 10-account fanout would propagate out of `process_bar`, leaving accounts #1/#2 with partial in-memory + persisted state and accounts #4..#10 never evaluated. Fix: `_record_account_evaluation` wraps the persist call in `try/except`, emits `EVALUATION_PERSIST_FAILED` with full lineage on failure (account_id, signal_plan_id, deployment_id, participation_decision, error_type, error message), and continues. The in-memory bucket is preserved. Two new tests: `test_persist_failure_emits_event_and_keeps_in_memory_result` and `test_persist_failure_in_one_account_does_not_block_other_accounts`.
+
+4. **Fix #4 — `post_fill_pct` cap at 100% in proxy** (Adversarial RISK-1): pre-fix, a malformed plan with `post_fill_pct:200` would yield `proxy_stop_distance = 2 * ref_price` and `candidate_open_risk = 2 * notional`, which is meaningless because real loss can never exceed entry notional. Fix: `_governor_candidate_inputs` clamps `stop_pct = min(stop_pct, 100.0)` before the proxy compute. Downstream protective placer is unchanged (its own pre-existing constraint catches stop_price ≤ 0). Test: `test_governor_candidate_inputs_caps_post_fill_pct_at_100`.
+
+### Out-of-slice findings (deferred with explicit rationale):
+
+- **Adversarial BUG-3 (idempotency hole on bar reprocess):** each evaluation builder mints fresh `evaluation_id=uuid4()`, so re-running the same bar would create duplicate persisted rows. Honest assessment: bar reprocessing is already prevented upstream by `runtime_state.last_processed_bar_timestamp`; recovery doesn't re-run completed bars; only test replays exercise this and they intentionally want fresh evaluations. Defer until a documented recovery-replay use case emerges.
+- **Adversarial RISK-2 (Operations fallback hybrid leakage):** once the persisted store has any row for a filter, the legacy order-projection fallback never fires for that filter. This is the documented W2-A-3 contract ("no hybrid stitching"); legacy data is gone forever once new rows persist. Doc-only.
+- **Adversarial RISK-3 (SQLite single-writer fsync cost across N accounts):** N=10 accounts × 10 deployments = 100 fsyncs per bar. T-7's daily-state aggregator will batch.
+- **Adversarial RISK-4 (lineage queryability):** `risk_resolver_result`, `risk_plan_version_id`, `position_lineage_id`, `program_id`, `strategy_version_id` are all in JSON payload, not columns. Operations queries can't filter without payload deserialization. Defer to a follow-up schema-widening slice.
+- **Adversarial NIT-1 (docstring drift):** the "must NOT silently swallow — they re-raise" language was aspirational pre-fix; updated to match the new structured-event behavior in Fix #3.
+- **Adversarial NIT-2 (test sleep flake):** `test_list_orders_newest_persisted_first` uses `time.sleep(0.005)`. Acceptable for now (test passes consistently); revisit if flakes appear.
+- **Architecture NIT-5 (single event type for two paths):** `GOVERNOR_CANDIDATE_OPEN_RISK_PROXIED` is emitted both when a proxy was applied and when no proxy was possible. The `details.reason` differs but the event_type is shared. Defer separation.
+- **Architecture NIT-6 (positions empty in production factory):** `BrokerPositionSnapshot` lacks `program_id`. Position truth still flows via Account fanout's own position-mgmt pass. Schema-widening is a separate slice.
+
+### Tests added (8) + fixtures updated:
+
+- `test_build_portfolio_snapshot_factory_returns_equity_when_snapshot_present` (factory happy path).
+- `test_build_portfolio_snapshot_factory_returns_equity_none_when_no_snapshot` (factory KeyError → None).
+- `test_build_portfolio_snapshot_factory_maps_zero_equity_to_none` (Fix #1).
+- `test_factory_is_called_per_invocation_not_cached` (Fix #2).
+- `test_persist_failure_emits_event_and_keeps_in_memory_result` (Fix #3, single account).
+- `test_persist_failure_in_one_account_does_not_block_other_accounts` (Fix #3, multi-account fanout).
+- `test_governor_candidate_inputs_caps_post_fill_pct_at_100` (Fix #4).
+
+### Verification post-fixes
+
+- `pytest backend/tests/unit -q` → **1608 passed** (+38 over original 1570 baseline; +7 over W2-A baseline 1601).
+- `npx tsc --noEmit` → clean.
+- `npx vitest run` → **399 passed across 54 files** (no change).
+- `npm run lint:names` → clean.
+- `pytest backend/tests/unit/lint -q` → **229 passed**.
+
+### Remaining gaps
+
+None for W2-A. All deferred items are documented above with explicit rationale. Slice ready to commit.
+
+### Next action
+
+Append LEDGER entry; release W2-A leases; update OPERATION_STATUS to W2-A SHIPPED; commit the bundle as a single commit (`Close audit P0 silent-no-op bundle (W2-A pre-T-7)`); proceed to T-7 (Daily-state aggregator + cooldown).
+
+---

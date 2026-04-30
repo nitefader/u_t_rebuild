@@ -175,11 +175,15 @@ def _bar(*, open_: float = 99, close: float = 100) -> NormalizedBar:
 
 
 def _orchestrator(*, components: ResolvedDeploymentComponents, broker: FakeBrokerAdapter) -> RuntimeOrchestrator:
+    # W2-A-1b: provide a non-None equity snapshot so the new fail-closed
+    # rule does not pre-empt the bracket-program acceptance flow.
+    from backend.app.governor import PortfolioSnapshot
     return RuntimeOrchestrator(
         account_id=ACCOUNT_ID,
         deployment=_deployment(components),
         components=components,
         broker_adapter=broker,
+        portfolio_snapshot=PortfolioSnapshot(equity=100_000),
     )
 
 
@@ -300,3 +304,108 @@ def test_native_alpaca_bracket_attaches_child_prices_on_entry_and_skips_post_fil
     # No post-fill PROTECTION_PLACED event under native mode.
     placed = [e for e in result.events if e.event_type == PipelineEventType.PROTECTION_PLACED]
     assert placed == []
+
+
+# ---------------------------------------------------------------------------
+# W2-A-1a (audit P0 #1, pre-T-7 bundle) — orchestrator integration.
+# When SignalPlan.stop is encoded as post_fill_pct (the default bracket
+# mode's intent shape), the orchestrator's _governor_candidate_inputs must
+# proxy candidate_open_risk from a gating-time reference price and emit a
+# GOVERNOR_CANDIDATE_OPEN_RISK_PROXIED audit event. The Governor decision's
+# projected_state must show non-zero gross_exposure_pct so the percentage
+# gates have something real to evaluate against (the audit's confirmed
+# silent-no-op was that they always saw zero incremental exposure).
+# ---------------------------------------------------------------------------
+
+
+def test_orchestrator_emits_proxy_event_when_stop_is_post_fill_pct() -> None:
+    """Regression guard: post_fill_pct stop must trigger the proxy code path.
+
+    Doctrine (operator decision 2026-04-30 W2-A): when the SignalPlan stop
+    is encoded as post_fill_pct, RiskResolver does not produce a concrete
+    stop_distance. The orchestrator must compute a proxy candidate_open_risk
+    from qty * ref_price * stop_pct/100 and emit a structured audit event
+    so Operations can see the gate ran on a proxy.
+    """
+    components = _components(
+        side=CandidateSide.LONG,
+        stop_pct=5.0,
+        target_pct=10.0,
+    )
+    broker = FakeBrokerAdapter(
+        [BrokerOrderStatus.FILLED, BrokerOrderStatus.ACCEPTED, BrokerOrderStatus.ACCEPTED]
+    )
+    pipeline = _orchestrator(components=components, broker=broker)
+
+    result = pipeline.process_bar(_bar(open_=99, close=100))
+
+    # The proxy event must fire exactly once (one entry).
+    proxy_events = [
+        event
+        for event in result.events
+        if event.event_type == PipelineEventType.GOVERNOR_CANDIDATE_OPEN_RISK_PROXIED
+    ]
+    assert len(proxy_events) == 1
+    proxy_event = proxy_events[0]
+    # The event details must carry the proxy math so Operations can audit.
+    assert proxy_event.details["stop_pct"] == 5.0
+    assert proxy_event.details["reference_price"] == pytest.approx(100.0)
+    assert proxy_event.details["candidate_quantity"] == pytest.approx(10.0)
+    # proxy_stop_distance = 100 * (5/100) = 5.0; candidate_open_risk = 10 * 5 = 50.
+    assert proxy_event.details["proxy_stop_distance"] == pytest.approx(5.0)
+    assert proxy_event.details["candidate_open_risk"] == pytest.approx(50.0)
+
+
+def test_orchestrator_governor_projected_state_carries_nonzero_gross_exposure() -> None:
+    """Audit P0 #1 regression: the Governor's projected_state must show real
+    candidate exposure, not zero. Pre-W2-A this was always 0 because
+    candidate_market_value defaulted to 0 in GovernorRequest.
+    """
+    components = _components(side=CandidateSide.LONG)
+    broker = FakeBrokerAdapter(
+        [BrokerOrderStatus.FILLED, BrokerOrderStatus.ACCEPTED, BrokerOrderStatus.ACCEPTED]
+    )
+    pipeline = _orchestrator(components=components, broker=broker)
+
+    result = pipeline.process_bar(_bar(open_=99, close=100))
+
+    # Single OPEN entry: one Governor decision, must have non-zero projected
+    # gross exposure pct because qty=10 * close=100 = 1_000 against equity
+    # of 100_000 = 1.0%.
+    assert len(result.governor_decisions) == 1
+    decision = result.governor_decisions[0]
+    assert decision.approved is True  # under the cap, but the cap saw real numbers
+    assert decision.projected_state is not None
+    assert decision.projected_state["gross_exposure_pct"] == pytest.approx(1.0)
+    # The open_risk_pct is the proxied value: 50 / 100_000 = 0.05%.
+    assert decision.projected_state["open_risk_pct"] == pytest.approx(0.05)
+
+
+def test_orchestrator_blocks_open_when_gross_exposure_cap_breached_with_real_numbers() -> None:
+    """The cap fires once candidate_market_value is real. This test would
+    fail under pre-W2-A code because candidate_market_value defaulted to 0
+    and the cap silently approved.
+    """
+    from backend.app.governor import GovernorPolicy, PortfolioGovernor, PortfolioSnapshot
+    components = _components(side=CandidateSide.LONG)
+    broker = FakeBrokerAdapter([BrokerOrderStatus.ACCEPTED])
+    # Set the gross exposure cap to 0.5% — the qty=10 @ $100 = $1000 candidate
+    # value is 1.0% of $100k equity, which exceeds 0.5%.
+    governor = PortfolioGovernor(GovernorPolicy(max_gross_exposure_pct=0.5))
+    pipeline = RuntimeOrchestrator(
+        account_id=ACCOUNT_ID,
+        deployment=_deployment(components),
+        components=components,
+        broker_adapter=broker,
+        governor=governor,
+        portfolio_snapshot=PortfolioSnapshot(equity=100_000),
+    )
+
+    result = pipeline.process_bar(_bar(open_=99, close=100))
+
+    assert len(result.governor_decisions) == 1
+    decision = result.governor_decisions[0]
+    assert decision.approved is False
+    assert decision.rule_id == "max_gross_exposure_pct"
+    # No order should have been submitted.
+    assert len(broker.submitted_orders) == 0

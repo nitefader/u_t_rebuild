@@ -259,7 +259,12 @@ def _portfolio_snapshot(
                 market_value=float(getattr(position, "market_value")),
             )
         )
-    return PortfolioSnapshot(positions=tuple(summaries))
+    # W2-A-1b (audit P0 #2 — pre-T-7 bundle, operator decision 2026-04-30):
+    # Smoke-test snapshot must carry a non-None equity so the new
+    # portfolio_equity_unavailable Governor rule does not pre-empt the
+    # smoke flow. Production wires real equity from BrokerSync account
+    # snapshots; the smoke tool stands in with a fixed 100k baseline.
+    return PortfolioSnapshot(equity=100_000, positions=tuple(summaries))
 
 
 def _generated_completed_bars(*, symbol: str, count: int) -> tuple[NormalizedBar, ...]:

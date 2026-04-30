@@ -3,11 +3,11 @@
 Both agents read this file at the start of every turn. Default TTL is 30 minutes.
 See `COORDINATION/PROTOCOL.md` for full lock semantics.
 
-Last updated: 2026-04-30 06:30:00 -04:00
+Last updated: 2026-04-30 10:30:00 -04:00
 
-(no active leases — T-6 leases released after commit; T-1..T-6 of the
-Bracket Program are committed; T-7 leases will be acquired when T-7
-starts)
+(no active leases — W2-A pre-T-7 audit P0 bundle leases released after
+commit; T-1..T-6 + W2-A of the Bracket Program are committed; T-7 leases
+will be acquired when T-7 starts)
 
 ---
 

@@ -68,6 +68,27 @@ class PortfolioGovernor:
                 rule_id="stale_broker_sync_blocks_open",
                 projected_state=projected_state,
             )
+        # W2-A-1b (audit P0 #2 — pre-T-7 bundle, operator decision 2026-04-30):
+        # If portfolio equity is unknown for an OPEN evaluation, percentage
+        # gates (gross/net exposure pct, symbol concentration pct, open
+        # risk pct) collapse to zero in _projected_state via _pct(), which
+        # would silently bypass every percentage cap. Operator chose
+        # fail-closed: the system must not open new positions while account
+        # equity is unknown.
+        # PortfolioSnapshot.equity is constrained to `gt=0` at the model
+        # boundary — zero or negative cannot reach this rule because they
+        # would fail PortfolioSnapshot construction. The corresponding
+        # equity-<=0 BrokerSync handling lives in the production factory at
+        # backend/app/runtime/account_trading_entrypoint.py, which maps a
+        # zero/negative BrokerAccountSnapshot.equity to `PortfolioSnapshot()`
+        # so this rule fires (instead of crashing the factory).
+        # Protective exits already bypassed above, so this only blocks OPENs.
+        if order_intent == InternalOrderIntent.OPEN and request.portfolio.equity is None:
+            return GovernorDecision.reject(
+                reason="portfolio_equity_unavailable",
+                rule_id="portfolio_equity_unavailable",
+                projected_state=projected_state,
+            )
         # Slice B: Account has no RiskPlan assigned for the Deployment's
         # horizon. Per the locked doctrine: "If an Account has no RiskPlan for
         # the Deployment's horizon and no fallback, the Account must reject."

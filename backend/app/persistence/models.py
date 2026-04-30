@@ -294,4 +294,33 @@ CREATE INDEX IF NOT EXISTS ix_research_jobs_kind
     ON research_jobs(kind, created_at);
 CREATE INDEX IF NOT EXISTS ix_research_jobs_result_run_id
     ON research_jobs(result_run_id);
+
+-- W2-A-2 (audit P0 #2 — pre-T-7 bundle, 2026-04-30): durable record of every
+-- AccountSignalPlanEvaluation outcome. Pre-W2-A the orchestrator built these
+-- in memory and Operations reconstructed them from the order ledger only,
+-- so PARTICIPATE-without-order, REJECT, IGNORE, and DEFER decisions were
+-- invisible. The persisted_at column gives Operations a stable ordering key
+-- independent of evaluated_at (which can be None for some legacy paths).
+CREATE TABLE IF NOT EXISTS account_signal_plan_evaluations (
+    evaluation_id TEXT PRIMARY KEY,
+    account_id TEXT NOT NULL,
+    signal_plan_id TEXT NOT NULL,
+    deployment_id TEXT NOT NULL,
+    strategy_id TEXT NOT NULL,
+    status TEXT NOT NULL,
+    participation_decision TEXT NOT NULL,
+    governor_decision_id TEXT,
+    evaluated_at TEXT,
+    created_at TEXT NOT NULL,
+    persisted_at TEXT NOT NULL,
+    payload TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ix_account_signal_plan_evaluations_account_persisted
+    ON account_signal_plan_evaluations(account_id, persisted_at DESC);
+CREATE INDEX IF NOT EXISTS ix_account_signal_plan_evaluations_signal_plan
+    ON account_signal_plan_evaluations(signal_plan_id);
+CREATE INDEX IF NOT EXISTS ix_account_signal_plan_evaluations_deployment
+    ON account_signal_plan_evaluations(deployment_id);
+CREATE INDEX IF NOT EXISTS ix_account_signal_plan_evaluations_persisted
+    ON account_signal_plan_evaluations(persisted_at DESC);
 """
