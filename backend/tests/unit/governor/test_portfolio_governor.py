@@ -367,3 +367,139 @@ def test_governor_has_no_feature_engine_or_broker_adapter_dependency() -> None:
 
     assert "FeatureEngine" not in source_names
     assert "BrokerAdapter" not in source_names
+
+
+# ---------------------------------------------------------------------------
+# policy_override (Slice A — GOVERNOR_WIRING_MAP §G-2)
+# Per-evaluation policy must override the persisted singleton without
+# mutating self._policy.
+# ---------------------------------------------------------------------------
+
+
+def test_policy_override_blocks_when_persisted_would_allow() -> None:
+    governor = PortfolioGovernor()  # persisted policy: all None, no gates
+    tighter = GovernorPolicy(max_open_positions=0)
+    decision = governor.evaluate(_request(), policy_override=tighter)
+    assert decision.approved is False
+    assert decision.reason == "max_open_positions_exceeded"
+    assert decision.rule_id == "max_open_positions"
+
+
+def test_policy_override_allows_when_persisted_would_block_kill_via_override_does_not_relax_kill() -> None:
+    # The override is applied verbatim — if it carries kill or pause, those
+    # gates fire too. This guards against accidentally constructing an
+    # override that "loses" a kill switch from the floor (the resolver's job
+    # is to preserve kill/pause; this test confirms evaluate honors whatever
+    # policy it gets).
+    governor = PortfolioGovernor()
+    kill_override = GovernorPolicy(global_kill_active=True)
+    decision = governor.evaluate(_request(), policy_override=kill_override)
+    assert decision.approved is False
+    assert decision.reason == "global_kill_active"
+
+
+def test_policy_override_does_not_mutate_persisted_policy() -> None:
+    governor = PortfolioGovernor()
+    persisted_before = governor.policy
+    governor.evaluate(_request(), policy_override=GovernorPolicy(max_open_positions=0))
+    assert governor.policy is persisted_before
+    assert governor.policy.max_open_positions is None
+
+
+def test_policy_override_omitted_uses_persisted_policy() -> None:
+    # Backwards-compat sanity: the new keyword default is None and the
+    # behavior matches today's evaluate().
+    governor = PortfolioGovernor(GovernorPolicy(max_open_positions=0))
+    decision = governor.evaluate(_request())
+    assert decision.approved is False
+    assert decision.reason == "max_open_positions_exceeded"
+
+
+def test_policy_override_projected_state_uses_override_for_slots_remaining() -> None:
+    # The projected_state's new_open_slots_remaining must be computed from
+    # the policy that actually made the decision, not from self._policy.
+    governor = PortfolioGovernor()  # persisted: None, would yield None slots
+    override = GovernorPolicy(max_open_positions=3)
+    decision = governor.evaluate(_request(), policy_override=override)
+    assert decision.approved is True
+    assert decision.projected_state is not None
+    assert decision.projected_state["new_open_slots_remaining"] == 2  # 3 - 1
+
+
+# ---------------------------------------------------------------------------
+# Slice B: account_missing_risk_plan_for_horizon rejection rule
+# Fires when active_policy.requires_risk_plan is True, AFTER kill/pause
+# checks but BEFORE numeric limit checks.
+# ---------------------------------------------------------------------------
+
+
+def test_missing_risk_plan_rule_rejects_entry() -> None:
+    governor = PortfolioGovernor()
+    policy = GovernorPolicy(requires_risk_plan=True)
+
+    decision = governor.evaluate(_request(), policy_override=policy)
+
+    assert decision.approved is False
+    assert decision.reason == "account_has_no_risk_plan_for_horizon"
+    assert decision.rule_id == "account_missing_risk_plan_for_horizon"
+
+
+def test_missing_risk_plan_rule_does_not_block_protective_exit() -> None:
+    """Protective exits (STOP, CLOSE, etc.) bypass ALL rules including the plan check."""
+    governor = PortfolioGovernor()
+    policy = GovernorPolicy(requires_risk_plan=True)
+    exit_intent = _intent(intent_type=IntentType.EXIT)
+
+    decision = governor.evaluate(
+        _request(intent=exit_intent, order_intent=InternalOrderIntent.STOP_LOSS),
+        policy_override=policy,
+    )
+
+    assert decision.approved is True
+    assert decision.reason == "protective_exit_allowed"
+
+
+def test_missing_risk_plan_rule_fires_after_kill_switch() -> None:
+    """Global kill fires before the missing-plan rule. Order matters."""
+    governor = PortfolioGovernor()
+    policy = GovernorPolicy(global_kill_active=True, requires_risk_plan=True)
+
+    decision = governor.evaluate(_request(), policy_override=policy)
+
+    # Kill takes precedence — the missing-plan rule is later in the chain.
+    assert decision.approved is False
+    assert decision.rule_id == "global_kill_blocks_open"
+
+
+def test_missing_risk_plan_rule_fires_after_account_pause() -> None:
+    governor = PortfolioGovernor()
+    policy = GovernorPolicy(paused_account_ids=frozenset({ACCOUNT_ID}), requires_risk_plan=True)
+
+    decision = governor.evaluate(_request(account_id=ACCOUNT_ID), policy_override=policy)
+
+    assert decision.approved is False
+    assert decision.rule_id == "account_pause_blocks_open"
+
+
+def test_missing_risk_plan_rule_fires_before_numeric_limits() -> None:
+    """requires_risk_plan must fire before max_open_positions so the rejection
+    reason clearly names the missing plan (not a confusing 'max positions' reason)."""
+    governor = PortfolioGovernor()
+    # Both a missing plan and a positions limit exceeded.
+    policy = GovernorPolicy(requires_risk_plan=True, max_open_positions=0)
+
+    decision = governor.evaluate(_request(), policy_override=policy)
+
+    assert decision.approved is False
+    # Missing-plan check fires first.
+    assert decision.rule_id == "account_missing_risk_plan_for_horizon"
+
+
+def test_missing_risk_plan_false_does_not_block() -> None:
+    """When requires_risk_plan=False (default), the rule must not fire."""
+    governor = PortfolioGovernor()
+    policy = GovernorPolicy(requires_risk_plan=False)
+
+    decision = governor.evaluate(_request(), policy_override=policy)
+
+    assert decision.approved is True

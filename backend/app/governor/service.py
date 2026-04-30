@@ -24,28 +24,39 @@ class PortfolioGovernor:
         self._persist_policy()
         return self._policy
 
-    def evaluate(self, request: GovernorRequest) -> GovernorDecision:
+    def evaluate(
+        self,
+        request: GovernorRequest,
+        *,
+        policy_override: GovernorPolicy | None = None,
+    ) -> GovernorDecision:
+        # When policy_override is provided (RuntimeOrchestrator passes a
+        # per-(account, deployment) policy resolved from AccountRiskConfig +
+        # RiskPlanConfig), use it for THIS evaluation only. self._policy is
+        # never mutated. Existing callers that don't pass an override keep
+        # the persisted-singleton behavior.
+        active_policy = policy_override if policy_override is not None else self._policy
         order_intent = self._resolve_order_intent(request)
-        projected_state = self._projected_state(request, order_intent)
+        projected_state = self._projected_state(request, order_intent, active_policy)
         if self._is_protective_exit(order_intent):
             return GovernorDecision.approve(
                 reason="protective_exit_allowed",
                 rule_id="protective_exit_bypass",
                 projected_state=projected_state,
             )
-        if self._policy.global_kill_active:
+        if active_policy.global_kill_active:
             return GovernorDecision.reject(
                 reason="global_kill_active",
                 rule_id="global_kill_blocks_open",
                 projected_state=projected_state,
             )
-        if request.account_id in self._policy.paused_account_ids:
+        if request.account_id in active_policy.paused_account_ids:
             return GovernorDecision.reject(
                 reason="account_pause_active",
                 rule_id="account_pause_blocks_open",
                 projected_state=projected_state,
             )
-        if request.deployment_id in self._policy.paused_deployment_ids:
+        if request.deployment_id in active_policy.paused_deployment_ids:
             return GovernorDecision.reject(
                 reason="deployment_pause_active",
                 rule_id="deployment_pause_blocks_open",
@@ -57,31 +68,42 @@ class PortfolioGovernor:
                 rule_id="stale_broker_sync_blocks_open",
                 projected_state=projected_state,
             )
-        if self._policy.max_open_positions is not None and request.portfolio.open_position_count() >= self._policy.max_open_positions:
+        # Slice B: Account has no RiskPlan assigned for the Deployment's
+        # horizon. Per the locked doctrine: "If an Account has no RiskPlan for
+        # the Deployment's horizon and no fallback, the Account must reject."
+        # The resolver sets requires_risk_plan=True only when the plan lookup
+        # found no map row (not when the lookup itself raised).
+        if active_policy.requires_risk_plan:
+            return GovernorDecision.reject(
+                reason="account_has_no_risk_plan_for_horizon",
+                rule_id="account_missing_risk_plan_for_horizon",
+                projected_state=projected_state,
+            )
+        if active_policy.max_open_positions is not None and request.portfolio.open_position_count() >= active_policy.max_open_positions:
             return GovernorDecision.reject(
                 reason="max_open_positions_exceeded",
                 rule_id="max_open_positions",
                 projected_state=projected_state,
             )
-        if self._exceeds_limit(projected_state, "gross_exposure_pct", self._policy.max_gross_exposure_pct):
+        if self._exceeds_limit(projected_state, "gross_exposure_pct", active_policy.max_gross_exposure_pct):
             return GovernorDecision.reject(
                 reason="projected_gross_exposure_exceeded",
                 rule_id="max_gross_exposure_pct",
                 projected_state=projected_state,
             )
-        if self._exceeds_limit(projected_state, "net_exposure_pct", self._policy.max_net_exposure_pct):
+        if self._exceeds_limit(projected_state, "net_exposure_pct", active_policy.max_net_exposure_pct):
             return GovernorDecision.reject(
                 reason="projected_net_exposure_exceeded",
                 rule_id="max_net_exposure_pct",
                 projected_state=projected_state,
             )
-        if self._exceeds_limit(projected_state, "symbol_concentration_pct", self._policy.max_symbol_concentration_pct):
+        if self._exceeds_limit(projected_state, "symbol_concentration_pct", active_policy.max_symbol_concentration_pct):
             return GovernorDecision.reject(
                 reason="symbol_concentration_exceeded",
                 rule_id="max_symbol_concentration_pct",
                 projected_state=projected_state,
             )
-        if self._exceeds_limit(projected_state, "open_risk_pct", self._policy.max_open_risk_pct):
+        if self._exceeds_limit(projected_state, "open_risk_pct", active_policy.max_open_risk_pct):
             return GovernorDecision.reject(
                 reason="open_risk_exceeded",
                 rule_id="max_open_risk_pct",
@@ -89,8 +111,8 @@ class PortfolioGovernor:
             )
         return GovernorDecision.approve(projected_state=projected_state)
 
-    def approve(self, *, request: GovernorRequest) -> tuple[bool, str]:
-        decision = self.evaluate(request)
+    def approve(self, *, request: GovernorRequest, policy_override: GovernorPolicy | None = None) -> tuple[bool, str]:
+        decision = self.evaluate(request, policy_override=policy_override)
         return decision.approved, decision.reason
 
     def _resolve_order_intent(self, request: GovernorRequest) -> InternalOrderIntent:
@@ -120,7 +142,7 @@ class PortfolioGovernor:
     def _exceeds_limit(self, projected_state: dict[str, object], key: str, limit: float | None) -> bool:
         return limit is not None and float(projected_state[key]) > limit
 
-    def _projected_state(self, request: GovernorRequest, order_intent: InternalOrderIntent) -> dict[str, object]:
+    def _projected_state(self, request: GovernorRequest, order_intent: InternalOrderIntent, active_policy: GovernorPolicy | None = None) -> dict[str, object]:
         projected_open_positions = request.portfolio.open_position_count()
         if order_intent == InternalOrderIntent.OPEN:
             projected_open_positions += 1
@@ -142,8 +164,12 @@ class PortfolioGovernor:
         pending_open_risk_pct = self._pct(request.portfolio.pending_open_risk() + candidate_open_risk, equity)
         concentration_pct = (projected_symbol_value / projected_gross_value * 100) if projected_gross_value > 0 else 0
         new_open_slots_remaining = None
-        if self._policy.max_open_positions is not None:
-            new_open_slots_remaining = max(self._policy.max_open_positions - projected_open_positions, 0)
+        # Use the same policy the caller is evaluating against — the projected
+        # state's "slots remaining" must be consistent with which policy made
+        # the decision. Falls back to self._policy when called legacy-style.
+        policy_for_slots = active_policy if active_policy is not None else self._policy
+        if policy_for_slots.max_open_positions is not None:
+            new_open_slots_remaining = max(policy_for_slots.max_open_positions - projected_open_positions, 0)
         return {
             "account_id": str(request.account_id),
             "deployment_id": str(request.deployment_id),

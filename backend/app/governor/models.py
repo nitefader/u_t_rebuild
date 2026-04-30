@@ -21,6 +21,12 @@ class GovernorPolicy(BaseModel):
     max_gross_exposure_pct: float | None = Field(default=None, gt=0)
     max_net_exposure_pct: float | None = Field(default=None, gt=0)
     max_open_risk_pct: float | None = Field(default=None, gt=0)
+    # Slice B: set True by the GovernorPolicyResolver when a risk_horizon was
+    # supplied AND the per-horizon plan lookup returned None (Account has not
+    # mapped a RiskPlan for this horizon). The Governor's evaluate() rejects
+    # entry signals with rule_id="account_missing_risk_plan_for_horizon" when
+    # this flag is True. Defaults False so legacy callers are unaffected.
+    requires_risk_plan: bool = False
 
 
 class BrokerSyncFreshness(BaseModel):

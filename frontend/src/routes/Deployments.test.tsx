@@ -219,6 +219,24 @@ describe("<Deployments />", () => {
       expect(screen.getByLabelText("Strategy version")).toHaveTextContent("v1 - draft");
     });
     expect(screen.queryByText(/No frozen versions/i)).not.toBeInTheDocument();
+
+    // Slice B fix F-RISK-4 / B-RISK-1: the Create drawer must expose the
+    // Risk horizon selector with all 5 enum values, and must surface the
+    // "enforcement is OFF" warning when the operator leaves it on the
+    // default "use Strategy default" option.
+    const riskHorizon = screen.getByLabelText(/Risk horizon/i) as HTMLSelectElement;
+    const optionValues = Array.from(riskHorizon.options).map((o) => o.value);
+    expect(optionValues).toEqual(
+      expect.arrayContaining(["", "scalping", "intraday", "swing", "position", "other"]),
+    );
+    expect(
+      screen.getByText(/Per-horizon RiskPlan enforcement is OFF/i),
+    ).toBeInTheDocument();
+    // Choosing an explicit horizon clears the warning.
+    fireEvent.change(riskHorizon, { target: { value: "swing" } });
+    expect(
+      screen.queryByText(/Per-horizon RiskPlan enforcement is OFF/i),
+    ).not.toBeInTheDocument();
   });
 
   it("surfaces a degraded read state when list fails", async () => {

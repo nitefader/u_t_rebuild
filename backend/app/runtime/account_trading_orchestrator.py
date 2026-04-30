@@ -13,7 +13,15 @@ from backend.app.control_plane import ControlPlane
 from backend.app.domain import TradingMode
 from backend.app.domain._base import utc_now
 from backend.app.features import FeatureCache, IncrementalFeatureEngine, NormalizedBar, ResolvedDeploymentComponents
-from backend.app.governor import BrokerSyncFreshness, PortfolioGovernor, PortfolioSnapshot
+from backend.app.broker_accounts.models import AccountRiskConfig
+from backend.app.domain.risk_plan import RiskPlanConfig
+from backend.app.domain.strategy_controls import TradingHorizon
+from backend.app.governor import (
+    BrokerSyncFreshness,
+    GovernorPolicyResolver,
+    PortfolioGovernor,
+    PortfolioSnapshot,
+)
 from backend.app.orders import OrderManager
 from backend.app.pipeline import PipelineEvent, PipelineResult, RuntimeOrchestrator
 
@@ -233,6 +241,7 @@ class BrokerRuntimeOrchestrator:
             feature_engine=self._feature_engine_factory(),
             signal_engine=self._signal_engine,
             governor=self._governor,
+            governor_policy_resolver=self._build_governor_policy_resolver(),
             order_manager=self._order_manager,
             broker_adapter=self._broker_adapter,
             broker_sync=self._broker_sync,
@@ -261,6 +270,39 @@ class BrokerRuntimeOrchestrator:
             return self._runtime_store.load_broker_account(account_id)
         except KeyError:
             return None
+
+    def _build_governor_policy_resolver(self) -> GovernorPolicyResolver | None:
+        # Slice A finding #9: production composition root must wire the
+        # resolver, otherwise operator AccountRiskConfig edits do not gate.
+        # Returns None when the runtime store cannot supply lookups (test
+        # fixtures, in-memory orchestrators) so the legacy single-policy
+        # path stays intact.
+        if self._runtime_store is None or not hasattr(self._runtime_store, "load_account_risk_config"):
+            return None
+
+        runtime_store = self._runtime_store
+
+        def _account_lookup(account_id: UUID) -> AccountRiskConfig | None:
+            try:
+                return runtime_store.load_account_risk_config(account_id)
+            except KeyError:
+                return None
+
+        def _plan_lookup(account_id: UUID, horizon: TradingHorizon) -> RiskPlanConfig | None:
+            # Slice B: delegate to the production runtime_store method that
+            # joins account_risk_plan_map → risk_plan_versions to resolve the
+            # operator-assigned RiskPlanConfig for this (account, horizon).
+            # Returns None when no map row exists (triggers the
+            # account_missing_risk_plan_for_horizon rejection rule in the
+            # Governor when requires_risk_plan is True).
+            if not hasattr(runtime_store, "load_risk_plan_config_for_horizon"):
+                return None
+            return runtime_store.load_risk_plan_config_for_horizon(account_id, horizon)
+
+        return GovernorPolicyResolver(
+            get_account_risk_config=_account_lookup,
+            get_risk_plan_config_for_horizon=_plan_lookup,
+        )
 
     def _freshness(self, account_id: UUID):
         if self._runtime_store is None or not hasattr(self._runtime_store, "load_broker_sync_freshness"):

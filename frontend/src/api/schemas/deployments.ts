@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { TradingHorizonSchema } from "./risk";
 
 export const DeploymentLifecycleStatusSchema = z.enum([
   "draft",
@@ -17,6 +18,12 @@ export const DeploymentSchema = z.object({
   subscribed_account_ids: z.array(z.string()).default([]),
   lifecycle_status: DeploymentLifecycleStatusSchema,
   runtime_overrides: z.record(z.unknown()).default({}),
+  /**
+   * Risk horizon declared by this Deployment (Slice B).
+   * Null = fall back to StrategyControls.trading_horizon.
+   * Doctrine: Deployment chooses horizon; Account chooses RiskPlan; Governor enforces.
+   */
+  risk_horizon: TradingHorizonSchema.nullable().optional(),
   created_at: z.string(),
   updated_at: z.string(),
   started_at: z.string().nullable().optional(),
@@ -41,5 +48,6 @@ export const DeploymentWriteRequestSchema = z.object({
   watchlist_ids: z.array(z.string()).default([]),
   subscribed_account_ids: z.array(z.string()).default([]),
   runtime_overrides: z.record(z.unknown()).default({}),
+  risk_horizon: TradingHorizonSchema.nullable().optional(),
 });
 export type DeploymentWriteRequest = z.infer<typeof DeploymentWriteRequestSchema>;

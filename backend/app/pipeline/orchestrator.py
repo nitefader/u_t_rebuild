@@ -55,6 +55,7 @@ from backend.app.features import (
 from backend.app.governor import (
     BrokerSyncFreshness,
     GovernorDecision,
+    GovernorPolicyResolver,
     GovernorRequest,
     PortfolioGovernor,
     PortfolioSnapshot,
@@ -144,6 +145,7 @@ class RuntimeOrchestrator:
         signal_plan_builder: SignalPlanBuilder | None = None,
         risk_resolver: RiskResolver | None = None,
         governor: PortfolioGovernor | None = None,
+        governor_policy_resolver: GovernorPolicyResolver | None = None,
         order_manager: OrderManager | None = None,
         broker_adapter: BrokerAdapter | None = None,
         broker_sync: BrokerSync | None = None,
@@ -173,6 +175,21 @@ class RuntimeOrchestrator:
         self._signal_plan_builder = signal_plan_builder or SignalPlanBuilder()
         self._risk_resolver = risk_resolver or RiskResolver()
         self._governor = governor or PortfolioGovernor()
+        self._governor_policy_resolver = governor_policy_resolver
+        # Slice A interim per GOVERNOR_WIRING_MAP §0/§G-3: try the deployment's
+        # risk_horizon (added in Slice B), fall back to StrategyControls'
+        # trading_horizon. Either way the resolver gets a real horizon, so
+        # AccountRiskConfig limits enforce immediately while RiskPlan-by-horizon
+        # remains a no-op until Slice B.
+        deployment_horizon = getattr(deployment, "risk_horizon", None)
+        self._deployment_risk_horizon = deployment_horizon or components.strategy_controls.trading_horizon
+        # Slice B: track whether the Deployment has an EXPLICIT risk_horizon.
+        # Only when True do we pass enforce_plan_required=True to the resolver,
+        # activating the "Account must have a plan for this horizon" doctrine.
+        # Fallback to StrategyControls.trading_horizon does NOT enforce this
+        # rule — the deployment did not declare a horizon, so we can't know
+        # whether the operator intends per-horizon plan enforcement.
+        self._deployment_has_explicit_risk_horizon = deployment_horizon is not None
         self._broker_adapter = broker_adapter or FakeBrokerAdapter()
         self._order_manager = order_manager or OrderManager(broker_adapter=self._broker_adapter)
         self._broker_sync = broker_sync or BrokerSync(ledger=self._order_manager.ledger)
@@ -947,19 +964,33 @@ class RuntimeOrchestrator:
         position_lineage_id: UUID | None = None,
         order_intent: InternalOrderIntent,
     ) -> GovernorDecision:
-        return self._governor.evaluate(
-            GovernorRequest(
-                account_id=account_id,
-                deployment_id=signal_plan.deployment_id,
-                symbol=signal_plan.symbol,
-                signal_plan_id=signal_plan.signal_plan_id,
-                position_lineage_id=position_lineage_id or signal_plan.related_position_lineage_id,
-                runtime_state=self._runtime_state,
-                broker_sync=self._broker_freshness_for(account_id),
-                portfolio=self._portfolio_snapshot_for(account_id),
-                order_intent=order_intent,
-            )
+        request = GovernorRequest(
+            account_id=account_id,
+            deployment_id=signal_plan.deployment_id,
+            symbol=signal_plan.symbol,
+            signal_plan_id=signal_plan.signal_plan_id,
+            position_lineage_id=position_lineage_id or signal_plan.related_position_lineage_id,
+            runtime_state=self._runtime_state,
+            broker_sync=self._broker_freshness_for(account_id),
+            portfolio=self._portfolio_snapshot_for(account_id),
+            order_intent=order_intent,
         )
+        # When a resolver is wired, build a per-(account, horizon) policy from
+        # AccountRiskConfig + the Account's RiskPlan-for-this-horizon, then
+        # pass it as a one-call override. self._governor.policy is the floor.
+        # Without a resolver, fall back to the legacy single-arg call so any
+        # PortfolioGovernor subclass that doesn't yet accept policy_override
+        # (e.g. test stubs) is not broken by this slice.
+        if self._governor_policy_resolver is None:
+            return self._governor.evaluate(request)
+        policy_override = self._governor_policy_resolver.resolve(
+            floor=self._governor.policy,
+            account_id=account_id,
+            deployment_id=signal_plan.deployment_id,
+            risk_horizon=self._deployment_risk_horizon,
+            enforce_plan_required=self._deployment_has_explicit_risk_horizon,
+        )
+        return self._governor.evaluate(request, policy_override=policy_override)
 
     @staticmethod
     def _order_intent_for_signal_plan(signal_plan: SignalPlan) -> InternalOrderIntent:
@@ -1004,6 +1035,10 @@ class RuntimeOrchestrator:
             approved=decision.approved,
             reasons=(decision.reason,),
             violations=() if decision.approved else (decision.rule_id,),
+            # Slice A finding #8: forward the projected_state so the operator
+            # sees the same numeric snapshot the gate used (slots remaining,
+            # gross/net exposure pct, symbol concentration pct, broker stale).
+            projected_state=decision.projected_state,
         )
 
     def _position_contexts(self, *, bar: NormalizedBar) -> dict[str, PositionContext]:

@@ -23,6 +23,11 @@ from backend.app.broker_accounts.models import (
     BrokerAccountDeletionStatus,
     UpdateBrokerAccountDetailsRequest,
 )
+from backend.app.broker_accounts.risk_plan_map_models import (
+    AccountRiskPlanMap,
+    AccountRiskPlanMapUpdateRequest,
+)
+from backend.app.domain.strategy_controls import TradingHorizon
 from backend.app.broker_accounts.service import BrokerAccountCreationResult
 from backend.app.domain import TradingMode
 from backend.app.persistence import SQLiteRuntimeStore
@@ -281,3 +286,232 @@ def test_account_restriction_routes_default_and_persist(tmp_path) -> None:
     assert updated.version == 1
     assert updated.symbol_blocklist == ("TSLA", "GME")
     assert store.load_account_restrictions(ACCOUNT_ID).notes == "operator block"
+
+
+# ---------------------------------------------------------------------------
+# Slice B: risk-plan-map routes
+# ---------------------------------------------------------------------------
+
+RISK_PLAN_VERSION_ID = UUID("cccccccc-dddd-eeee-ffff-000000000000")
+RISK_PLAN_VERSION_ID_2 = UUID("dddddddd-eeee-ffff-0000-111111111111")
+
+
+def _seed_risk_plan_version(store: SQLiteRuntimeStore, version_id: UUID, name: str = "Test Plan") -> None:
+    # Slice B adversarial fix B-BUG-1: route validates the version exists in
+    # risk_plan_versions before writing the map row, so PUT tests must seed
+    # the version they reference instead of using a random UUID.
+    from backend.app.domain.risk_plan import (
+        RiskPlan,
+        RiskPlanConfig,
+        RiskPlanSizingMethod,
+        RiskPlanStatus,
+        RiskPlanTier,
+        RiskPlanVersion,
+        RiskPlanVersionStatus,
+    )
+
+    plan = RiskPlan(
+        name=name,
+        status=RiskPlanStatus.DRAFT,
+        risk_score=5,
+        risk_tier=RiskPlanTier.BALANCED,
+    )
+    version = RiskPlanVersion(
+        risk_plan_version_id=version_id,
+        risk_plan_id=plan.risk_plan_id,
+        version=1,
+        # DRAFT status doesn't require activated_at; the resolver
+        # treats DRAFT versions the same as ACTIVE for config lookup
+        # (Slice B fix B-RISK-3 only excludes DEPRECATED).
+        status=RiskPlanVersionStatus.DRAFT,
+        config=RiskPlanConfig(
+            sizing_method=RiskPlanSizingMethod.RISK_PERCENT,
+            risk_per_trade_pct=1,
+        ),
+    )
+    store.save_risk_plan(plan)
+    store.save_risk_plan_version(version)
+
+
+def _make_store_with_account(tmp_path) -> SQLiteRuntimeStore:
+    store = SQLiteRuntimeStore(tmp_path / "runtime.db")
+    store.save_broker_account(
+        BrokerAccount(
+            id=ACCOUNT_ID,
+            display_name="Paper",
+            provider="alpaca",
+            mode=TradingMode.BROKER_PAPER,
+            credentials_ref="alpaca-paper:test",
+            validation_status=BrokerAccountValidationStatus.VALID,
+        )
+    )
+    # Seed both shared RiskPlanVersion ids so PUT tests can reference them.
+    _seed_risk_plan_version(store, RISK_PLAN_VERSION_ID, "Test Plan A")
+    _seed_risk_plan_version(store, RISK_PLAN_VERSION_ID_2, "Test Plan B")
+    return store
+
+
+def test_risk_plan_map_routes_registered() -> None:
+    registered = {(route.method, route.path): route.response_model for route in broker_accounts.router.routes}
+    assert ("GET", "/api/v1/broker-accounts/{account_id}/risk-plan-map") in registered
+    assert ("PUT", "/api/v1/broker-accounts/{account_id}/risk-plan-map") in registered
+    assert registered[("GET", "/api/v1/broker-accounts/{account_id}/risk-plan-map")] is AccountRiskPlanMap
+    assert registered[("PUT", "/api/v1/broker-accounts/{account_id}/risk-plan-map")] is AccountRiskPlanMap
+
+
+def test_get_risk_plan_map_returns_empty_when_no_entries(tmp_path) -> None:
+    store = _make_store_with_account(tmp_path)
+    service = RuntimeStoreBackedService(store)
+
+    result = broker_accounts.get_account_risk_plan_map(ACCOUNT_ID, service=service)
+
+    assert isinstance(result, AccountRiskPlanMap)
+    assert result.account_id == ACCOUNT_ID
+    assert result.entries == ()
+
+
+def test_get_risk_plan_map_returns_404_for_unknown_account(tmp_path) -> None:
+    import pytest
+    from fastapi import HTTPException
+
+    store = SQLiteRuntimeStore(tmp_path / "runtime.db")
+    service = RuntimeStoreBackedService(store)
+    unknown_id = UUID("ffffffff-ffff-ffff-ffff-ffffffffffff")
+
+    with pytest.raises(HTTPException) as exc_info:
+        broker_accounts.get_account_risk_plan_map(unknown_id, service=service)
+
+    assert exc_info.value.status_code == 404
+
+
+def test_put_risk_plan_map_upserts_entry(tmp_path) -> None:
+    store = _make_store_with_account(tmp_path)
+    service = RuntimeStoreBackedService(store)
+    request = AccountRiskPlanMapUpdateRequest(
+        horizon=TradingHorizon.INTRADAY,
+        risk_plan_version_id=RISK_PLAN_VERSION_ID,
+    )
+
+    result = broker_accounts.put_account_risk_plan_map(ACCOUNT_ID, request, service=service)
+
+    assert isinstance(result, AccountRiskPlanMap)
+    assert len(result.entries) == 1
+    assert result.entries[0].horizon == TradingHorizon.INTRADAY
+    assert result.entries[0].risk_plan_version_id == RISK_PLAN_VERSION_ID
+
+
+def test_put_risk_plan_map_with_none_deletes_entry(tmp_path) -> None:
+    store = _make_store_with_account(tmp_path)
+    service = RuntimeStoreBackedService(store)
+    # First upsert an entry.
+    broker_accounts.put_account_risk_plan_map(
+        ACCOUNT_ID,
+        AccountRiskPlanMapUpdateRequest(
+            horizon=TradingHorizon.SWING,
+            risk_plan_version_id=RISK_PLAN_VERSION_ID,
+        ),
+        service=service,
+    )
+    # Then clear it with None.
+    result = broker_accounts.put_account_risk_plan_map(
+        ACCOUNT_ID,
+        AccountRiskPlanMapUpdateRequest(horizon=TradingHorizon.SWING, risk_plan_version_id=None),
+        service=service,
+    )
+
+    assert result.entries == ()
+
+
+def test_put_risk_plan_map_upsert_replaces_existing(tmp_path) -> None:
+    store = _make_store_with_account(tmp_path)
+    service = RuntimeStoreBackedService(store)
+    broker_accounts.put_account_risk_plan_map(
+        ACCOUNT_ID,
+        AccountRiskPlanMapUpdateRequest(
+            horizon=TradingHorizon.INTRADAY,
+            risk_plan_version_id=RISK_PLAN_VERSION_ID,
+        ),
+        service=service,
+    )
+    result = broker_accounts.put_account_risk_plan_map(
+        ACCOUNT_ID,
+        AccountRiskPlanMapUpdateRequest(
+            horizon=TradingHorizon.INTRADAY,
+            risk_plan_version_id=RISK_PLAN_VERSION_ID_2,
+        ),
+        service=service,
+    )
+
+    assert len(result.entries) == 1
+    assert result.entries[0].risk_plan_version_id == RISK_PLAN_VERSION_ID_2
+
+
+def test_put_risk_plan_map_returns_404_for_unknown_account(tmp_path) -> None:
+    import pytest
+    from fastapi import HTTPException
+
+    store = SQLiteRuntimeStore(tmp_path / "runtime.db")
+    service = RuntimeStoreBackedService(store)
+    unknown_id = UUID("ffffffff-ffff-ffff-ffff-ffffffffffff")
+    request = AccountRiskPlanMapUpdateRequest(
+        horizon=TradingHorizon.INTRADAY,
+        risk_plan_version_id=RISK_PLAN_VERSION_ID,
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        broker_accounts.put_account_risk_plan_map(unknown_id, request, service=service)
+
+    assert exc_info.value.status_code == 404
+
+
+def test_put_risk_plan_map_multiple_horizons_accumulate(tmp_path) -> None:
+    store = _make_store_with_account(tmp_path)
+    service = RuntimeStoreBackedService(store)
+    broker_accounts.put_account_risk_plan_map(
+        ACCOUNT_ID,
+        AccountRiskPlanMapUpdateRequest(
+            horizon=TradingHorizon.SCALPING,
+            risk_plan_version_id=RISK_PLAN_VERSION_ID,
+        ),
+        service=service,
+    )
+    result = broker_accounts.put_account_risk_plan_map(
+        ACCOUNT_ID,
+        AccountRiskPlanMapUpdateRequest(
+            horizon=TradingHorizon.POSITION,
+            risk_plan_version_id=RISK_PLAN_VERSION_ID_2,
+        ),
+        service=service,
+    )
+
+    assert len(result.entries) == 2
+    horizons = {e.horizon for e in result.entries}
+    assert TradingHorizon.SCALPING in horizons
+    assert TradingHorizon.POSITION in horizons
+
+
+def test_put_risk_plan_map_rejects_unknown_risk_plan_version_id(tmp_path) -> None:
+    # Slice B adversarial fix B-BUG-1: PUT must validate the
+    # risk_plan_version_id exists in risk_plan_versions before writing.
+    # Without this guard the operator can silently create a dangling map
+    # row that the runtime will then treat as "no plan for this horizon"
+    # and reject every entry signal forever.
+    import pytest
+    from fastapi import HTTPException
+
+    store = _make_store_with_account(tmp_path)
+    service = RuntimeStoreBackedService(store)
+    unknown_version = UUID("ffffffff-aaaa-bbbb-cccc-ddddddddeeee")
+    request = AccountRiskPlanMapUpdateRequest(
+        horizon=TradingHorizon.SWING,
+        risk_plan_version_id=unknown_version,
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        broker_accounts.put_account_risk_plan_map(ACCOUNT_ID, request, service=service)
+
+    assert exc_info.value.status_code == 400
+    assert "unknown risk_plan_version_id" in str(exc_info.value.detail).lower() or str(unknown_version) in str(exc_info.value.detail)
+    # And no row was written.
+    result = broker_accounts.get_account_risk_plan_map(ACCOUNT_ID, service=service)
+    assert result.entries == ()

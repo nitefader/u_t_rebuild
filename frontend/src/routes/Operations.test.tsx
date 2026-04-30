@@ -147,4 +147,37 @@ describe("<Operations />", () => {
       expect(screen.getByText(/Could not load runtime state/i)).toBeInTheDocument();
     });
   });
+
+  // Slice B fix F-RISK-3: prove the new account_missing_risk_plan_for_horizon
+  // rule_id renders the friendly text and the horizon name. Without this the
+  // entire Slice B operator-visible failure surface had zero coverage.
+  it("renders friendly text + resolved-plan label for account_missing_risk_plan_for_horizon decisions", async () => {
+    const overviewWithRejection = {
+      ...OVERVIEW_EMPTY,
+      latest_governor_decisions: [
+        {
+          approved: false,
+          rule_id: "account_missing_risk_plan_for_horizon",
+          reason: "account_has_no_risk_plan_for_horizon",
+          decided_at: new Date().toISOString(),
+          projected_state: { deployment_risk_horizon: "swing" },
+        },
+      ],
+    };
+    restore = installFetchMock([
+      { url: "/api/v1/operations/overview", body: overviewWithRejection },
+      { url: "/api/v1/system/streams", body: STREAMS_EMPTY },
+      { url: "/api/v1/system/status", body: STATUS_OK },
+      { url: "/api/v1/operations/signal-plans", body: { detail: "not found" }, status: 404 },
+      { url: "/api/v1/operations/evaluations", body: { detail: "not found" }, status: 404 },
+      { url: "/api/v1/operations/governor-decisions", body: { detail: "not found" }, status: 404 },
+    ]);
+    renderRoute(<Operations />);
+    // The helper renders "No RiskPlan mapped for the deployment's Swing horizon".
+    await waitFor(() => {
+      expect(
+        screen.getByText(/No RiskPlan mapped for the deployment's Swing horizon/i),
+      ).toBeInTheDocument();
+    });
+  });
 });

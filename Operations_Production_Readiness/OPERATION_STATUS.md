@@ -1,6 +1,80 @@
 # Operations Production Readiness Status
 
-Last updated: 2026-04-27 13:35:00 -04:00
+Last updated: 2026-04-29 18:42:51 -04:00
+
+## Active Slice — Governor wiring (operator override)
+
+```text
+Work session status: handoff_ready (Slices A + B SHIPPED end-to-end)
+Closed at: 2026-04-29 20:20:00 -04:00
+Slice A + B result: Governor numeric-limits wiring + per-horizon
+  AccountRiskPlanMap + frontend per-horizon UI shipped end-to-end.
+  Locked Risk Horizon doctrine ("Deployment chooses horizon. Account
+  chooses risk plan. Governor enforces.") fully realized in code:
+  operator can now author per-horizon RiskPlan mappings on the Account
+  Risk Card; Deployment can declare risk_horizon; Governor rejects with
+  account_missing_risk_plan_for_horizon when an explicit horizon has no
+  mapped plan. Two parallel adversarial recursions per slice (sonnet x4
+  total) found 6 BUG/RISK + 8 NIT — all fix-in-slice items shipped.
+  Verification: backend 1476/1476 passing (+81 over pre-slice baseline
+  1395); frontend 379/379 passing across 51 files; tsc clean. Zero
+  remaining BUG-severity findings.
+Doctrine: NEW SAVED ENTITY (account_risk_plan_map) was introduced under
+  implicit operator approval ("Slices. Slices. Get it done!" + locked
+  doctrine doc that explicitly anticipated the entity). Heads-up filed
+  in INBOX_CODEX 2026-04-29 20:20:00.
+Ledger: COORDINATION/LEDGER.md @ 2026-04-29 19:15:00 + 20:15:00 + 20:30:00.
+Leases: all released.
+```
+
+## Previous Active Slice (archived 2026-04-29 19:18:00)
+
+```text
+Work session status: handoff_ready (Slice A complete; Slice B queued)
+Closed at: 2026-04-29 19:18:00 -04:00
+Slice A result: Governor numeric-limits wiring shipped end-to-end with two
+  parallel adversarial recursions (sonnet x2). Zero remaining BUG-severity
+  findings. Three adversarial-fix shipped in-slice (AccountRiskConfig
+  default 5→None; GovernorDecisionTrace.projected_state field added;
+  production composition root wires resolver). Verification: 1433/1433
+  full backend unit suite passing (+38 over baseline 1395).
+Slice B status: queued; gated on Angry Architect approval for new entity
+  AccountRiskPlanMap and TradingHorizon.OTHER doctrine extension. See
+  Operations_Turtle_Shell_Artifacts/GOVERNOR_WIRING_MAP_SLICE_B.md.
+Ledger: COORDINATION/LEDGER.md @ 2026-04-29 19:15:00 -04:00.
+Inbox: COORDINATION/INBOX_CODEX.md @ 2026-04-29 18:42:51 -04:00.
+Leases: all released.
+```
+
+## Previous Active Slice (archived)
+
+```text
+Work session status: in_progress
+Agent role: Claude (Operations Production Readiness) acting under
+  operator override into Codex-owned backend governor + pipeline paths.
+Started at: 2026-04-29 18:42:51 -04:00
+Last heartbeat: 2026-04-29 18:42:51 -04:00
+Expected next checkpoint: GOVERNOR_WIRING_MAP.md doctrine doc + first
+  passing unit test for GovernorPolicyResolver.
+Current phase: Backend doctrine spine — Governor wiring (numeric limits)
+Current task: Wire AccountRiskConfig + RiskPlanConfig into
+  PortfolioGovernor at runtime evaluation time.
+Bounded context: Governor (final internal-policy gate before broker submit)
+Operator override basis: Operator (Nanyel) message
+  "Fix the governor and wire it properly end to end and recurse 2 times
+  with two different agents to verify work. MAP style".
+  Same precedent as 2026-04-29 09:00 short-side override.
+Doctrine notes:
+  - No new saved entity. Both source tables (account_risk_configs,
+    risk_plan_versions) already persist; pure translation/wiring.
+  - GovernorPolicy stays frozen, extra="forbid"; resolver constructs a
+    new instance per evaluation.
+  - Pause/kill paths unchanged — those already work via ControlPlane.
+Coordination:
+  - 4 leases acquired in COORDINATION/LOCKS.md (TTL 2h).
+  - heads-up filed in COORDINATION/INBOX_CODEX.md at 2026-04-29 18:42:51.
+Plan: see Operations_Turtle_Shell_Artifacts/GOVERNOR_WIRING_MAP.md.
+```
 
 ## Inter-Agent Coordination (Read On Every Turn)
 

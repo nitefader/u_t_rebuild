@@ -26,17 +26,17 @@ drawer). It does not add trading, broker submit, or a second runtime root.
 
 ## Executive Briefing
 
-Work session status: hold_to_arm_delete_complete
+Work session status: handoff_ready
 
-Agent role: Codex - Operation Turtle Shell backend doctrine spine
+Agent role: Claude - Slice B Backend (Governor Wiring — AccountRiskPlanMap + horizon rejection rule)
 
-Started at: 2026-04-27 22:28:16 -04:00
+Started at: 2026-04-29 20:00:00 -04:00
 
-Last heartbeat: 2026-04-29 16:34:21 -04:00
+Last heartbeat: 2026-04-29 21:00:00 -04:00
 
-Ended at: 2026-04-29 16:34:21 -04:00
+Ended at: 2026-04-29 21:00:00 -04:00
 
-Expected next checkpoint: Continue operator UI cleanup requests while preserving unrelated dirty Strategy Controls files.
+Completed: All 8 Slice B backend deliverables shipped and verified. Backend test suite: 1475 passed (+42 from 1433 baseline). No blockers.
 
 Operator urgency:
 
@@ -54,15 +54,15 @@ briefing at start, heartbeat, and handoff.
 
 ## Current Phase
 
-Hold-to-arm delete confirmation complete and verified.
+Slice B backend (Governor Wiring) complete. All leases released. Handoff ready for Slice B frontend agent.
 
 ## Current Task
 
-Operator rejected typed bulk-delete confirmation. Deployment and Watchlist destructive list actions now use a two-second press-and-hold verifier with optional notes.
+None — handoff_ready. Slice B backend closed 2026-04-29 21:00:00 -04:00.
 
 ## Current Owner
 
-Codex
+None (Slice B backend leases released)
 
 ## Reviewers
 
@@ -72,6 +72,47 @@ Codex
 - Codex doctrine reviewer
 
 ## Latest Completed Action
+
+Slice B backend — Governor Wiring (AccountRiskPlanMap + horizon rejection rule):
+
+- Started at: 2026-04-29 20:00:00 -04:00
+- Completed verification at: 2026-04-29 21:00:00 -04:00
+- Files:
+  - `backend/app/domain/strategy_controls.py` — Added `TradingHorizon.OTHER = "other"`
+  - `backend/app/runtime/models.py` — Added `DeploymentContext.risk_horizon: TradingHorizon | None`
+  - `backend/app/broker_accounts/risk_plan_map_models.py` (NEW) — `AccountRiskPlanMapEntry`, `AccountRiskPlanMap`, `AccountRiskPlanMapUpdateRequest`
+  - `backend/app/persistence/models.py` — Added `account_risk_plan_map` table + index to `RUNTIME_SCHEMA`
+  - `backend/app/persistence/runtime_store.py` — 4 new methods: `load_account_risk_plan_map`, `save_account_risk_plan_map_entry`, `delete_account_risk_plan_map_entry`, `load_risk_plan_config_for_horizon`; cascade delete on broker account deletion
+  - `backend/app/api/routes/broker_accounts.py` — `GET` and `PUT /api/v1/broker-accounts/{account_id}/risk-plan-map`
+  - `backend/app/governor/models.py` — Added `GovernorPolicy.requires_risk_plan: bool = False`
+  - `backend/app/governor/policy_resolver.py` — Added `enforce_plan_required` param; `_safe_lookup_plan_with_status()` returning `(config, raised)` tuple
+  - `backend/app/governor/service.py` — Added `account_missing_risk_plan_for_horizon` rejection rule
+  - `backend/app/runtime/account_trading_orchestrator.py` — Wired real `load_risk_plan_config_for_horizon` lookup
+  - `backend/app/pipeline/orchestrator.py` — Tracks `_deployment_has_explicit_risk_horizon`; passes `enforce_plan_required` to resolver
+  - `backend/tests/unit/broker_accounts/test_risk_plan_map_persistence.py` (NEW) — 14 tests
+  - `backend/tests/unit/api/test_broker_accounts_routes.py` — +12 tests
+  - `backend/tests/unit/governor/test_policy_resolver.py` — +10 Slice B tests
+  - `backend/tests/unit/governor/test_portfolio_governor.py` — +7 tests
+  - `backend/tests/unit/pipeline/test_runtime_orchestrator.py` — +2 Slice B tests; 2 Slice A tests updated
+  - `backend/tests/unit/api/test_frontend_api_contract.py` — 2 new route entries
+  - `COORDINATION/LEDGER.md` — 3 new ledger entries
+- Scope:
+  - AccountRiskPlanMap saved entity: (account_id, horizon) → risk_plan_version_id with UNIQUE constraint.
+  - TradingHorizon.OTHER added for catch-all horizon strategies.
+  - DeploymentContext.risk_horizon field added (None = fallback to StrategyControls.trading_horizon).
+  - enforce_plan_required architecture: rejection only fires when Deployment explicitly declares risk_horizon, preserving all Slice A behavior.
+  - Graceful degrade (MAP D7): DB lookup failures do NOT set requires_risk_plan to avoid false positives.
+  - Cascade delete: broker account deletion removes all risk_plan_map rows.
+  - min-of-both rule for numeric limits from both AccountRiskConfig and RiskPlanConfig.
+  - Protective exits bypass the missing-plan rejection rule.
+- Verification:
+  - `python -m pytest backend/tests/unit -q` -> **1475 passed** (baseline was 1433, +42).
+  - `python -m pytest backend/tests/unit/api/test_frontend_api_contract.py backend/tests/unit/governor/ backend/tests/unit/broker_accounts/ -q` -> **230 passed**.
+  - All 8 deliverables shipped in final production shape. No temporary paths.
+- Doctrine:
+  - Risk Horizon doctrine locked 2026-04-29: "Deployment chooses horizon. Account chooses risk plan. Governor enforces."
+  - No frontend paths changed. No Screener, Watchlist, SignalPlan, BrokerSync, or order paths changed.
+  - Leases released. LEDGER updated. LOCKS cleared.
 
 Hold-to-arm delete confirmation:
 

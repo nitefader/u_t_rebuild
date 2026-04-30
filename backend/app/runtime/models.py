@@ -7,6 +7,7 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from backend.app.domain._base import utc_now
+from backend.app.domain.strategy_controls import TradingHorizon
 
 
 class RuntimeError(ValueError):
@@ -44,6 +45,7 @@ class DeploymentContext(BaseModel):
     strategy_version: int | None = None
     mode: str = "internal_stream"
     status: RuntimeStatus = RuntimeStatus.READY
+    risk_horizon: TradingHorizon | None = None
     created_at: datetime = Field(default_factory=utc_now)
 
     @model_validator(mode="before")

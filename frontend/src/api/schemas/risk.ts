@@ -8,6 +8,55 @@ import { z } from "zod";
  * `passthrough` so additive backend fields do not break the UI.
  */
 
+// ---------------------------------------------------------------------------
+// Risk Horizon vocabulary (Slice B)
+// ---------------------------------------------------------------------------
+
+export const TradingHorizonSchema = z.enum([
+  "scalping",
+  "intraday",
+  "swing",
+  "position",
+  "other",
+]);
+export type TradingHorizon = z.infer<typeof TradingHorizonSchema>;
+
+export const TRADING_HORIZON_LABELS: Record<TradingHorizon, string> = {
+  scalping: "Scalping",
+  intraday: "Intraday",
+  swing: "Swing",
+  position: "Position",
+  other: "Other",
+};
+
+// ---------------------------------------------------------------------------
+// AccountRiskPlanMap schemas (Slice B)
+// ---------------------------------------------------------------------------
+
+export const AccountRiskPlanMapEntrySchema = z
+  .object({
+    account_id: z.string(),
+    horizon: TradingHorizonSchema,
+    risk_plan_version_id: z.string(),
+    updated_at: z.string(),
+  })
+  .passthrough();
+export type AccountRiskPlanMapEntry = z.infer<typeof AccountRiskPlanMapEntrySchema>;
+
+export const AccountRiskPlanMapSchema = z
+  .object({
+    account_id: z.string(),
+    entries: z.array(AccountRiskPlanMapEntrySchema).default([]),
+  })
+  .passthrough();
+export type AccountRiskPlanMap = z.infer<typeof AccountRiskPlanMapSchema>;
+
+export const AccountRiskPlanMapUpdateRequestSchema = z.object({
+  horizon: TradingHorizonSchema,
+  risk_plan_version_id: z.string().uuid().nullable(),
+});
+export type AccountRiskPlanMapUpdateRequest = z.infer<typeof AccountRiskPlanMapUpdateRequestSchema>;
+
 export const PositionSizingMethodSchema = z.enum([
   "fixed_shares",
   "fixed_dollar",

@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
+from datetime import datetime
 from pathlib import Path
 from typing import Any, TypeVar
 from uuid import UUID, uuid4
+
+_LOGGER = logging.getLogger(__name__)
 
 from pydantic import BaseModel
 
@@ -17,6 +21,11 @@ from backend.app.brokers import (
     BrokerSyncState,
 )
 from backend.app.broker_accounts.models import AccountRestrictions, AccountRiskConfig, BrokerAccount
+from backend.app.broker_accounts.risk_plan_map_models import (
+    AccountRiskPlanMap,
+    AccountRiskPlanMapEntry,
+)
+from backend.app.domain.strategy_controls import TradingHorizon
 from backend.app.control_plane.service import ControlPlaneState
 from backend.app.domain import (
     BacktestRun,
@@ -601,6 +610,7 @@ class SQLiteRuntimeStore:
             connection.execute("DELETE FROM broker_accounts WHERE account_id = ?", (str(account_id),))
             connection.execute("DELETE FROM account_risk_configs WHERE account_id = ?", (str(account_id),))
             connection.execute("DELETE FROM account_restrictions WHERE account_id = ?", (str(account_id),))
+            connection.execute("DELETE FROM account_risk_plan_map WHERE account_id = ?", (str(account_id),))
             connection.execute("DELETE FROM broker_account_snapshots WHERE account_id = ?", (str(account_id),))
             connection.execute("DELETE FROM broker_sync_freshness WHERE account_id = ?", (str(account_id),))
             connection.execute("DELETE FROM broker_position_snapshots WHERE account_id = ?", (str(account_id),))
@@ -664,6 +674,118 @@ class SQLiteRuntimeStore:
         if row is None:
             raise KeyError(f"unknown account restrictions: {account_id}")
         return _load_model(AccountRestrictions, row["payload"])
+
+    # ------------------------------------------------------------------
+    # Account risk-plan map (per-horizon RiskPlan assignment)
+    # Slice B: AccountRiskPlanMap entity — one row per (account_id, horizon)
+    # ------------------------------------------------------------------
+
+    def load_account_risk_plan_map(self, account_id: UUID) -> AccountRiskPlanMap:
+        """Return the full horizon-to-plan map for an Account.
+
+        Never raises KeyError; returns empty entries when no rows exist.
+        Slice B adversarial fix B-RISK-2: defensive enum coercion. A row whose
+        ``horizon`` value is not in the current ``TradingHorizon`` enum (e.g.,
+        an upgrade-path scenario where the DB carries a horizon a future enum
+        added but this binary doesn't recognize) is skipped with a warning so
+        ONE corrupt row cannot crash the entire account map read.
+        """
+        rows = self._fetch_all(
+            "SELECT account_id, horizon, risk_plan_version_id, updated_at FROM account_risk_plan_map WHERE account_id = ? ORDER BY horizon",
+            (str(account_id),),
+        )
+        entries: list[AccountRiskPlanMapEntry] = []
+        for row in rows:
+            try:
+                horizon = TradingHorizon(row["horizon"])
+            except ValueError:
+                _LOGGER.warning(
+                    "skipping account_risk_plan_map row with unknown horizon %r for account %s",
+                    row["horizon"],
+                    account_id,
+                )
+                continue
+            entries.append(
+                AccountRiskPlanMapEntry(
+                    account_id=UUID(row["account_id"]),
+                    horizon=horizon,
+                    risk_plan_version_id=UUID(row["risk_plan_version_id"]),
+                    updated_at=datetime.fromisoformat(str(row["updated_at"])),
+                )
+            )
+        return AccountRiskPlanMap(account_id=account_id, entries=tuple(entries))
+
+    def save_account_risk_plan_map_entry(
+        self,
+        account_id: UUID,
+        horizon: TradingHorizon,
+        risk_plan_version_id: UUID,
+    ) -> AccountRiskPlanMapEntry:
+        """Upsert one (account_id, horizon) → risk_plan_version_id row."""
+        now = utc_now()
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO account_risk_plan_map
+                    (account_id, horizon, risk_plan_version_id, updated_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(account_id, horizon) DO UPDATE SET
+                    risk_plan_version_id = excluded.risk_plan_version_id,
+                    updated_at = excluded.updated_at
+                """,
+                (str(account_id), horizon.value, str(risk_plan_version_id), now.isoformat()),
+            )
+        return AccountRiskPlanMapEntry(
+            account_id=account_id,
+            horizon=horizon,
+            risk_plan_version_id=risk_plan_version_id,
+            updated_at=now,
+        )
+
+    def delete_account_risk_plan_map_entry(self, account_id: UUID, horizon: TradingHorizon) -> None:
+        """Remove the mapping for a specific horizon. No-op if no row exists."""
+        with self._connect() as connection:
+            connection.execute(
+                "DELETE FROM account_risk_plan_map WHERE account_id = ? AND horizon = ?",
+                (str(account_id), horizon.value),
+            )
+
+    def load_risk_plan_config_for_horizon(
+        self, account_id: UUID, horizon: TradingHorizon
+    ) -> "RiskPlanConfig | None":
+        """Resolve the RiskPlanConfig for an Account's mapped horizon.
+
+        Joins account_risk_plan_map to risk_plan_versions via
+        risk_plan_version_id. Returns None when:
+        - no map row exists for (account_id, horizon), OR
+        - the mapped RiskPlanVersion no longer exists in the DB, OR
+        - the mapped RiskPlanVersion is DEPRECATED (Slice B fix B-RISK-3:
+          archive/deprecate must invalidate the map reference; otherwise
+          retired plans silently keep enforcing).
+        Never raises.
+        """
+        from backend.app.domain.risk_plan import (
+            RiskPlanConfig,
+            RiskPlanVersion,
+            RiskPlanVersionStatus,
+        )
+
+        row = self._fetch_one(
+            """
+            SELECT rpv.payload
+            FROM account_risk_plan_map arpm
+            JOIN risk_plan_versions rpv
+                ON arpm.risk_plan_version_id = rpv.risk_plan_version_id
+            WHERE arpm.account_id = ? AND arpm.horizon = ?
+            """,
+            (str(account_id), horizon.value),
+        )
+        if row is None:
+            return None
+        version = _load_model(RiskPlanVersion, row["payload"])
+        if version.status == RiskPlanVersionStatus.DEPRECATED:
+            return None
+        return version.config
 
     def save_broker_account_snapshot(self, snapshot: BrokerAccountSnapshot) -> BrokerAccountSnapshot:
         with self._connect() as connection:

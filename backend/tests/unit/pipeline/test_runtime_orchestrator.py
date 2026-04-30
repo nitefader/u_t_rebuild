@@ -36,6 +36,7 @@ from backend.app.domain import (
 )
 from backend.app.domain.risk_profile import PositionSizingMethod
 from backend.app.domain.strategy import SignalRule
+from backend.app.domain.strategy_controls import TradingHorizon
 from backend.app.features import IncrementalFeatureEngine, NormalizedBar, ResolvedDeploymentComponents
 from backend.app.governor import BrokerSyncFreshness, GovernorPolicy, PortfolioGovernor
 from backend.app.orders import InternalOrderIntent, InternalOrderStatus, OrderManager
@@ -285,9 +286,12 @@ class CountingGovernor(PortfolioGovernor):
         super().__init__()
         self.evaluate_calls = 0
 
-    def evaluate(self, request):  # type: ignore[no-untyped-def]
+    def evaluate(self, request, **kwargs):  # type: ignore[no-untyped-def]
+        # Slice A: accept and forward **kwargs so this subclass stays
+        # compatible if a future test wires a resolver alongside it
+        # (the resolver passes policy_override=...).
         self.evaluate_calls += 1
-        return super().evaluate(request)
+        return super().evaluate(request, **kwargs)
 
 
 def _protective_signal_plan(components: ResolvedDeploymentComponents) -> SignalPlan:
@@ -1046,3 +1050,321 @@ def test_stream_event_routes_through_orchestrator_router_into_trade_ledger() -> 
     assert len(trades) == 1
     assert trades[0].broker_execution_id == "exec-1"
     assert pipeline.broker_sync_service.current_sync_state(ACCOUNT_ID).is_stale is False
+
+
+# ---------------------------------------------------------------------------
+# Slice A: GovernorPolicyResolver wiring
+# Doctrine: Operations_Turtle_Shell_Artifacts/GOVERNOR_WIRING_MAP.md §G-3.
+# Confirms that AccountRiskConfig + per-horizon RiskPlanConfig actually gate
+# orders at the orchestrator's three Governor call sites, instead of the
+# silent-no-op behavior that shipped before.
+# ---------------------------------------------------------------------------
+
+
+def _make_account_config(**overrides):
+    from datetime import datetime as _dt, timezone as _tz
+    from backend.app.broker_accounts.models import AccountRiskConfig
+    base = {
+        "account_id": ACCOUNT_ID,
+        "max_open_positions": None,
+        "risk_per_trade_pct": 1.0,
+        "sizing_method": "risk_percent_equity",
+        "updated_at": _dt(2026, 4, 29, 18, 0, tzinfo=_tz.utc),
+    }
+    base.update(overrides)
+    return AccountRiskConfig(**base)
+
+
+def _make_plan_config(**overrides):
+    from backend.app.domain.risk_plan import RiskPlanConfig, RiskPlanSizingMethod
+    base = {
+        "sizing_method": RiskPlanSizingMethod.RISK_PERCENT,
+        "risk_per_trade_pct": 1.0,
+    }
+    base.update(overrides)
+    return RiskPlanConfig(**base)
+
+
+def _resolver_for(account_config=None, plan_config=None):
+    from backend.app.governor import GovernorPolicyResolver
+    return GovernorPolicyResolver(
+        get_account_risk_config=lambda _aid: account_config,
+        get_risk_plan_config_for_horizon=lambda _aid, _h: plan_config,
+    )
+
+
+def _portfolio_with_one_open_position():
+    # Seed a single open position so max_open_positions=1 trips on the
+    # NEXT entry signal. AccountRiskConfig requires limits > 0 (no zero
+    # caps allowed), so we engineer the boundary by holding one position.
+    from uuid import uuid4 as _uuid4
+    from backend.app.governor import PortfolioSnapshot, PositionSummary
+    return PortfolioSnapshot(
+        equity=100_000,
+        positions=(
+            PositionSummary(
+                account_id=ACCOUNT_ID,
+                deployment_id=DEPLOYMENT_ID,
+                program_id=_uuid4(),
+                symbol="AAPL",
+                quantity=10,
+                market_value=1500,
+                open_risk=50,
+            ),
+        ),
+    )
+
+
+def _orchestrator_with_resolver(*, resolver, components=None, broker_adapter=None, portfolio_snapshot=None):
+    resolved = components or _components()
+    return RuntimeOrchestrator(
+        account_id=ACCOUNT_ID,
+        deployment=_deployment(resolved),
+        components=resolved,
+        broker_adapter=broker_adapter,
+        governor_policy_resolver=resolver,
+        portfolio_snapshot=portfolio_snapshot,
+    )
+
+
+def test_resolver_off_preserves_legacy_behavior() -> None:
+    # No resolver wired → today's behavior (persisted GovernorPolicy is the
+    # only policy). max_open_positions stays None on the persisted policy,
+    # so the entry is approved.
+    pipeline = _orchestrator()
+    result = pipeline.process_bar(_bar())
+    assert result.governor_decisions[0].approved is True
+
+
+def test_resolver_account_max_open_positions_blocks_entry() -> None:
+    # Operator sets AccountRiskConfig.max_open_positions=1 and the Account
+    # already has one open position. Before this slice that cap did nothing;
+    # after this slice the next entry signal must be blocked.
+    # Slice B: also provide a plan_config so the missing-plan rule does not
+    # fire before the positions-cap rule. The intent here is to test the
+    # positions cap, not the missing-plan rejection.
+    resolver = _resolver_for(
+        account_config=_make_account_config(max_open_positions=1),
+        plan_config=_make_plan_config(),
+    )
+    pipeline = _orchestrator_with_resolver(
+        resolver=resolver,
+        portfolio_snapshot=_portfolio_with_one_open_position(),
+    )
+    result = pipeline.process_bar(_bar())
+    assert result.governor_decisions[0].approved is False
+    assert result.governor_decisions[0].reason == "max_open_positions_exceeded"
+    assert result.orders == ()
+
+
+def test_resolver_plan_max_open_positions_blocks_entry() -> None:
+    # RiskPlanConfig contributes max_open_positions=1; one existing open
+    # position trips the cap on the next entry.
+    resolver = _resolver_for(plan_config=_make_plan_config(max_open_positions=1))
+    pipeline = _orchestrator_with_resolver(
+        resolver=resolver,
+        portfolio_snapshot=_portfolio_with_one_open_position(),
+    )
+    result = pipeline.process_bar(_bar())
+    assert result.governor_decisions[0].approved is False
+    assert result.governor_decisions[0].rule_id == "max_open_positions"
+
+
+def test_resolver_min_of_both_account_tighter() -> None:
+    # AccountRiskConfig caps at 1, RiskPlanConfig caps at 5 → account wins.
+    resolver = _resolver_for(
+        account_config=_make_account_config(max_open_positions=1),
+        plan_config=_make_plan_config(max_open_positions=5),
+    )
+    pipeline = _orchestrator_with_resolver(
+        resolver=resolver,
+        portfolio_snapshot=_portfolio_with_one_open_position(),
+    )
+    result = pipeline.process_bar(_bar())
+    assert result.governor_decisions[0].approved is False
+
+
+def test_resolver_min_of_both_plan_tighter() -> None:
+    # AccountRiskConfig caps at 5, RiskPlanConfig caps at 1 → plan wins.
+    resolver = _resolver_for(
+        account_config=_make_account_config(max_open_positions=5),
+        plan_config=_make_plan_config(max_open_positions=1),
+    )
+    pipeline = _orchestrator_with_resolver(
+        resolver=resolver,
+        portfolio_snapshot=_portfolio_with_one_open_position(),
+    )
+    result = pipeline.process_bar(_bar())
+    assert result.governor_decisions[0].approved is False
+
+
+def test_resolver_off_means_per_account_limits_have_no_effect() -> None:
+    # Regression guard for the silent-no-op state we just fixed: without a
+    # resolver, even an aggressive AccountRiskConfig has zero effect — that
+    # is what shipped before this slice. We're not removing that path; we're
+    # adding the resolver as the way to get enforcement.
+    pipeline = _orchestrator()  # no resolver
+    result = pipeline.process_bar(_bar())
+    # Order goes through because persisted GovernorPolicy.max_open_positions
+    # is None — operator AccountRiskConfig is not consulted.
+    assert result.governor_decisions[0].approved is True
+
+
+def test_resolver_resolved_policy_does_not_mutate_persisted_floor() -> None:
+    # The orchestrator must not rewrite self._governor.policy when applying
+    # an override. Slice-A invariant.
+    resolver = _resolver_for(account_config=_make_account_config(max_open_positions=1))
+    pipeline = _orchestrator_with_resolver(
+        resolver=resolver,
+        portfolio_snapshot=_portfolio_with_one_open_position(),
+    )
+    floor_before = pipeline._governor.policy
+    pipeline.process_bar(_bar())
+    assert pipeline._governor.policy is floor_before
+    assert pipeline._governor.policy.max_open_positions is None
+
+
+def test_resolver_handles_multi_account_fanout_independently() -> None:
+    # Slice A finding #5: prove the resolver's per-(account, horizon) lookup
+    # actually fires once per account in a multi-account deployment, and that
+    # the results don't leak between iterations. We capture every account_id
+    # the lookup callable receives and verify both got called.
+    captured_accounts: list[UUID] = []
+
+    def _account_lookup(account_id):
+        captured_accounts.append(account_id)
+        return _make_account_config(max_open_positions=10)
+
+    from backend.app.governor import GovernorPolicyResolver
+    # Slice B: provide a plan_config so requires_risk_plan is False; this
+    # test is specifically about multi-account fanout capturing, not the
+    # missing-plan rejection.
+    resolver = GovernorPolicyResolver(
+        get_account_risk_config=_account_lookup,
+        get_risk_plan_config_for_horizon=lambda _aid, _h: _make_plan_config(),
+    )
+    resolved = _components()
+    pipeline = RuntimeOrchestrator(
+        account_id=ACCOUNT_ID,
+        account_ids=(ACCOUNT_ID, OTHER_ACCOUNT_ID),
+        deployment=_deployment(resolved),
+        components=resolved,
+        governor_policy_resolver=resolver,
+    )
+    result = pipeline.process_bar(_bar())
+    # Two governor decisions, one per account, both approved (cap is 10).
+    assert len(result.governor_decisions) == 2
+    assert all(d.approved for d in result.governor_decisions)
+    # Lookup fired for BOTH accounts — no caching/leak.
+    assert ACCOUNT_ID in captured_accounts
+    assert OTHER_ACCOUNT_ID in captured_accounts
+
+
+def test_resolver_traces_carry_projected_state() -> None:
+    # Slice A finding #8: the GovernorDecisionTrace must carry the
+    # projected_state so the operator sees the gate's numeric snapshot.
+    # Tests that the orchestrator forwards it from GovernorDecision into
+    # the persisted trace.
+    resolver = _resolver_for(account_config=_make_account_config(max_open_positions=5))
+    pipeline = _orchestrator_with_resolver(resolver=resolver)
+    result = pipeline.process_bar(_bar())
+    trace = result.account_evaluations[0].governor_decision
+    assert trace is not None
+    assert trace.projected_state is not None
+    # The slot count must reflect the resolver's policy (5), not the floor's None.
+    assert trace.projected_state["new_open_slots_remaining"] == 4  # 5 - 1 projected
+
+
+# ---------------------------------------------------------------------------
+# Slice B: account_missing_risk_plan_for_horizon end-to-end test
+# Wire a resolver whose plan lookup returns None for ALL inputs. Confirm the
+# entry signal is rejected with rule_id="account_missing_risk_plan_for_horizon".
+# ---------------------------------------------------------------------------
+
+
+def test_resolver_missing_plan_rejects_entry_signal() -> None:
+    """End-to-end: resolver with plan_lookup returning None triggers rejection.
+
+    When the Deployment has an explicit risk_horizon AND the Account has no
+    RiskPlan mapped for that horizon, the GovernorPolicyResolver sets
+    requires_risk_plan=True, and the Governor must reject the entry with
+    rule_id="account_missing_risk_plan_for_horizon".
+    """
+    from backend.app.governor import GovernorPolicyResolver
+
+    resolver = GovernorPolicyResolver(
+        get_account_risk_config=lambda _aid: None,  # no AccountRiskConfig
+        get_risk_plan_config_for_horizon=lambda _aid, _h: None,  # no plan mapped
+    )
+    # Use a deployment with an explicit risk_horizon so enforce_plan_required=True.
+    resolved = _components()
+    deployment = DeploymentContext(
+        deployment_id=DEPLOYMENT_ID,
+        strategy_version_id=resolved.strategy.id,
+        strategy_version=resolved.strategy.version,
+        risk_horizon=TradingHorizon.INTRADAY,  # explicit horizon declared
+    )
+    pipeline = RuntimeOrchestrator(
+        account_id=ACCOUNT_ID,
+        deployment=deployment,
+        components=resolved,
+        governor_policy_resolver=resolver,
+    )
+
+    result = pipeline.process_bar(_bar())
+
+    # Signal plan is created (risk horizon applies after signal generation).
+    assert len(result.signal_plans) == 1
+    # Governor must reject the entry.
+    assert len(result.governor_decisions) == 1
+    assert result.governor_decisions[0].approved is False
+    assert result.governor_decisions[0].rule_id == "account_missing_risk_plan_for_horizon"
+    # No order should be created.
+    assert result.orders == ()
+
+
+def test_resolver_missing_plan_does_not_block_protective_exit() -> None:
+    """Even with requires_risk_plan=True, protective exits must get through."""
+    from backend.app.governor import GovernorPolicyResolver
+
+    components = _components()
+    position_lineage_id = uuid4()
+    opening_signal_plan_id = uuid4()
+
+    resolver = GovernorPolicyResolver(
+        get_account_risk_config=lambda _aid: None,
+        get_risk_plan_config_for_horizon=lambda _aid, _h: None,
+    )
+    # Deployment with explicit risk_horizon to activate the doctrine check.
+    deployment = DeploymentContext(
+        deployment_id=DEPLOYMENT_ID,
+        strategy_version_id=components.strategy.id,
+        strategy_version=components.strategy.version,
+        risk_horizon=TradingHorizon.SWING,  # explicit horizon
+    )
+    pipeline = RuntimeOrchestrator(
+        account_id=ACCOUNT_ID,
+        account_ids=(ACCOUNT_ID,),
+        deployment=deployment,
+        components=components,
+        governor_policy_resolver=resolver,
+        broker_adapter=FakeBrokerAdapter([BrokerOrderStatus.FILLED]),
+        position_reader=PositionReader(
+            (
+                _position(
+                    strategy_id=components.strategy.strategy_id,
+                    opening_signal_plan_id=opening_signal_plan_id,
+                    position_lineage_id=position_lineage_id,
+                ),
+            )
+        ),
+    )
+
+    result = pipeline.process_protective_signal_plan(
+        signal_plan=_protective_signal_plan(components),
+        order_intent=InternalOrderIntent.STOP_LOSS,
+    )
+
+    assert result.governor_decisions[0].approved is True
+    assert result.governor_decisions[0].reason == "protective_exit_allowed"
+    assert len(result.orders) == 1

@@ -32,6 +32,7 @@ class TradingHorizon(StrEnum):
     INTRADAY = "intraday"
     SWING = "swing"
     POSITION = "position"
+    OTHER = "other"
 
 
 class AllowedDirections(StrEnum):

@@ -9,6 +9,7 @@ import { StrategiesApi } from "@/api/strategies";
 import { WatchlistsApi } from "@/api/watchlists";
 import type { Deployment } from "@/api/schemas/deployments";
 import type { Strategy, StrategyVersionRecord } from "@/api/schemas/strategies";
+import { TRADING_HORIZON_LABELS, type TradingHorizon } from "@/api/schemas/risk";
 import { Banner } from "@/components/ui/Banner";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
@@ -465,6 +466,7 @@ function CreateDeploymentDrawer({
   const [strategyVersionId, setStrategyVersionId] = useState<string>("");
   const [watchlistIds, setWatchlistIds] = useState<string[]>([]);
   const [accountIds, setAccountIds] = useState<string[]>([]);
+  const [riskHorizon, setRiskHorizon] = useState<TradingHorizon | "">("");
   const [error, setError] = useState<string | null>(null);
 
   const versions = useQuery({
@@ -483,6 +485,7 @@ function CreateDeploymentDrawer({
     setStrategyVersionId("");
     setWatchlistIds([]);
     setAccountIds([]);
+    setRiskHorizon("");
     setError(null);
   }
 
@@ -495,6 +498,7 @@ function CreateDeploymentDrawer({
         watchlist_ids: watchlistIds,
         subscribed_account_ids: accountIds,
         runtime_overrides: {},
+        risk_horizon: riskHorizon !== "" ? riskHorizon : null,
       }),
     onSuccess: () => {
       reset();
@@ -562,6 +566,32 @@ function CreateDeploymentDrawer({
               severity="warning"
               title="No Strategy versions"
               message="Create a Strategy version before attaching this Deployment."
+            />
+          ) : null}
+
+          <Select
+            label="Risk horizon"
+            value={riskHorizon}
+            onChange={(e) => setRiskHorizon(e.target.value as TradingHorizon | "")}
+            hint="Optional — if left blank, falls back to the Strategy's trading horizon. Deployment chooses horizon; Account chooses RiskPlan; Governor enforces."
+          >
+            <option value="">— use Strategy default —</option>
+            {(Object.entries(TRADING_HORIZON_LABELS) as [TradingHorizon, string][]).map(
+              ([value, label]) => (
+                <option key={value} value={value}>
+                  {label}
+                </option>
+              ),
+            )}
+          </Select>
+          {/* Slice B fix B-RISK-1: when no explicit horizon is declared, the
+              Governor will NOT fire the missing-plan rejection rule. Surface
+              this so the operator knows enforcement is opt-in. */}
+          {riskHorizon === "" ? (
+            <Banner
+              severity="warning"
+              title="Per-horizon RiskPlan enforcement is OFF"
+              message="With no explicit risk horizon, the Governor will not require subscribed Accounts to map a RiskPlan for this Deployment. Only AccountRiskConfig limits and the Strategy default horizon's plan (if any) apply."
             />
           ) : null}
 

@@ -73,6 +73,15 @@ CREATE TABLE IF NOT EXISTS account_restrictions (
     updated_at TEXT NOT NULL,
     payload TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS account_risk_plan_map (
+    account_id TEXT NOT NULL,
+    horizon TEXT NOT NULL,
+    risk_plan_version_id TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (account_id, horizon)
+);
+CREATE INDEX IF NOT EXISTS ix_account_risk_plan_map_account_id
+    ON account_risk_plan_map(account_id);
 CREATE TABLE IF NOT EXISTS risk_plans (
     risk_plan_id TEXT PRIMARY KEY,
     name TEXT NOT NULL,

@@ -3,6 +3,33 @@
 Messages from Codex (Operation Turtle Shell) to Claude.
 Newest at top. Schema and rules: `COORDINATION/PROTOCOL.md`.
 
+### 2026-04-29 21:00:00 -04:00 - heads-up - Slice B backend complete; frontend routes live
+
+- from: Claude (Slice B Backend agent)
+- to: Claude (Slice B Frontend agent)
+- ref: `backend/app/api/routes/broker_accounts.py`, `backend/app/broker_accounts/risk_plan_map_models.py`, `backend/app/domain/strategy_controls.py`, `backend/app/governor/models.py`
+- needs: awareness — backend contract is final; frontend can now wire the per-horizon RiskPlan dropdowns
+- expires: 2026-05-06 21:00:00 -04:00
+
+Slice B backend is fully shipped and verified (1475 backend unit tests pass, +42 from baseline). All 8 deliverables are in final production shape. Backend leases released. Summary of what is live and what the frontend agent needs to know:
+
+**New API contract (final — do not mutate paths):**
+
+- `GET /api/v1/broker-accounts/{account_id}/risk-plan-map` — returns `AccountRiskPlanMap` with `account_id` (UUID string) and `entries` array of `{account_id, horizon, risk_plan_version_id, updated_at}`.
+- `PUT /api/v1/broker-accounts/{account_id}/risk-plan-map` — body `{horizon: TradingHorizon, risk_plan_version_id: UUID | null}`. Passing `null` deletes the mapping for that horizon; passing a UUID upserts. Returns updated `AccountRiskPlanMap`.
+
+**TradingHorizon now has 5 values** (was 4): `scalping`, `intraday`, `swing`, `position`, **`other`**. Frontend schemas, dropdowns, and display labels must include `other`.
+
+**GovernorPolicy.requires_risk_plan** is now a real field (`bool`, default `false`). The Governor rejects entry signals under rule `account_missing_risk_plan_for_horizon` when `requires_risk_plan=true`. This only fires when the Deployment has an explicit `risk_horizon` set AND the Account has no mapped RiskPlan for that horizon.
+
+**Frontend Slice B scope (not yet started):**
+- Per-horizon RiskPlan dropdown on the Risk Card Panel — one dropdown per `TradingHorizon` value showing which `RiskPlanVersion` is mapped for this account/horizon.
+- GET map on load; PUT on operator change.
+- Optional: Deployment `risk_horizon` picker in the Deployments detail view.
+- Optional: resolved-plan visibility — show which plan was resolved for a given evaluation.
+
+No `COORDINATION/LOCKS.md` leases are held for the frontend paths. Frontend agent may acquire leases for `frontend/src/routes/RiskCardPanel.tsx`, `frontend/src/api/schemas/risk.ts`, `frontend/src/components/risk_plans/`, and `frontend/src/routes/Deployments.tsx` when ready.
+
 ---
 
 ### 2026-04-29 16:34:21 -04:00 - heads-up - Hold-to-arm delete confirmation shipped

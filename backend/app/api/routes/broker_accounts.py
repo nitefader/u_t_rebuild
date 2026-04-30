@@ -29,6 +29,10 @@ from backend.app.broker_accounts.models import (
     ReplaceBrokerAccountCredentialsRequest,
     UpdateBrokerAccountDetailsRequest,
 )
+from backend.app.broker_accounts.risk_plan_map_models import (
+    AccountRiskPlanMap,
+    AccountRiskPlanMapUpdateRequest,
+)
 from backend.app.broker_accounts.service import BrokerAccountCreationError
 from backend.app.domain._base import utc_now
 
@@ -255,6 +259,55 @@ def put_account_restrictions(
         **request.model_dump(),
     )
     return store.save_account_restrictions(restrictions)
+
+
+@router.get("/{account_id}/risk-plan-map", response_model=AccountRiskPlanMap)
+def get_account_risk_plan_map(
+    account_id: UUID,
+    service: BrokerAccountServiceDependency,
+) -> AccountRiskPlanMap:
+    """Return the Account's full horizon-to-RiskPlan mapping.
+
+    Returns an empty ``entries`` tuple when no horizons are mapped; never
+    raises 404 for a missing map (only for a missing Account).
+    """
+    store = _runtime_store(service)
+    _load_account_or_404(store, account_id)
+    return store.load_account_risk_plan_map(account_id)
+
+
+@router.put("/{account_id}/risk-plan-map", response_model=AccountRiskPlanMap)
+def put_account_risk_plan_map(
+    account_id: UUID,
+    request: AccountRiskPlanMapUpdateRequest,
+    service: BrokerAccountServiceDependency,
+) -> AccountRiskPlanMap:
+    """Upsert or delete one row in the Account's horizon-to-RiskPlan mapping.
+
+    ``risk_plan_version_id=None`` clears the mapping for the given horizon.
+    Any non-None UUID upserts (inserts or replaces) the mapping.
+
+    Returns the full updated map for the Account after the operation.
+    """
+    store = _runtime_store(service)
+    _load_account_or_404(store, account_id)
+    if request.risk_plan_version_id is None:
+        store.delete_account_risk_plan_map_entry(account_id, request.horizon)
+    else:
+        # Slice B adversarial fix B-BUG-1: validate the version exists in
+        # risk_plan_versions before writing. SQLite's ON DELETE CASCADE is
+        # not declared on this table; without this check the operator can
+        # write a dangling reference and the Governor will silently reject
+        # every entry signal for this Account-horizon pair forever.
+        try:
+            store.load_risk_plan_version(request.risk_plan_version_id)
+        except KeyError as exc:
+            raise HTTPException(
+                status_code=400,
+                detail=f"unknown risk_plan_version_id: {request.risk_plan_version_id}",
+            ) from exc
+        store.save_account_risk_plan_map_entry(account_id, request.horizon, request.risk_plan_version_id)
+    return store.load_account_risk_plan_map(account_id)
 
 
 def _runtime_store(service: Any) -> Any:

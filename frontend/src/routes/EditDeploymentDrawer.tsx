@@ -5,6 +5,7 @@ import { AccountsApi } from "@/api/accounts";
 import { DeploymentsApi } from "@/api/deployments";
 import { WatchlistsApi } from "@/api/watchlists";
 import type { Deployment } from "@/api/schemas/deployments";
+import { TRADING_HORIZON_LABELS, type TradingHorizon } from "@/api/schemas/risk";
 import { Banner } from "@/components/ui/Banner";
 import { Button } from "@/components/ui/Button";
 import {
@@ -16,6 +17,7 @@ import {
   DrawerHeader,
   DrawerTitle,
 } from "@/components/ui/Drawer";
+import { Select } from "@/components/ui/Select";
 import { StatusBadge } from "@/components/badges/StatusBadge";
 import { TextField } from "@/components/ui/TextField";
 
@@ -36,6 +38,9 @@ export function EditDeploymentDrawer({
   const [description, setDescription] = useState(deployment.description ?? "");
   const [watchlistIds, setWatchlistIds] = useState<string[]>([...deployment.watchlist_ids]);
   const [accountIds, setAccountIds] = useState<string[]>([...deployment.subscribed_account_ids]);
+  const [riskHorizon, setRiskHorizon] = useState<TradingHorizon | "">(
+    deployment.risk_horizon ?? "",
+  );
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -44,6 +49,7 @@ export function EditDeploymentDrawer({
     setDescription(deployment.description ?? "");
     setWatchlistIds([...deployment.watchlist_ids]);
     setAccountIds([...deployment.subscribed_account_ids]);
+    setRiskHorizon(deployment.risk_horizon ?? "");
     setError(null);
   }, [open, deployment]);
 
@@ -58,6 +64,7 @@ export function EditDeploymentDrawer({
         watchlist_ids: watchlistIds,
         subscribed_account_ids: accountIds,
         runtime_overrides: deployment.runtime_overrides,
+        risk_horizon: riskHorizon !== "" ? riskHorizon : null,
       }),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ["deployments", "list"] });
@@ -108,6 +115,34 @@ export function EditDeploymentDrawer({
             onChange={(e) => setDescription(e.target.value)}
             disabled={!editable}
           />
+
+          <Select
+            label="Risk horizon"
+            value={riskHorizon}
+            onChange={(e) => setRiskHorizon(e.target.value as TradingHorizon | "")}
+            disabled={!editable}
+            hint="Determines which per-horizon RiskPlan each Account uses. Deployment chooses horizon; Account chooses RiskPlan; Governor enforces."
+          >
+            <option value="">— use Strategy default —</option>
+            {(Object.entries(TRADING_HORIZON_LABELS) as [TradingHorizon, string][]).map(
+              ([value, label]) => (
+                <option key={value} value={value}>
+                  {label}
+                </option>
+              ),
+            )}
+          </Select>
+          {/* Slice B fix B-RISK-1: when no explicit horizon is declared, the
+              Governor does NOT fire the missing-plan rejection rule (it only
+              activates on explicit horizons). Surface this so the operator
+              knows enforcement is opt-in. */}
+          {riskHorizon === "" && editable ? (
+            <Banner
+              severity="warning"
+              title="Per-horizon RiskPlan enforcement is OFF"
+              message="With no explicit risk horizon, the Governor will not require subscribed Accounts to map a RiskPlan for this Deployment. Only AccountRiskConfig limits and the Strategy default horizon's plan (if any) apply."
+            />
+          ) : null}
 
           <div>
             <div className="mb-1 text-xs text-fg-muted">Watchlists</div>

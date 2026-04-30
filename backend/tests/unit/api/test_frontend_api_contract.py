@@ -197,6 +197,9 @@ def test_current_frontend_http_api_contract_is_registered() -> None:
         ("POST", "/api/v1/risk-plans/ai-draft"),
         ("GET", "/api/v1/accounts/{account_id}/risk-plan"),
         ("PUT", "/api/v1/accounts/{account_id}/risk-plan"),
+        # Slice B: per-horizon AccountRiskPlanMap routes
+        ("GET", "/api/v1/broker-accounts/{account_id}/risk-plan-map"),
+        ("PUT", "/api/v1/broker-accounts/{account_id}/risk-plan-map"),
     }
 
     registered = _registered_http_routes()

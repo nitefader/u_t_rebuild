@@ -239,6 +239,14 @@ class GovernorDecisionTrace(DomainSchema):
     reasons: tuple[str, ...] = ()
     violations: tuple[str, ...] = ()
     warnings: tuple[str, ...] = ()
+    # Slice A: snapshot of the policy state that produced this decision —
+    # projected open positions, gross/net exposure pct, slots remaining,
+    # symbol concentration pct, broker_sync_stale flag. Populated from the
+    # GovernorDecision.projected_state dict so the operator-visible trace
+    # carries the same numbers the gate decided on, not a re-computed view.
+    # Slice B will add resolved_risk_plan_id / resolved_risk_plan_version_id
+    # keys to this same dict so the operator can see WHICH plan ran.
+    projected_state: dict[str, object] | None = None
     evaluated_at: datetime = Field(default_factory=utc_now)
 
     @model_validator(mode="after")

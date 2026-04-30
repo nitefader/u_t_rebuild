@@ -6,9 +6,11 @@ import { SystemApi } from "@/api/system";
 import type {
   AccountSummary,
   DeploymentSummary,
+  GovernorDecision,
   RuntimeOverview,
 } from "@/api/schemas/operations";
 import type { HubStatus, TradeStreamStatus } from "@/api/schemas/system";
+import { TRADING_HORIZON_LABELS } from "@/api/schemas/risk";
 import { Banner } from "@/components/ui/Banner";
 import { Button } from "@/components/ui/Button";
 import { Card, CardBody, CardHeader, CardTitle } from "@/components/ui/Card";
@@ -895,6 +897,27 @@ function statusTone(status: string): "ok" | "warn" | "danger" | "info" | "muted"
 
 // ---------- Recent decisions ----------
 
+function friendlyRuleText(decision: GovernorDecision): string {
+  const ruleId = decision.rule_id ?? "";
+  if (ruleId === "account_missing_risk_plan_for_horizon") {
+    const horizon = decision.projected_state?.deployment_risk_horizon as string | undefined;
+    const label =
+      horizon != null && horizon in TRADING_HORIZON_LABELS
+        ? TRADING_HORIZON_LABELS[horizon as keyof typeof TRADING_HORIZON_LABELS]
+        : horizon ?? "unknown";
+    return `No RiskPlan mapped for the deployment's ${label} horizon`;
+  }
+  return ruleId;
+}
+
+function resolvedRiskPlanLabel(decision: GovernorDecision): string | null {
+  const id = decision.projected_state?.resolved_risk_plan_id as string | undefined;
+  const name = decision.projected_state?.resolved_risk_plan_name as string | undefined;
+  if (name) return name;
+  if (id) return id.slice(0, 8) + "…";
+  return null;
+}
+
 function RecentDecisionsCard({ overview }: { overview: RuntimeOverview }): JSX.Element {
   const list = overview.latest_governor_decisions;
   return (
@@ -915,22 +938,35 @@ function RecentDecisionsCard({ overview }: { overview: RuntimeOverview }): JSX.E
                 <th>Approved</th>
                 <th>Reason</th>
                 <th>Rule</th>
+                <th>RiskPlan</th>
                 <th>When</th>
               </tr>
             </thead>
             <tbody>
-              {list.map((d, i) => (
-                <tr key={i}>
-                  <td>
-                    <StatusBadge tone={d.approved ? "ok" : "danger"}>
-                      {d.approved ? "approved" : "rejected"}
-                    </StatusBadge>
-                  </td>
-                  <td className="font-medium">{d.reason ?? ""}</td>
-                  <td className="text-fg-muted">{d.rule_id ?? ""}</td>
-                  <td className="text-fg-muted">{d.decided_at ? relativeTime(d.decided_at) : "—"}</td>
-                </tr>
-              ))}
+              {list.map((d, i) => {
+                const riskPlanLabel = resolvedRiskPlanLabel(d);
+                return (
+                  <tr key={i}>
+                    <td>
+                      <StatusBadge tone={d.approved ? "ok" : "danger"}>
+                        {d.approved ? "approved" : "rejected"}
+                      </StatusBadge>
+                    </td>
+                    <td className="font-medium">{d.reason ?? ""}</td>
+                    <td className="text-fg-muted">{friendlyRuleText(d)}</td>
+                    <td>
+                      {riskPlanLabel ? (
+                        <StatusBadge tone="neutral" size="sm">
+                          {riskPlanLabel}
+                        </StatusBadge>
+                      ) : (
+                        <span className="text-fg-subtle">—</span>
+                      )}
+                    </td>
+                    <td className="text-fg-muted">{d.decided_at ? relativeTime(d.decided_at) : "—"}</td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         )}

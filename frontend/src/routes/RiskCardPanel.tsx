@@ -1,18 +1,28 @@
-import { useQuery } from "@tanstack/react-query";
+import { useId, useRef } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Shield } from "lucide-react";
-import { RiskApi } from "@/api/risk";
-import type { AccountRestrictions, AccountRiskConfig } from "@/api/schemas/risk";
+import { RiskApi, RiskPlanMapApi } from "@/api/risk";
+import { RiskPlansApi } from "@/api/riskPlans";
+import type { AccountRestrictions, AccountRiskConfig, TradingHorizon } from "@/api/schemas/risk";
+import { TradingHorizonSchema } from "@/api/schemas/risk";
+import type { RiskPlanSummary } from "@/api/schemas/riskPlans";
 import { Card, CardBody, CardHeader, CardTitle } from "@/components/ui/Card";
 import { StatusBadge } from "@/components/badges/StatusBadge";
+import { Banner } from "@/components/ui/Banner";
 import { LoadingState } from "@/components/empty/LoadingState";
 import { ErrorState } from "@/components/empty/ErrorState";
+import { HorizonRiskPlanPicker } from "@/components/risk_plans/HorizonRiskPlanPicker";
 import { formatCurrency, formatPercent, formatTimestamp } from "@/lib/format";
+
+// The 5 horizons in display order.
+const HORIZONS = TradingHorizonSchema.options;
 
 /**
  * RiskCardPanel — operator's risk posture for a single Account.
  *
- * Reads `/api/v1/broker-accounts/{id}/risk-config` and
- * `/api/v1/broker-accounts/{id}/restrictions`.
+ * Reads `/api/v1/broker-accounts/{id}/risk-config`,
+ * `/api/v1/broker-accounts/{id}/restrictions`, and
+ * `/api/v1/broker-accounts/{id}/risk-plan-map`.
  */
 export function RiskCardPanel({ accountId }: { accountId: string }): JSX.Element {
   const config = useQuery({
@@ -61,10 +71,167 @@ export function RiskCardPanel({ accountId }: { accountId: string }): JSX.Element
         ) : restrictions.data ? (
           <RestrictionsSummary restr={restrictions.data} />
         ) : null}
+
+        <HorizonRiskPlanSection accountId={accountId} />
       </CardBody>
     </Card>
   );
 }
+
+// ---------------------------------------------------------------------------
+// RiskPlan by Horizon section
+// ---------------------------------------------------------------------------
+
+function HorizonRiskPlanSection({ accountId }: { accountId: string }): JSX.Element {
+  const qc = useQueryClient();
+  const explainerId = useId();
+  // Slice B fix F-BUG-2: ref-based lock fires synchronously, before React's
+  // disabled-state paint, so a fast operator who clicks two horizons in
+  // quick succession serializes the writes instead of racing them through
+  // the same endpoint with last-write-wins semantics.
+  const inFlightRef = useRef(false);
+  const queueRef = useRef<Array<{ horizon: TradingHorizon; riskPlanVersionId: string | null }>>([]);
+
+  const planMap = useQuery({
+    queryKey: ["accounts", accountId, "risk-plan-map"],
+    queryFn: () => RiskPlanMapApi.get(accountId),
+    retry: false,
+  });
+
+  const planList = useQuery({
+    queryKey: ["risk-plans", "list"],
+    queryFn: () => RiskPlansApi.list(),
+    retry: false,
+    staleTime: 60_000,
+  });
+
+  const save = useMutation({
+    mutationFn: ({
+      horizon,
+      riskPlanVersionId,
+    }: {
+      horizon: TradingHorizon;
+      riskPlanVersionId: string | null;
+    }) => RiskPlanMapApi.update(accountId, { horizon, risk_plan_version_id: riskPlanVersionId }),
+    onSuccess: (updated) => {
+      qc.setQueryData(["accounts", accountId, "risk-plan-map"], updated);
+    },
+    onSettled: () => {
+      inFlightRef.current = false;
+      // Drain any edits queued while the previous PUT was in flight. Process
+      // one at a time, latest-per-horizon (an operator who toggled the same
+      // horizon twice mid-flight should land on their final choice).
+      const queue = queueRef.current;
+      queueRef.current = [];
+      if (queue.length === 0) return;
+      const collapsed = new Map<TradingHorizon, string | null>();
+      for (const item of queue) collapsed.set(item.horizon, item.riskPlanVersionId);
+      const next = collapsed.entries().next().value;
+      if (next != null) {
+        const [horizon, riskPlanVersionId] = next;
+        // Re-queue the remaining collapsed entries so onSettled drains them.
+        for (const [h, v] of collapsed) {
+          if (h !== horizon) queueRef.current.push({ horizon: h, riskPlanVersionId: v });
+        }
+        inFlightRef.current = true;
+        save.mutate({ horizon, riskPlanVersionId });
+      }
+    },
+  });
+
+  const availablePlans: RiskPlanSummary[] = planList.data?.risk_plans ?? [];
+
+  function currentVersionId(horizon: TradingHorizon): string | null {
+    const entry = (planMap.data?.entries ?? []).find((e) => e.horizon === horizon);
+    return entry?.risk_plan_version_id ?? null;
+  }
+
+  function handleChange(horizon: TradingHorizon, versionId: string | null): void {
+    if (inFlightRef.current) {
+      queueRef.current.push({ horizon, riskPlanVersionId: versionId });
+      return;
+    }
+    inFlightRef.current = true;
+    save.mutate({ horizon, riskPlanVersionId: versionId });
+  }
+
+  // Slice B fix F-RISK-1: count covered horizons. Zero coverage means EVERY
+  // subscribed Deployment will be rejected by the Governor regardless of
+  // horizon — surface that as a single-line danger banner above the grid.
+  const coveredHorizons = (planMap.data?.entries ?? []).filter(
+    (e) => e.risk_plan_version_id != null,
+  ).length;
+  const allHorizonsUncovered =
+    !planMap.isLoading && !planMap.isError && coveredHorizons === 0;
+
+  return (
+    <div className="space-y-2">
+      <div className="text-xs font-medium uppercase tracking-wide text-fg-subtle">
+        RiskPlan by Horizon ({coveredHorizons} of {HORIZONS.length} covered)
+      </div>
+
+      <div id={explainerId}>
+      <Banner
+        severity="info"
+        title="How horizon-based RiskPlans work"
+        message={
+          <span>
+            Each Deployment declares a risk horizon (scalping / intraday / swing / position / other).
+            When this Account is subscribed, the row below for that horizon picks which RiskPlan is
+            enforced. Example: an intraday Deployment with no intraday RiskPlan mapped here will be
+            rejected by the Governor at runtime with{" "}
+            <code className="text-[11px]">account_missing_risk_plan_for_horizon</code>.
+          </span>
+        }
+      />
+      </div>
+
+      {allHorizonsUncovered ? (
+        <Banner
+          severity="danger"
+          title="No horizons mapped"
+          message="Zero of the 5 horizons has a RiskPlan assigned. The Governor will reject every SignalPlan for this Account until at least one horizon is mapped."
+        />
+      ) : null}
+
+      {planMap.isError ? (
+        <ErrorState
+          title="RiskPlan map"
+          detail={(planMap.error as Error)?.message}
+          onRetry={() => planMap.refetch()}
+        />
+      ) : planMap.isLoading || planList.isLoading ? (
+        <LoadingState title="Loading horizon map" />
+      ) : (
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-3">
+          {HORIZONS.map((horizon) => (
+            <HorizonRiskPlanPicker
+              key={horizon}
+              horizon={horizon}
+              selectedRiskPlanVersionId={currentVersionId(horizon)}
+              availableRiskPlans={availablePlans}
+              onChange={(versionId) => handleChange(horizon, versionId)}
+              disabled={save.isPending}
+              describedById={explainerId}
+            />
+          ))}
+        </div>
+      )}
+
+      {save.isError ? (
+        <Banner
+          severity="danger"
+          title="Could not save horizon mapping"
+          message={(save.error as Error)?.message}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Existing risk config + restrictions summary sections
+// ---------------------------------------------------------------------------
 
 function RiskConfigSummary({ cfg }: { cfg: AccountRiskConfig }): JSX.Element {
   return (
