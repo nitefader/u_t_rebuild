@@ -24,10 +24,19 @@ from .models import (
 
 try:  # pragma: no cover - real SDK is optional in unit tests.
     from alpaca.trading.client import TradingClient
+    from alpaca.trading.enums import OrderClass as AlpacaOrderClass
     from alpaca.trading.enums import OrderSide as AlpacaOrderSide
     from alpaca.trading.enums import QueryOrderStatus
     from alpaca.trading.enums import TimeInForce as AlpacaTimeInForce
-    from alpaca.trading.requests import GetOrdersRequest, LimitOrderRequest, MarketOrderRequest, StopLimitOrderRequest, StopOrderRequest
+    from alpaca.trading.requests import (
+        GetOrdersRequest,
+        LimitOrderRequest,
+        MarketOrderRequest,
+        StopLimitOrderRequest,
+        StopLossRequest,
+        StopOrderRequest,
+        TakeProfitRequest,
+    )
 except ImportError:  # pragma: no cover
     TradingClient = None  # type: ignore[assignment]
     QueryOrderStatus = None  # type: ignore[assignment]
@@ -36,6 +45,9 @@ except ImportError:  # pragma: no cover
     LimitOrderRequest = None  # type: ignore[assignment]
     StopOrderRequest = None  # type: ignore[assignment]
     StopLimitOrderRequest = None  # type: ignore[assignment]
+    StopLossRequest = None  # type: ignore[assignment]
+    TakeProfitRequest = None  # type: ignore[assignment]
+    AlpacaOrderClass = None  # type: ignore[assignment]
     AlpacaOrderSide = None  # type: ignore[assignment]
     AlpacaTimeInForce = None  # type: ignore[assignment]
 
@@ -79,7 +91,9 @@ class AlpacaBrokerCapabilities(BaseModel):
     supports_market_orders: bool = True
     supports_limit_orders: bool = True
     supports_stop_orders: bool = True
-    supports_brackets: bool = False
+    # Bracket Program T-4: native_alpaca_bracket is supported via OrderClass.BRACKET
+    # for whole-share, day/gtc, RTH, ETB-if-short orders. Operator-visible.
+    supports_brackets: bool = True
     supports_fractional: bool = False
     supports_shorting: bool = False
     supports_streaming_trade_updates: bool = True
@@ -283,7 +297,7 @@ class AlpacaBrokerAdapter:
     def to_alpaca_order_request(self, order: InternalOrder) -> Any:
         request = self.translate_order_request(order)
         request_class = self._request_class_for_order_type(order.order_type)
-        kwargs = {
+        kwargs: dict[str, Any] = {
             "symbol": request["symbol"],
             "qty": request["qty"],
             "side": self._enum_value(AlpacaOrderSide, str(request["side"])),
@@ -296,7 +310,64 @@ class AlpacaBrokerAdapter:
             kwargs["limit_price"] = order.limit_price
         if order.stop_price is not None:
             kwargs["stop_price"] = order.stop_price
+        if order.order_class == "bracket":
+            self._validate_native_bracket_preflight(order)
+            self._require_sdk_class(AlpacaOrderClass, "OrderClass")
+            self._require_sdk_class(TakeProfitRequest, "TakeProfitRequest")
+            self._require_sdk_class(StopLossRequest, "StopLossRequest")
+            kwargs["order_class"] = self._enum_value(AlpacaOrderClass, "BRACKET")
+            kwargs["take_profit"] = TakeProfitRequest(  # type: ignore[misc]
+                limit_price=order.bracket_take_profit_limit_price,
+            )
+            kwargs["stop_loss"] = StopLossRequest(  # type: ignore[misc]
+                stop_price=order.bracket_stop_loss_stop_price,
+            )
         return request_class(**kwargs)  # type: ignore[misc,operator]
+
+    def _validate_native_bracket_preflight(self, order: InternalOrder) -> None:
+        """Refuse to submit a native Alpaca bracket that violates the constraint matrix.
+
+        Verified 2026-04-29 against ``docs.alpaca.markets`` + alpaca-py SDK:
+
+        - Bracket TIF must be ``day`` or ``gtc``.
+        - Extended hours not supported.
+        - Bracket + fractional shares not supported (whole-share only).
+        - Bracket + notional not supported.
+        - Bracket child prices required: take_profit limit_price + stop_loss stop_price.
+        - Long+short bracket on the same symbol concurrently is forbidden by Alpaca,
+          but that's an account-level constraint better caught at the OrderManager
+          / RiskResolver. We don't re-check here to keep this local.
+
+        Per operator: "fail clearly if Alpaca rejects the structure."
+        """
+
+        if order.bracket_take_profit_limit_price is None or order.bracket_stop_loss_stop_price is None:
+            raise AlpacaBrokerError(
+                "native_bracket_missing_child_prices",
+                "Native Alpaca bracket requires both take_profit limit_price and stop_loss stop_price",
+                context={
+                    "take_profit": order.bracket_take_profit_limit_price,
+                    "stop_loss": order.bracket_stop_loss_stop_price,
+                },
+            )
+        tif_value = order.time_in_force.value if hasattr(order.time_in_force, "value") else str(order.time_in_force)
+        if tif_value not in {"day", "gtc"}:
+            raise AlpacaBrokerError(
+                "native_bracket_unsupported_tif",
+                f"Native Alpaca bracket requires time_in_force=day|gtc; got {tif_value}",
+                context={"time_in_force": tif_value},
+            )
+        if order.extended_hours:
+            raise AlpacaBrokerError(
+                "native_bracket_unsupported_extended_hours",
+                "Native Alpaca bracket does not support extended hours",
+            )
+        if order.quantity != int(order.quantity):
+            raise AlpacaBrokerError(
+                "native_bracket_unsupported_fractional",
+                f"Native Alpaca bracket requires whole-share quantity; got {order.quantity}",
+                context={"quantity": order.quantity},
+            )
 
     def normalize_status(self, status: object) -> BrokerOrderStatus:
         normalized = self._status_token(status)

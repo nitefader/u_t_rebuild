@@ -128,6 +128,39 @@ MAP: Operations_Turtle_Shell_Artifacts/STRATEGY_TO_BROKER_BRACKET_PROGRAM.md
 
 ---
 
+## Pass 4 — T-4 baseline (Order execution dual-mode)
+
+- pass number: 4 (T-4 baseline)
+- timestamp: 2026-04-29 23:35:00 -04:00
+- files changed:
+  - `backend/app/orders/protective_placer.py` (new — `ProtectiveOrderPlacer`, `ProtectiveLeg`, `ProtectivePlacementPlan`, `ProtectiveOrderPlacerError`)
+  - `backend/app/orders/models.py` (added `bracket_take_profit_limit_price` + `bracket_stop_loss_stop_price` optional fields on `InternalOrder`)
+  - `backend/app/brokers/alpaca.py` (added native bracket support to `to_alpaca_order_request`; added `_validate_native_bracket_preflight`; flipped `supports_brackets=True` on `AlpacaBrokerCapabilities`; imported `OrderClass`, `TakeProfitRequest`, `StopLossRequest` from alpaca-py)
+  - `backend/tests/unit/orders/test_protective_placer.py` (new — 12 tests covering long/short post-fill brackets, partial fill idempotency, incremental coverage, leg-only cases, doctrine guards)
+  - `backend/tests/unit/brokers/test_alpaca_native_bracket.py` (new — 12 tests covering long/short native bracket, all pre-flight failure modes, capability flag, simple-order backwards-compat)
+- decisions made:
+  - **ProtectiveOrderPlacer is a stateless function**: returns a `ProtectivePlacementPlan` describing the child legs without creating InternalOrders directly. The orchestrator passes it to OrderManager. Idempotency state (covered breakpoints) lives in the OrderManager / orders ledger so it survives restarts.
+  - **Pre-flight gate fails LOUD**: per operator directive *"fail clearly if Alpaca rejects the structure"* — `_validate_native_bracket_preflight` raises `AlpacaBrokerError` with structured codes (`native_bracket_missing_child_prices`, `native_bracket_unsupported_tif`, `native_bracket_unsupported_extended_hours`, `native_bracket_unsupported_fractional`). The runtime does NOT silently fall back to `post_fill_bracket` — that would be a hidden runtime path and violates `TURTLE_SHELL_GUARDRAILS.md` §47-69.
+  - **Partial-fill idempotency**: keyed on `(parent_order_id, cumulative_filled_qty - already_covered_qty)`. Same fill re-emitted = no-op plan. New fill events with growing cumulative qty trigger incremental placements for only the *new* uncovered shares. Each incremental placement uses the NEW slice's average fill price (not a global average).
+  - **Long/short symmetry**: stop direction inverts (LONG below fill, SHORT above); target direction inverts (LONG above fill, SHORT below); exit side inverts (LONG→SELL, SHORT→BUY).
+  - **`bracket_take_profit_limit_price` + `bracket_stop_loss_stop_price` on `InternalOrder`**: separate fields rather than a wrapper model, so `InternalOrder.frozen` + `extra="forbid"` discipline is preserved. Both default `None`; the AlpacaBrokerAdapter only attaches bracket fields when `order.order_class == "bracket"`.
+  - **OrderManager + orchestrator wiring is T-5**: T-4 ships the components; T-5 wires them so a real entry-fill event flows through OrderManager → ProtectivePlacement → BrokerAdapter. Splitting this way kept the diff focused and the test suite coherent at every step.
+- blockers and 5 Whys: none.
+- tests run:
+  - `pytest backend/tests/unit/orders/test_protective_placer.py -v` → 12 passed.
+  - `pytest backend/tests/unit/brokers/test_alpaca_native_bracket.py -v` → 12 passed.
+  - `pytest backend/tests/unit/brokers backend/tests/unit/orders -q` → 184 passed.
+  - `pytest backend/tests/unit -q` → **1531 passed** (+25 over T-3 baseline 1506).
+- test results: all green; zero regressions.
+- remaining gaps:
+  - **OrderManager.create_protective_orders_post_fill(...)** is not yet implemented — that's T-5's job. The `ProtectiveOrderPlacer` produces a plan; OrderManager turns the plan into lineage-correct InternalOrders.
+  - **Orchestrator wiring** of BrokerSync entry-fill events → ProtectiveOrderPlacer → OrderManager → BrokerAdapter is not done. Also T-5.
+  - **Operations Protection-Status column** is not done. T-5.
+  - **OCO order_class on the protective pair** — when ProtectiveOrderPlacer's two legs are submitted, they should be wired with `order_class="oco"` so the broker auto-cancels the unfilled leg. T-5 wires this.
+- next action: commit T-4 baseline; start T-5 (orchestrator wiring + OrderManager method + Operations protection status + acceptance scenario tests).
+
+---
+
 ## Alpaca verification (online + SDK source, locked 2026-04-29 21:50:00 -04:00)
 
 - alpaca-py SDK version present at `.venv/Lib/site-packages/alpaca/`.

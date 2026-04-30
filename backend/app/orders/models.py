@@ -77,6 +77,14 @@ class InternalOrder(BaseModel):
     stop_price: float | None = Field(default=None, gt=0)
     parent_order_id: UUID | None = None
     order_class: str | None = None
+    # Bracket Program T-4: when ``order_class == "bracket"`` the entry order
+    # carries the prices for both child legs. The AlpacaBrokerAdapter attaches
+    # these to ``TakeProfitRequest`` (limit_price) + ``StopLossRequest``
+    # (stop_price) on the broker submit. Native Alpaca bracket only — the
+    # post_fill_bracket mode does not populate these because the prices are
+    # computed *after* the entry fill by ProtectiveOrderPlacer.
+    bracket_take_profit_limit_price: float | None = Field(default=None, gt=0)
+    bracket_stop_loss_stop_price: float | None = Field(default=None, gt=0)
     extended_hours: bool = False
     intent: InternalOrderIntent
     status: InternalOrderStatus
