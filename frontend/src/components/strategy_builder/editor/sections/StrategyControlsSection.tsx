@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import type {
   AllowedDirections,
   SessionPreference,
@@ -292,8 +293,21 @@ function NullableIntField({
   onChange,
   ...rest
 }: NullableIntFieldProps): JSX.Element {
-  const raw = value == null ? "" : String(value);
-  const invalid = value != null && (!Number.isInteger(value) || value < min);
+  // Local text state so the operator sees what they typed even when the value
+  // is rejected (e.g. "3.7" or "-1"). The parent only sees clean integers or null.
+  const [text, setText] = useState<string>(value == null ? "" : String(value));
+  useEffect(() => {
+    // Re-sync when the parent replaces value externally (different draft loaded,
+    // patch from another field). Skip if text already represents the same value
+    // so in-flight typing isn't clobbered.
+    const fromValue = value == null ? "" : String(value);
+    if (parseClean(text, min) !== value) {
+      setText(fromValue);
+    }
+  }, [value, min]);
+
+  const invalid = text.trim() !== "" && parseClean(text, min) === INVALID;
+
   return (
     <TextField
       label={label}
@@ -302,22 +316,40 @@ function NullableIntField({
       inputMode="numeric"
       min={min}
       step={1}
-      value={raw}
+      value={text}
       invalid={invalid}
       onChange={(e) => {
-        const text = e.target.value.trim();
-        if (text === "") {
+        const next = e.target.value;
+        setText(next);
+        const trimmed = next.trim();
+        if (trimmed === "") {
           onChange(null);
           return;
         }
-        const parsed = Number.parseInt(text, 10);
-        if (Number.isNaN(parsed)) {
-          onChange(null);
+        const cleaned = parseClean(trimmed, min);
+        if (cleaned === INVALID) {
+          // Keep the prior value; the field shows invalid styling.
           return;
         }
-        onChange(parsed);
+        onChange(cleaned);
       }}
       data-testid={rest["data-testid"]}
     />
   );
+}
+
+const INVALID: unique symbol = Symbol("invalid-int");
+type ParseResult = number | null | typeof INVALID;
+
+/** Parse a strict non-negative integer string. Returns INVALID for any
+ *  non-integer ("3.7"), out-of-range ("-1" with min=0), or non-numeric ("abc")
+ *  input. Returns null for empty string. Accepts plain decimal integers only —
+ *  no scientific notation, no leading "+". */
+function parseClean(text: string, min: number): ParseResult {
+  const trimmed = text.trim();
+  if (trimmed === "") return null;
+  if (!/^-?\d+$/.test(trimmed)) return INVALID;
+  const n = Number.parseInt(trimmed, 10);
+  if (!Number.isFinite(n) || !Number.isInteger(n) || n < min) return INVALID;
+  return n;
 }

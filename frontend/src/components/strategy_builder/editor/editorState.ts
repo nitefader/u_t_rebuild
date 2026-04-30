@@ -1,4 +1,5 @@
 import type {
+  ExecutionMode,
   ExecutionStylePresetKind,
   LogicalExitRule,
   StrategyControlsVersion,
@@ -179,6 +180,30 @@ export function applyStrategyControlsToDraft(
   return {
     ...state,
     draft: { ...state.draft, strategy_controls: next },
+  };
+}
+
+/** Read the operator-selected ExecutionMode (post_fill_bracket default). */
+export function readExecutionMode(state: EditorState): ExecutionMode {
+  const raw = (state.draft.execution_style as { execution_mode?: unknown }).execution_mode;
+  if (raw === "post_fill_bracket" || raw === "native_alpaca_bracket") return raw;
+  return "post_fill_bracket";
+}
+
+/** Mutate the ExecutionPlan's execution_mode (post-fill bracket vs native). */
+export function applyExecutionModeToDraft(
+  state: EditorState,
+  next: ExecutionMode,
+): EditorState {
+  return {
+    ...state,
+    draft: {
+      ...state.draft,
+      execution_style: {
+        ...state.draft.execution_style,
+        execution_mode: next,
+      },
+    },
   };
 }
 

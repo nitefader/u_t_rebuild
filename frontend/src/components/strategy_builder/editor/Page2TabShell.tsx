@@ -1,14 +1,20 @@
 import { useMemo } from "react";
 import { useSearchParams } from "react-router-dom";
-import type { ExecutionStylePresetKind, FeatureCatalogItem } from "@/api/schemas/strategyComposer";
+import type {
+  ExecutionMode,
+  ExecutionStylePresetKind,
+  FeatureCatalogItem,
+} from "@/api/schemas/strategyComposer";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/Tabs";
 import { cn } from "@/lib/cn";
 import type { ExecutionStylePresetValue } from "../ExecutionStylePresetRow";
 import type { CoherenceWarning, SectionId } from "./coherenceValidator";
 import {
+  applyExecutionModeToDraft,
   applyPresetToDraft,
   applyStrategyControlsToDraft,
   applyStrategyToDraft,
+  readExecutionMode,
   type EditorState,
 } from "./editorState";
 import { ExecutionPreviewRail } from "./ExecutionPreviewRail";
@@ -163,6 +169,12 @@ export function Page2TabShell(props: Page2TabShellProps): JSX.Element {
     setState((prev) => applyPresetToDraft(prev, next));
   }
 
+  function setExecutionMode(next: ExecutionMode): void {
+    setState((prev) => applyExecutionModeToDraft(prev, next));
+  }
+
+  const executionMode = readExecutionMode(state);
+
   return (
     <div className="flex flex-col gap-3" data-testid="page2-tab-shell">
       <BlueprintChipRow chips={blueprintChips} />
@@ -243,6 +255,8 @@ export function Page2TabShell(props: Page2TabShellProps): JSX.Element {
             <ExecutionPresetSection
               preset={state.preset}
               onChange={setPreset}
+              executionMode={executionMode}
+              onExecutionModeChange={setExecutionMode}
               warnings={warningsFor("section-execution-preset")}
             />
             <ExecutionPreviewRail preset={state.preset} />

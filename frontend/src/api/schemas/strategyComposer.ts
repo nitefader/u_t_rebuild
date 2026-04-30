@@ -286,6 +286,19 @@ const TimeOfDaySchema = z
   .string()
   .regex(/^\d{2}:\d{2}(:\d{2}(\.\d+)?)?$/, "expected HH:MM or HH:MM:SS");
 
+/**
+ * Convert "HH:MM" or "HH:MM:SS[.ffffff]" to seconds-since-midnight.
+ * Lex-comparing the raw strings is wrong: "15:30" < "15:30:00" because
+ * the shorter prefix sorts earlier, even though they are the same instant.
+ * Returns null only when the string already failed the regex above, which
+ * cannot happen at the call sites below.
+ */
+function timeStringToSeconds(value: string): number {
+  const [h, m, sRest] = value.split(":");
+  const seconds = sRest != null ? Number.parseFloat(sRest) : 0;
+  return Number.parseInt(h!, 10) * 3600 + Number.parseInt(m!, 10) * 60 + seconds;
+}
+
 export const SessionWindowSchema = z
   .object({
     session: SessionNameSchema.default("regular"),
@@ -365,10 +378,12 @@ export const StrategyControlsVersionSchema = z
       });
     }
     // Mirrors backend StrategyControlsVersion.validate_force_flat_after_no_new_entries.
+    // Compare in seconds-since-midnight so "15:30" and "15:30:00" are equal.
     if (
       value.no_new_entries_after != null &&
       value.force_flat_by != null &&
-      value.force_flat_by < value.no_new_entries_after
+      timeStringToSeconds(value.force_flat_by) <
+        timeStringToSeconds(value.no_new_entries_after)
     ) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
@@ -380,6 +395,12 @@ export const StrategyControlsVersionSchema = z
 export type StrategyControlsVersion = z.infer<typeof StrategyControlsVersionSchema>;
 
 // ---------- ExecutionStyleVersion (passthrough; UI reads .preset.kind only) --
+
+export const ExecutionModeSchema = z.enum([
+  "post_fill_bracket",
+  "native_alpaca_bracket",
+]);
+export type ExecutionMode = z.infer<typeof ExecutionModeSchema>;
 
 export const ExecutionStyleVersionSchema = z
   .object({
@@ -393,6 +414,7 @@ export const ExecutionStyleVersionSchema = z
     entry_limit_offset_bps: z.number().nullable().optional(),
     cancel_after_bars: z.number().nullable().optional(),
     bracket: z.record(z.unknown()).nullable().optional(),
+    execution_mode: ExecutionModeSchema.optional(),
     trailing_stop_enabled: z.boolean().optional(),
     scale_out_enabled: z.boolean().optional(),
     feature_refs: z.array(z.string()).default([]),
@@ -474,6 +496,8 @@ export const StrategyDraftSaveResponseSchema = z
     strategy_version: StrategyVersionRecordSchema,
     draft: StrategyDraftSchema,
     component_version_snapshots: StrategyDraftComponentSnapshotsSchema,
+    strategy_controls_version_id: z.string().nullable().optional(),
+    execution_plan_version_id: z.string().nullable().optional(),
     deployment_created: z.boolean().default(false),
     broker_action_created: z.boolean().default(false),
     live_readiness_claimed: z.boolean().default(false),

@@ -98,4 +98,24 @@ describe("StrategyControlsVersionSchema", () => {
       expect(result.error.issues.some((i) => i.message.includes("force_flat_by must be at or after"))).toBe(true);
     }
   });
+
+  it("treats HH:MM and HH:MM:SS as equal when comparing force_flat_by ≥ no_new_entries_after", () => {
+    // Adversarial case: lex compare would say "15:30" < "15:30:00" and
+    // false-block this save. Numeric-seconds compare must accept it.
+    const result = StrategyControlsVersionSchema.safeParse({
+      ...fullPayload,
+      no_new_entries_after: "15:30:00",
+      force_flat_by: "15:30",
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("still rejects force_flat_by earlier than no_new_entries_after across mixed precision", () => {
+    const result = StrategyControlsVersionSchema.safeParse({
+      ...fullPayload,
+      no_new_entries_after: "15:30:00",
+      force_flat_by: "15:29",
+    });
+    expect(result.success).toBe(false);
+  });
 });

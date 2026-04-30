@@ -3,12 +3,14 @@ import type { StrategyDraft } from "@/api/schemas/strategyComposer";
 import type { StrategyVersionPayload } from "@/api/schemas/strategies";
 import type { EditorRule } from "../SignalRuleEditor";
 import {
+  applyExecutionModeToDraft,
   applyPresetToDraft,
   applyStrategyControlsToDraft,
   applyStrategyToDraft,
   bucketExitRules,
   collectAllFeatureRefs,
   editorStateFromDraft,
+  readExecutionMode,
 } from "./editorState";
 
 function makeStrategy(overrides: Partial<StrategyVersionPayload> = {}): StrategyVersionPayload {
@@ -220,6 +222,43 @@ describe("editorState", () => {
       const refs = collectAllFeatureRefs(strategy);
       expect(refs).toHaveLength(1);
       expect(refs[0]).toBe("5m.ema:length=20[0]");
+    });
+  });
+
+  describe("execution_mode (Bracket Program T-2)", () => {
+    it("readExecutionMode defaults to post_fill_bracket when missing", () => {
+      const state = editorStateFromDraft(makeDraft(makeStrategy()));
+      expect(readExecutionMode(state)).toBe("post_fill_bracket");
+    });
+
+    it("readExecutionMode reads native_alpaca_bracket when set on the draft", () => {
+      const draft = makeDraft(makeStrategy());
+      (draft.execution_style as Record<string, unknown>).execution_mode = "native_alpaca_bracket";
+      const state = editorStateFromDraft(draft);
+      expect(readExecutionMode(state)).toBe("native_alpaca_bracket");
+    });
+
+    it("readExecutionMode falls back to post_fill_bracket on garbage input", () => {
+      const draft = makeDraft(makeStrategy());
+      (draft.execution_style as Record<string, unknown>).execution_mode = "moonshot";
+      const state = editorStateFromDraft(draft);
+      expect(readExecutionMode(state)).toBe("post_fill_bracket");
+    });
+
+    it("applyExecutionModeToDraft mutates draft.execution_style.execution_mode", () => {
+      const state = editorStateFromDraft(makeDraft(makeStrategy()));
+      const next = applyExecutionModeToDraft(state, "native_alpaca_bracket");
+      expect(
+        (next.draft.execution_style as { execution_mode?: string }).execution_mode,
+      ).toBe("native_alpaca_bracket");
+      expect(readExecutionMode(next)).toBe("native_alpaca_bracket");
+    });
+
+    it("applyExecutionModeToDraft preserves preset and other fields", () => {
+      const state = editorStateFromDraft(makeDraft(makeStrategy(), "bracket_stop_target"));
+      const next = applyExecutionModeToDraft(state, "native_alpaca_bracket");
+      expect(next.preset.kind).toBe("bracket_stop_target");
+      expect(next.draft.execution_style.entry_order_type).toBe("market");
     });
   });
 });

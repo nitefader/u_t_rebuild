@@ -62,6 +62,40 @@ MAP: Operations_Turtle_Shell_Artifacts/STRATEGY_TO_BROKER_BRACKET_PROGRAM.md
 
 ---
 
+## Pass 2 — T-2 baseline (Compose/API wiring)
+
+- pass number: 2 (T-2 baseline)
+- timestamp: 2026-04-29 22:50:00 -04:00
+- files changed:
+  - `frontend/src/api/schemas/strategyComposer.ts` (added `ExecutionModeSchema`, made `execution_mode` optional on `ExecutionStyleVersionSchema`, added `strategy_controls_version_id` + `execution_plan_version_id` to `StrategyDraftSaveResponseSchema`)
+  - `frontend/src/components/strategy_builder/editor/editorState.ts` (added `applyExecutionModeToDraft` + `readExecutionMode` helpers)
+  - `frontend/src/components/strategy_builder/editor/Page2TabShell.tsx` (passes `executionMode` + `onExecutionModeChange` to ExecutionPresetSection)
+  - `frontend/src/components/strategy_builder/editor/sections/ExecutionPresetSection.tsx` (new operator-visible execution_mode `<select>` with default-vs-native hints)
+  - `frontend/src/routes/StrategyCompose.tsx` (replaced hardcoded `market_entry_market_exit` with derivation from wizard intent via `derivePresetFromWizard`; exported the helper)
+  - `frontend/src/routes/StrategyCompose.test.tsx` (5 new derivePresetFromWizard tests)
+  - `frontend/src/components/strategy_builder/editor/editorState.test.ts` (5 new execution_mode helper tests)
+  - `frontend/src/components/strategy_builder/editor/sections/ExecutionPresetSection.test.tsx` (new — 3 selector tests including default + native + change)
+- decisions made:
+  - `derivePresetFromWizard` ordering: `has_runner` → `bracket_runner` (highest signal); else `has_multiple_targets` → `multi_target_scale_out`; else `has_stop && has_target` → `bracket_stop_target`; else `market_entry_market_exit`. has_stop alone is *post-fill protection*, not a preset shape — operator gets the simplest preset and the runtime will still place a stop after fill.
+  - ExecutionMode selector lives on ExecutionPresetSection (the same card that owns the preset) because mode and preset are the operator's two execution-side decisions, side by side. Stop·Target·Execution tab.
+  - `readExecutionMode` defaults to `post_fill_bracket` for missing/garbage. The schema's `execution_mode` is `.optional()` (no default in zod) so existing fixtures don't have to be updated; the runtime helper provides the safety net.
+- blockers and 5 Whys: none.
+- tests run:
+  - `npx tsc --noEmit` → clean.
+  - `npx vitest run src/routes/StrategyCompose.test.tsx` → 15 passed.
+  - `npx vitest run src/components/strategy_builder/editor/editorState.test.ts` → 13 passed.
+  - `npx vitest run src/components/strategy_builder/editor/sections/ExecutionPresetSection.test.tsx` → 3 passed.
+  - `npm test --run` → **392 passed across 52 files** (+13 over baseline 379).
+  - `npm run lint:names` → clean.
+  - `python -m pytest backend/tests/unit -q` → **1497 passed** (no regression).
+- test results: all green; zero regressions.
+- remaining gaps:
+  - The Compose Page 2 doesn't yet PUT `execution_plan_version_id` into the Deployment when a deployment is created from a saved strategy. That's T-3's wiring (SignalPlan must know which ExecutionPlan to consult, and the Deployment binding is the lookup key).
+  - The frontend doesn't yet display the saved `strategy_controls_version_id` / `execution_plan_version_id` in the Strategy detail. Cosmetic / belongs to a later UX slice; not a doctrine concern for T-2's contract.
+- next action: commit T-2 baseline; start T-3 (SignalPlan enrichment — SignalPlanBuilder resolves ExecutionPlanVersion + populates stop/target intent for long & short).
+
+---
+
 ## Alpaca verification (online + SDK source, locked 2026-04-29 21:50:00 -04:00)
 
 - alpaca-py SDK version present at `.venv/Lib/site-packages/alpaca/`.

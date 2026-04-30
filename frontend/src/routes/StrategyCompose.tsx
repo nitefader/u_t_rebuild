@@ -6,6 +6,7 @@ import { ApiError } from "@/api/client";
 import { StrategyComposerApi } from "@/api/strategyComposer";
 import type {
   AIComposerRequest,
+  ExecutionStylePresetKind,
   StrategyDraft,
   StrategyDraftSaveResponse,
   WizardIntent,
@@ -58,6 +59,35 @@ import { EditorPage } from "@/components/strategy_builder/editor/EditorPage";
  */
 
 const WIZARD_STATE_KEY = "compose:wizard:draft";
+
+/**
+ * Derive the AI compose request's execution_style_preset from the wizard
+ * intent the operator declared on Page 1.
+ *
+ * Bracket Program T-2: replaces the previous hardcoded
+ * "market_entry_market_exit" so the operator's "I want stops + targets"
+ * intent flows through to the AI seed instead of dropping on the floor.
+ *
+ * Mapping:
+ * - has_runner       → bracket_runner
+ * - multiple targets → multi_target_scale_out
+ * - stop + target    → bracket_stop_target
+ * - stop only        → market_entry_market_exit (stop is post-fill protection;
+ *                      no target leg means no bracket shape)
+ * - neither          → market_entry_market_exit (simplest valid preset)
+ */
+export function derivePresetFromWizard(intent: WizardIntent): ExecutionStylePresetKind {
+  if (intent.has_runner) {
+    return "bracket_runner";
+  }
+  if (intent.has_multiple_targets) {
+    return "multi_target_scale_out";
+  }
+  if (intent.has_stop && intent.has_target) {
+    return "bracket_stop_target";
+  }
+  return "market_entry_market_exit";
+}
 
 type WizardStep = "page1" | "page2";
 
@@ -161,7 +191,7 @@ export function StrategyCompose(): JSX.Element {
       timeframe: intent.base_timeframe,
       initial_capital: 100_000,
       feature_refs: [],
-      execution_style_preset: "market_entry_market_exit",
+      execution_style_preset: derivePresetFromWizard(intent),
       execution_style_overrides: null,
       wizard_intent: intent,
     };

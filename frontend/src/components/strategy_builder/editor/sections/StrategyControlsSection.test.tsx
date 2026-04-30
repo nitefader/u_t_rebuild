@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { useState } from "react";
-import { render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { StrategyControlsVersion } from "@/api/schemas/strategyComposer";
 import { StrategyControlsSection } from "./StrategyControlsSection";
@@ -122,5 +122,47 @@ describe("Card C — Cooldowns & caps", () => {
     render(<StrategyControlsSection controls={conflicting} onChange={() => {}} />);
     const card = screen.getByTestId("section-strategy-controls-cooldowns");
     expect(within(card).getByText(/Pick one cooldown unit/i)).toBeInTheDocument();
+  });
+
+  describe("NullableIntField input hardening", () => {
+    it("rejects a non-integer like '3.7' without emitting onChange", () => {
+      const onChange = vi.fn();
+      render(<StrategyControlsSection controls={CONTROLS} onChange={onChange} />);
+      fireEvent.change(screen.getByTestId("controls-cooldown-bars"), {
+        target: { value: "3.7" },
+      });
+      // Operator's keystrokes must remain visible, but no patch is emitted
+      // because 3.7 is not a clean integer.
+      expect(onChange).not.toHaveBeenCalled();
+      expect((screen.getByTestId("controls-cooldown-bars") as HTMLInputElement).value).toBe("3.7");
+    });
+
+    it("rejects out-of-range '-1' on a min=0 field without emitting", () => {
+      const onChange = vi.fn();
+      render(<StrategyControlsSection controls={CONTROLS} onChange={onChange} />);
+      fireEvent.change(screen.getByTestId("controls-cooldown-bars"), {
+        target: { value: "-1" },
+      });
+      expect(onChange).not.toHaveBeenCalled();
+    });
+
+    it("rejects scientific notation '1e2' (parseInt would silently truncate to 1)", () => {
+      const onChange = vi.fn();
+      render(<StrategyControlsSection controls={CONTROLS} onChange={onChange} />);
+      fireEvent.change(screen.getByTestId("controls-max-per-day"), {
+        target: { value: "1e2" },
+      });
+      expect(onChange).not.toHaveBeenCalled();
+    });
+
+    it("emits an integer for a clean numeric input", () => {
+      const onChange = vi.fn();
+      render(<StrategyControlsSection controls={CONTROLS} onChange={onChange} />);
+      fireEvent.change(screen.getByTestId("controls-cooldown-bars"), {
+        target: { value: "5" },
+      });
+      const last = onChange.mock.calls.at(-1)?.[0];
+      expect(last?.cooldown_bars).toBe(5);
+    });
   });
 });

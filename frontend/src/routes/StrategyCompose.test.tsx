@@ -3,7 +3,7 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
-import { StrategyCompose } from "./StrategyCompose";
+import { StrategyCompose, derivePresetFromWizard } from "./StrategyCompose";
 
 beforeAll(() => {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -405,5 +405,46 @@ describe("<StrategyCompose /> — wizard + editor flow", () => {
 
     await user.click(screen.getByRole("button", { name: /Exit/i }));
     expect(window.localStorage.getItem("compose:wizard:draft")).toBeNull();
+  });
+});
+
+describe("derivePresetFromWizard (Bracket Program T-2)", () => {
+  const base = {
+    direction: "long" as const,
+    horizon: "intraday" as const,
+    base_timeframe: "5m",
+    higher_timeframe_confirmation: false,
+    has_logical_exit: true,
+    has_time_based_exit: false,
+    has_stop: false,
+    has_target: false,
+    has_multiple_targets: false,
+    has_runner: false,
+  };
+
+  it("returns market_entry_market_exit when neither stop nor target is checked", () => {
+    expect(derivePresetFromWizard(base)).toBe("market_entry_market_exit");
+  });
+
+  it("returns market_entry_market_exit when only has_stop is checked", () => {
+    expect(derivePresetFromWizard({ ...base, has_stop: true })).toBe("market_entry_market_exit");
+  });
+
+  it("returns bracket_stop_target when both stop + target are checked", () => {
+    expect(derivePresetFromWizard({ ...base, has_stop: true, has_target: true })).toBe(
+      "bracket_stop_target",
+    );
+  });
+
+  it("returns bracket_runner when has_runner is checked (regardless of others)", () => {
+    expect(
+      derivePresetFromWizard({ ...base, has_stop: true, has_target: true, has_runner: true }),
+    ).toBe("bracket_runner");
+  });
+
+  it("returns multi_target_scale_out when has_multiple_targets is checked", () => {
+    expect(
+      derivePresetFromWizard({ ...base, has_stop: true, has_target: true, has_multiple_targets: true }),
+    ).toBe("multi_target_scale_out");
   });
 });
