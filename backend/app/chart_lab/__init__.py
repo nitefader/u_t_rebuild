@@ -6,6 +6,7 @@ from .preview_service import (
     ChartLabPreviewResponse,
     ChartLabPreviewService,
     ChartLabSignalMarker,
+    ChartLabTimeframeMismatchError,
 )
 
 __all__ = [
@@ -14,4 +15,5 @@ __all__ = [
     "ChartLabPreviewResponse",
     "ChartLabPreviewService",
     "ChartLabSignalMarker",
+    "ChartLabTimeframeMismatchError",
 ]

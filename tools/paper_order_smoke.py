@@ -18,7 +18,8 @@ except ImportError:  # pragma: no cover
         return False
 
 from backend.app.brokers import AlpacaBrokerAdapter, BrokerOrderResult, BrokerSync
-from backend.app.domain import CandidateSide, OrderType, TimeInForce
+from backend.app.brokers._paper_credentials import resolve_paper_credentials
+from backend.app.domain import CandidateSide, OrderType, TimeInForce, TradingMode
 from backend.app.orders import OrderManager
 
 
@@ -30,12 +31,17 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Submit exactly one safe Alpaca paper market order.")
     parser.add_argument("--symbol", default="SPY")
     parser.add_argument("--qty", type=float, default=1)
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Validate environment and build the order but do not submit to the broker.",
+    )
     args = parser.parse_args(argv)
 
     _print_step("Loading .env")
     load_dotenv()
     _print_step("Validating paper-order environment guards")
-    error = _validate_environment(qty=args.qty)
+    error = _validate_environment(qty=args.qty, dry_run=args.dry_run)
     if error is not None:
         print(json.dumps({"ok": False, "error": error}), file=sys.stderr, flush=True)
         return 2
@@ -43,7 +49,29 @@ def main(argv: list[str] | None = None) -> int:
     account_id = _account_id()
     _print_step("Preparing operator-confirmed paper smoke order")
     _print_step("Creating AlpacaBrokerAdapter")
-    adapter = AlpacaBrokerAdapter()
+    api_key, secret_key = resolve_paper_credentials()
+    adapter = AlpacaBrokerAdapter(
+        mode=TradingMode.BROKER_PAPER,
+        api_key=api_key,
+        secret_key=secret_key,
+    )
+
+    if args.dry_run:
+        _print_step("Dry-run mode: broker submit skipped")
+        print(
+            json.dumps(
+                {
+                    "ok": True,
+                    "dry_run": True,
+                    "symbol": args.symbol.upper(),
+                    "qty": args.qty,
+                    "account_id": str(account_id),
+                }
+            ),
+            flush=True,
+        )
+        return 0
+
     _print_step("Checking Alpaca market clock")
     if not _market_is_open(adapter):
         print("Market closed. No order submitted.", flush=True)
@@ -87,7 +115,6 @@ def main(argv: list[str] | None = None) -> int:
                     "filled_quantity": ledger_update.filled_quantity,
                     "account_id": str(ledger_update.account_id),
                     "deployment_id": str(ledger_update.deployment_id) if ledger_update.deployment_id else None,
-                    "program_id": str(ledger_update.program_id) if ledger_update.program_id else None,
                 },
             },
             sort_keys=True,
@@ -97,11 +124,12 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
-def _validate_environment(*, qty: float) -> str | None:
-    if os.getenv("ALPACA_BASE_URL") != PAPER_BASE_URL:
-        return "ALPACA_BASE_URL must equal https://paper-api.alpaca.markets"
-    if os.getenv("CONFIRM_PAPER_ORDER") != "yes":
-        return "CONFIRM_PAPER_ORDER=yes is required"
+def _validate_environment(*, qty: float, dry_run: bool = False) -> str | None:
+    base_url = (os.getenv("ALPACA_BASE_URL") or "").rstrip("/")
+    if not base_url.startswith(PAPER_BASE_URL):
+        return f"ALPACA_BASE_URL must start with {PAPER_BASE_URL} (got: {base_url!r})"
+    if not dry_run and os.getenv("CONFIRM_PAPER_ORDER") != "yes":
+        return "CONFIRM_PAPER_ORDER=yes is required (or pass --dry-run to skip submit)"
     if qty <= 0:
         return "qty must be greater than 0"
     if qty > 1:

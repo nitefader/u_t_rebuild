@@ -146,6 +146,53 @@ class BrokerRuntimeSupervisor:
             self._deployments.clear()
             self._running = False
 
+    def reload_deployment(self, deployment_id: UUID) -> bool:
+        # Drop the cached components + compiled pipeline for this deployment so
+        # the next bar rebuilds them from persistence. Refresh the hub's
+        # symbol subscriptions in case the rebind changed the universe.
+        # Returns True if the deployment is still active after reload, False
+        # if it was deactivated (in which case the supervisor stops dispatching
+        # to it — the caller handles cleanup).
+        with self._lock:
+            if not self._running:
+                return False
+            new_entry = self._account_trading.evict_deployment_caches(deployment_id)
+            old_symbols = {sym for sym, ids in self._symbol_index.items() if deployment_id in ids}
+            for sym in old_symbols:
+                self._symbol_index[sym].discard(deployment_id)
+                if not self._symbol_index[sym]:
+                    del self._symbol_index[sym]
+            if new_entry is None:
+                self._account_trading.stop_deployment_runtime(deployment_id)
+                self._deployments.pop(deployment_id, None)
+                if self._symbol_index:
+                    self._market_data_hub.register(
+                        self._consumer_id,
+                        sorted(self._symbol_index),
+                        self._dispatch_bar,
+                    )
+                else:
+                    try:
+                        self._market_data_hub.unregister(self._consumer_id)
+                    except Exception:  # noqa: BLE001 - hub may already be torn down
+                        pass
+                return False
+            self._deployments[deployment_id] = new_entry
+            for sym in self._symbols_for(new_entry):
+                self._symbol_index[sym].add(deployment_id)
+            if self._symbol_index:
+                self._market_data_hub.register(
+                    self._consumer_id,
+                    sorted(self._symbol_index),
+                    self._dispatch_bar,
+                )
+            status = self._account_trading.start_deployment_runtime(deployment_id)
+            if status.running:
+                self.blocked_at_start.pop(deployment_id, None)
+            else:
+                self.blocked_at_start[deployment_id] = status.last_error or status.state.value
+            return True
+
     def dispatch_bar(self, bar: NormalizedBar) -> None:
         """Public dispatch hook used by tests to bypass the hub."""
         self._dispatch_bar(bar)

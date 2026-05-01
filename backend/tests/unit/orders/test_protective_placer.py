@@ -36,6 +36,9 @@ def _open_signal_plan(
     stop_pct: float | None = 5.0,
     target_pct: float | None = 10.0,
     target_quantity_pct: float = 100.0,
+    stop_rule: str | None = None,
+    target_rule: str | None = None,
+    feature_snapshot: dict[str, float] | None = None,
 ) -> SignalPlan:
     return SignalPlan(
         signal_plan_id=uuid4(),
@@ -48,7 +51,7 @@ def _open_signal_plan(
         entry=SignalPlanEntry(),
         stop=SignalPlanStop(
             type="percent",
-            rule=post_fill_pct_rule(stop_pct),
+            rule=stop_rule or post_fill_pct_rule(stop_pct),
             required=True,
         ) if stop_pct is not None else None,
         targets=tuple(
@@ -57,13 +60,14 @@ def _open_signal_plan(
                     label="t1",
                     action=SignalPlanTargetAction.CLOSE,
                     quantity_pct=target_quantity_pct,
-                    rule=post_fill_pct_rule(target_pct),
+                    rule=target_rule or post_fill_pct_rule(target_pct),
                 )
             ]
             if target_pct is not None
             else []
         ),
         created_at=datetime.now(timezone.utc),
+        feature_snapshot=feature_snapshot or {},
     )
 
 
@@ -124,6 +128,47 @@ def test_short_market_5pct_stop_10pct_target_post_fill_concrete_prices() -> None
     assert stop_leg.stop_price == pytest.approx(105.0)  # 100 * (1 + 0.05)
     assert target_leg.side == "buy"
     assert target_leg.limit_price == pytest.approx(90.0)  # 100 * (1 - 0.10)
+
+
+def test_long_atr_stop_and_target_post_fill_concrete_prices() -> None:
+    signal_plan = _open_signal_plan(
+        side=SignalPlanSide.LONG,
+        stop_rule="atr:2.0",
+        target_rule="atr:4.0",
+        feature_snapshot={"atr:length=14[0]": 1.25},
+    )
+
+    plan = ProtectiveOrderPlacer().compute_protective_plan(
+        signal_plan=signal_plan,
+        parent_order_id=uuid4(),
+        account_id=uuid4(),
+        fill_price=100.0,
+        cumulative_filled_qty=3.0,
+    )
+
+    assert len(plan.legs) == 2
+    assert plan.legs[0].side == "sell"
+    assert plan.legs[0].stop_price == pytest.approx(97.5)
+    assert plan.legs[1].side == "sell"
+    assert plan.legs[1].limit_price == pytest.approx(105.0)
+
+
+def test_atr_rules_without_atr_snapshot_emit_no_legs() -> None:
+    signal_plan = _open_signal_plan(
+        side=SignalPlanSide.LONG,
+        stop_rule="atr:2.0",
+        target_rule="atr:4.0",
+    )
+
+    plan = ProtectiveOrderPlacer().compute_protective_plan(
+        signal_plan=signal_plan,
+        parent_order_id=uuid4(),
+        account_id=uuid4(),
+        fill_price=100.0,
+        cumulative_filled_qty=3.0,
+    )
+
+    assert plan.legs == ()
 
 
 def test_partial_fill_idempotency_same_event_no_double_placement() -> None:

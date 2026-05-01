@@ -19,6 +19,7 @@ class PortfolioGovernor:
 
     @property
     def policy(self) -> GovernorPolicy:
+        self._refresh_policy_from_store()
         return self._policy
 
     def save_state(self) -> GovernorPolicy:
@@ -31,6 +32,7 @@ class PortfolioGovernor:
         *,
         policy_override: GovernorPolicy | None = None,
     ) -> GovernorDecision:
+        self._refresh_policy_from_store()
         # When policy_override is provided (RuntimeOrchestrator passes a
         # per-(account, deployment) policy resolved from AccountRiskConfig +
         # RiskPlanConfig), use it for THIS evaluation only. self._policy is
@@ -155,7 +157,10 @@ class PortfolioGovernor:
                         projected_state=projected_state,
                     )
             if active_policy.cooldown_after_loss_minutes is not None and daily.last_loss_at is not None:
-                elapsed_minutes = (utc_now() - daily.last_loss_at).total_seconds() / 60.0
+                # Use request.evaluated_at when provided (replay/backtest);
+                # fall back to wall-clock for live callers that don't thread it.
+                reference_now = request.evaluated_at if request.evaluated_at is not None else utc_now()
+                elapsed_minutes = (reference_now - daily.last_loss_at).total_seconds() / 60.0
                 if elapsed_minutes < active_policy.cooldown_after_loss_minutes:
                     return GovernorDecision.reject(
                         reason="cooldown_after_loss_active",
@@ -226,7 +231,6 @@ class PortfolioGovernor:
         return {
             "account_id": str(request.account_id),
             "deployment_id": str(request.deployment_id),
-            "program_id": str(request.program_id) if request.program_id is not None else None,
             "symbol": symbol,
             "order_intent": order_intent.value,
             "open_positions": request.portfolio.open_position_count(),
@@ -263,3 +267,8 @@ class PortfolioGovernor:
             return
         if hasattr(self._state_store, "save_policy"):
             self._state_store.save_policy(self._governor_id, self._policy)
+
+    def _refresh_policy_from_store(self) -> None:
+        loaded = self._load_policy()
+        if loaded is not None:
+            self._policy = loaded

@@ -5,7 +5,6 @@ from uuid import uuid4
 
 import pytest
 
-from backend.app.domain import CandidateSide, IntentType, OrderType, TimeInForce
 from backend.app.governor import (
     BrokerSyncFreshness,
     GovernorPolicy,
@@ -16,11 +15,9 @@ from backend.app.governor import (
 from backend.app.orders import InternalOrderIntent
 from backend.app.runtime import RuntimeState
 from backend.app.runtime.daily_account_state import DailyAccountState
-from backend.tests.fixtures.legacy_intent import LegacyExecutionIntent as ExecutionIntent
 
 ACCOUNT_ID = uuid4()
 DEPLOYMENT_ID = uuid4()
-PROGRAM_ID = uuid4()
 
 _NOW = datetime(2026, 4, 30, 15, 0, tzinfo=timezone.utc)
 _MARKET_DAY = "2026-04-30"
@@ -48,18 +45,19 @@ def _request(
     policy: GovernorPolicy = GovernorPolicy(),
     daily_state: DailyAccountState | None = None,
     equity: float | None = 10_000.0,
+    evaluated_at: datetime | None = None,
 ) -> tuple[PortfolioGovernor, GovernorRequest]:
     governor = PortfolioGovernor(policy)
     request = GovernorRequest(
         account_id=ACCOUNT_ID,
         deployment_id=DEPLOYMENT_ID,
-        program_id=PROGRAM_ID,
         symbol="SPY",
         runtime_state=RuntimeState(deployment_id=DEPLOYMENT_ID),
         broker_sync=BrokerSyncFreshness(),
         portfolio=PortfolioSnapshot(equity=equity),
         order_intent=InternalOrderIntent.OPEN,
         daily_state=daily_state,
+        evaluated_at=evaluated_at,
     )
     return governor, request
 
@@ -197,6 +195,20 @@ class TestDrawdownLimit:
 
         assert decision.approved is True
 
+    def test_drawdown_gate_disarm_when_equity_unknown_is_fail_closed(self) -> None:
+        # S-1 guard: even if drawdown metrics exist, equity unknown must
+        # reject OPEN before drawdown checks to avoid a silent bypass.
+        policy = GovernorPolicy(max_drawdown_pct=3.0)
+        governor, req = _request(
+            policy=policy,
+            daily_state=_daily_state(realized_pnl=-500.0, drawdown_pct=99.9),
+            equity=None,
+        )
+        decision = governor.evaluate(req)
+
+        assert decision.approved is False
+        assert decision.rule_id == "portfolio_equity_unavailable"
+
 
 # ── cooldown_after_loss_active ───────────────────────────────────────────────
 
@@ -258,6 +270,37 @@ class TestCooldownAfterLoss:
         governor, req = _request(
             policy=GovernorPolicy(),
             daily_state=_daily_state(last_loss_at=recent_loss),
+        )
+        decision = governor.evaluate(req)
+
+        assert decision.approved is True
+
+    def test_cooldown_measured_from_evaluated_at_not_wall_clock(self) -> None:
+        # P0-2 guard: replay/backtest passes evaluated_at = bar time. The
+        # governor must measure elapsed minutes from that ref, not utc_now().
+        policy = GovernorPolicy(cooldown_after_loss_minutes=15)
+        # Loss was at a historical bar; the evaluation bar is 5 minutes later.
+        # Wall-clock NOW is years away, but cooldown must still fire.
+        bar_time_loss = datetime(2026, 1, 5, 14, 30, tzinfo=timezone.utc)
+        bar_time_eval = bar_time_loss + timedelta(minutes=5)
+        governor, req = _request(
+            policy=policy,
+            daily_state=_daily_state(last_loss_at=bar_time_loss),
+            evaluated_at=bar_time_eval,
+        )
+        decision = governor.evaluate(req)
+
+        assert decision.approved is False
+        assert decision.rule_id == "cooldown_after_loss_active"
+
+    def test_cooldown_clears_when_evaluated_at_past_window(self) -> None:
+        policy = GovernorPolicy(cooldown_after_loss_minutes=15)
+        bar_time_loss = datetime(2026, 1, 5, 14, 30, tzinfo=timezone.utc)
+        bar_time_eval = bar_time_loss + timedelta(minutes=20)
+        governor, req = _request(
+            policy=policy,
+            daily_state=_daily_state(last_loss_at=bar_time_loss),
+            evaluated_at=bar_time_eval,
         )
         decision = governor.evaluate(req)
 

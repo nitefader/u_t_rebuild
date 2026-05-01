@@ -36,6 +36,7 @@ class PipelineEventType(StrEnum):
     # die because account #N's persist write raised. Operations sees the
     # exact failure and the operator can drain the gap.
     EVALUATION_PERSIST_FAILED = "evaluation_persist_failed"
+    SIGNAL_PLAN_PERSIST_FAILED = "signal_plan_persist_failed"
 
 
 class PipelineEvent(BaseModel):

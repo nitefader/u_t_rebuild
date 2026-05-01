@@ -1,0 +1,180 @@
+schema_version: 1
+artifact_type: machine_ingestable_trading_api_kb
+provider: alpaca
+scope:
+  - trading_api_orders
+  - trading_stream_events
+  - utos_broker_adapter_contract
+  - utos_protective_order_recovery
+last_verified_utc: "2026-05-01T19:55:00Z"
+sources:
+  - name: alpaca_orders_at_alpaca
+    url: "https://docs.alpaca.markets/docs/orders-at-alpaca"
+    verified_lines:
+      order_lifecycle: "573-599"
+      bracket_orders: "284-327"
+      oco_orders: "330-368"
+      price_increment_rules: "227-262"
+  - name: alpaca_trade_events_sse
+    url: "https://docs.alpaca.markets/reference/subscribetotradev2sse"
+    verified_lines:
+      rare_events: "102-117"
+
+utos_doctrine:
+  spine: "Strategy -> Deployment -> SignalPlan -> Account Evaluation -> RiskResolver -> Governor -> Order -> BrokerAdapter -> BrokerSync -> Position Truth"
+  ownership:
+    deployment: "emits SignalPlans only; never writes broker truth"
+    order_manager: "creates InternalOrder records and protective OCO children"
+    broker_adapter: "only boundary that submits/cancels/reads broker API"
+    broker_sync: "only broker truth writer into runtime state"
+  restart_recovery:
+    invariant: "active Deployment must recover protection through runtime spine, not DB patching"
+    required_flow:
+      - reload_active_deployments
+      - broker_sync_refresh_positions_and_open_orders
+      - warm_recent_market_bars_for_required_features
+      - compute_missing_pricing_context
+      - enrich_in_memory_signal_plan_only
+      - order_manager_create_protective_oco
+      - broker_adapter_submit
+      - broker_sync_confirm
+    fail_closed:
+      - "do_not_guess_atr"
+      - "do_not_patch_persisted_signal_plans"
+      - "surface_exact_naked_blocker_when_feature_recompute_fails"
+
+alpaca_order_classes:
+  simple:
+    utos_order_class: null
+    notes: "single order; no attached protection"
+  bracket:
+    utos_order_class: bracket
+    purpose: "entry plus take-profit and stop-loss children"
+    required_fields:
+      - order_class=bracket
+      - take_profit.limit_price
+      - stop_loss.stop_price
+    constraints:
+      - time_in_force in [day, gtc]
+      - extended_hours false_or_omitted
+      - whole_share_quantity_only_for_utos_native_bracket_path
+      - take_profit.limit_price_and_stop_loss.stop_price_must_be_present
+      - for_buy_bracket_take_profit_gt_stop_loss
+      - for_sell_bracket_take_profit_lt_stop_loss
+    utos_entrypoint:
+      adapter: "backend/app/brokers/alpaca.py::AlpacaBrokerAdapter.to_alpaca_order_request"
+      preflight: "backend/app/brokers/alpaca.py::AlpacaBrokerAdapter._validate_native_bracket_preflight"
+  oco:
+    utos_order_class: oco
+    purpose: "post-fill protection for an existing position"
+    required_fields:
+      - type=limit
+      - order_class=oco
+      - take_profit.limit_price
+      - stop_loss.stop_price
+    constraints:
+      - exit_order_only
+      - both_legs_same_side
+      - time_in_force in [day, gtc]
+      - extended_hours false_or_omitted
+      - whole_share_quantity_only_for_utos_native_oco_path
+      - top_level_limit_price_mirrors_take_profit.limit_price
+    utos_entrypoint:
+      order_creation: "backend/app/orders/manager.py::OrderManager.create_protective_oco_order_post_fill"
+      adapter: "backend/app/brokers/alpaca.py::AlpacaBrokerAdapter.to_alpaca_order_request"
+      preflight: "backend/app/brokers/alpaca.py::AlpacaBrokerAdapter._validate_native_oco_preflight"
+
+price_rules:
+  limit_price:
+    alpaca_rule: ">=1.00 max 2 decimals; <1.00 max 4 decimals"
+    utos_rule: "round half up before submit"
+  stop_price:
+    alpaca_rule: ">=1.00 max 2 decimals; <1.00 max 4 decimals"
+    utos_rule: "round half up before submit"
+  implementation: "backend/app/brokers/alpaca.py::AlpacaBrokerAdapter._alpaca_price"
+
+order_status_mapping:
+  open_or_nonterminal:
+    new: accepted
+    accepted: accepted
+    pending_new: accepted
+    accepted_for_bidding: accepted
+    held: accepted
+    stopped: accepted
+    partially_filled: partial_fill
+    partial_fill: partial_fill
+    pending_cancel: pending_cancel
+    pending_replace: replaced
+    suspended: suspended
+    done_for_day: done_for_day
+    calculated: done_for_day
+  terminal:
+    filled: filled
+    canceled: canceled
+    cancelled: canceled
+    expired: expired
+    rejected: rejected
+    replaced: replaced
+  critical_notes:
+    held: "expected for secondary OCO/bracket legs waiting to trigger; must not crash stream"
+    calculated: "completed for day but settlement calculations pending; do not treat as unknown"
+    stopped: "trade guaranteed but not occurred; do not treat as terminal"
+  implementation:
+    rest_adapter: "backend/app/brokers/alpaca.py::AlpacaBrokerAdapter.normalize_status"
+    stream_adapter: "backend/app/brokers/stream.py::AlpacaAccountStreamAdapter._normalize_status"
+
+trade_stream_events:
+  order_status_events:
+    - new
+    - fill
+    - partial_fill
+    - canceled
+    - expired
+    - done_for_day
+    - replaced
+    - rejected
+    - held
+    - stopped
+    - pending_cancel
+    - pending_replace
+    - calculated
+    - suspended
+  lifecycle_events_that_are_not_statuses:
+    - order_replace_rejected
+    - order_cancel_rejected
+    - trade_bust
+    - trade_correct
+    - restated
+  utos_stream_rule:
+    - "when payload.order.status is present, normalize payload.order.status"
+    - "use payload.event only when payload.order.status is absent"
+    - "never let an unknown lifecycle event crash broker sync if order.status is known"
+  implementation: "backend/app/brokers/stream.py::AlpacaAccountStreamAdapter._order_update"
+
+live_incident_2026_05_01:
+  account: "OtijiTrader - Paper2"
+  account_id: "f584c3a9-92af-4a16-a545-9848949789f0"
+  deployment: "Deployment Smoke 1m RedCandle TQQQ Paper 2"
+  deployment_id: "5b378d02-8199-4413-8bcd-33758edb851d"
+  symptom: "restart recovered Deployment but TQQQ position initially naked because stale SignalPlan lacked ATR value"
+  fixed_runtime_path:
+    - "recovered missing ATR stop rule from current v4 Deployment component"
+    - "fetched warmup bars through runtime historical source"
+    - "computed ATR via FeaturePlan and IncrementalFeatureEngine"
+    - "enriched in-memory SignalPlan only"
+    - "submitted native Alpaca OCO protective order"
+  alpaca_results:
+    - "four TQQQ OCO parents submitted"
+    - "take-profit parent orders canceled after OCO stop sibling filled"
+    - "four broker-generated stop-loss legs filled at stop_price 65.48"
+    - "TQQQ broker position closed; no TQQQ open position remained"
+  followup_risk:
+    - "Alpaca nested OCO stop legs can have broker-generated client_order_id; internal parent OCO may show canceled while nested stop leg filled"
+    - "audit view should inspect nested broker legs when explaining a completed OCO protection event"
+
+test_anchors:
+  alpaca_statuses: "backend/tests/unit/brokers/test_alpaca_broker_adapter.py::test_status_normalization_works"
+  stream_statuses: "backend/tests/unit/brokers/test_broker_stream_router.py::test_stream_adapter_normalizes_alpaca_multileg_and_rare_statuses"
+  stream_lifecycle_events: "backend/tests/unit/brokers/test_broker_stream_router.py::test_stream_adapter_prefers_order_status_for_non_status_trade_events"
+  native_oco: "backend/tests/unit/brokers/test_alpaca_native_bracket.py::test_native_oco_request_uses_limit_primary_with_attached_stop_loss"
+  restart_atr_recovery: "backend/tests/unit/runtime/test_broker_runtime_orchestrator.py::test_startup_recomputes_missing_v4_atr_from_recent_warmup_bars"

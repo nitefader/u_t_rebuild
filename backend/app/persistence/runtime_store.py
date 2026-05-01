@@ -10,7 +10,7 @@ from uuid import UUID, uuid4
 
 _LOGGER = logging.getLogger(__name__)
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from backend.app.brokers import (
     BrokerAccountSnapshot,
@@ -39,6 +39,7 @@ from backend.app.domain import (
     RiskDecisionCard,
     RiskPlan,
     RiskPlanVersion,
+    SignalPlan,
     SimulationRunEvidence,
     WalkForwardRun,
 )
@@ -97,19 +98,18 @@ class SQLiteRuntimeStore:
                     """
                     INSERT INTO internal_orders
                         (
-                            order_id, account_id, origin, deployment_id, program_id,
+                            order_id, account_id, origin, deployment_id,
                             strategy_id, strategy_version_id, signal_plan_id,
                             opening_signal_plan_id, current_signal_plan_id,
                             position_lineage_id, account_evaluation_id,
                             governor_decision_id, leg_label, lifecycle_intent,
                             client_order_id, status, payload
                         )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(order_id) DO UPDATE SET
                         account_id = excluded.account_id,
                         origin = excluded.origin,
                         deployment_id = excluded.deployment_id,
-                        program_id = excluded.program_id,
                         strategy_id = excluded.strategy_id,
                         strategy_version_id = excluded.strategy_version_id,
                         signal_plan_id = excluded.signal_plan_id,
@@ -129,7 +129,6 @@ class SQLiteRuntimeStore:
                         str(order.account_id),
                         order.origin.value,
                         str(order.deployment_id) if order.deployment_id is not None else None,
-                        str(order.program_id) if order.program_id is not None else None,
                         str(order.strategy_id) if order.strategy_id is not None else None,
                         str(order.strategy_version_id) if order.strategy_version_id is not None else None,
                         str(order.signal_plan_id) if order.signal_plan_id is not None else None,
@@ -160,9 +159,6 @@ class SQLiteRuntimeStore:
 
     def list_orders_by_deployment(self, deployment_id: UUID) -> tuple[InternalOrder, ...]:
         return self._load_orders("SELECT payload FROM internal_orders WHERE deployment_id = ? ORDER BY rowid", str(deployment_id))
-
-    def list_orders_by_program(self, program_id: UUID) -> tuple[InternalOrder, ...]:
-        return self._load_orders("SELECT payload FROM internal_orders WHERE program_id = ? ORDER BY rowid", str(program_id))
 
     def list_orders_by_signal_plan(self, signal_plan_id: UUID) -> tuple[InternalOrder, ...]:
         return self._load_orders("SELECT payload FROM internal_orders WHERE signal_plan_id = ? ORDER BY rowid", str(signal_plan_id))
@@ -792,7 +788,7 @@ class SQLiteRuntimeStore:
         return version.config
 
     def load_governor_policy_inputs(
-        self, account_id: UUID, horizon: TradingHorizon
+        self, account_id: UUID, horizon: TradingHorizon | None
     ) -> "tuple[AccountRiskConfig | None, RiskPlanConfig | None]":
         """Read both Governor policy inputs as ONE atomic snapshot.
 
@@ -840,16 +836,25 @@ class SQLiteRuntimeStore:
                     "SELECT payload FROM account_risk_configs WHERE account_id = ?",
                     (str(account_id),),
                 ).fetchone()
-                plan_row = connection.execute(
-                    """
-                    SELECT rpv.payload
-                    FROM account_risk_plan_map arpm
-                    JOIN risk_plan_versions rpv
-                        ON arpm.risk_plan_version_id = rpv.risk_plan_version_id
-                    WHERE arpm.account_id = ? AND arpm.horizon = ?
-                    """,
-                    (str(account_id), horizon.value),
-                ).fetchone()
+                # Slice 8.7: Deployment.risk_horizon is optional. When the
+                # Deployment carries no horizon, no per-horizon plan rule is
+                # enforced and there is nothing to look up — the
+                # ``account_risk_plan_map`` table is keyed by (account_id,
+                # horizon). Skip the join and return None for the plan half;
+                # AccountRiskConfig still applies.
+                if horizon is None:
+                    plan_row = None
+                else:
+                    plan_row = connection.execute(
+                        """
+                        SELECT rpv.payload
+                        FROM account_risk_plan_map arpm
+                        JOIN risk_plan_versions rpv
+                            ON arpm.risk_plan_version_id = rpv.risk_plan_version_id
+                        WHERE arpm.account_id = ? AND arpm.horizon = ?
+                        """,
+                        (str(account_id), horizon.value),
+                    ).fetchone()
             finally:
                 connection.execute("COMMIT")
 
@@ -889,6 +894,200 @@ class SQLiteRuntimeStore:
     def list_broker_account_snapshots(self) -> tuple[BrokerAccountSnapshot, ...]:
         rows = self._fetch_all("SELECT payload FROM broker_account_snapshots ORDER BY rowid")
         return tuple(_load_model(BrokerAccountSnapshot, row["payload"]) for row in rows)
+
+    def list_active_account_deployments(self):  # noqa: ANN201
+        """Build BrokerRuntimeDeployment entries for every active deployment.
+
+        Slice 11 closer: BrokerRuntimeOrchestrator.load_active_account_deployments
+        does a hasattr check on this method and silently no-ops when missing,
+        which left the supervisor unable to consume DB-stored deployments.
+
+        For each row in ``deployments`` with ``lifecycle_status='active'`` this:
+        - Loads the v4 strategy via the v4 service (legacy strategy left None;
+          one of the two FKs is required by the dual-track lock).
+        - Loads StrategyControlsVersion + ExecutionStyleVersion via their
+          repositories.
+        - Reads the first watchlist's static_symbols and synthesises an
+          in-memory ``UniverseSnapshot`` (the universe_snapshots table is not
+          persisted in this DB era).
+        - Synthesises a stub ``RiskProfileVersion`` (sizing carried in v4 by
+          AccountRiskConfig + StrategyControls; this is purely the type
+          contract until Slice 12 makes the field optional).
+        - Builds DeploymentContext + ResolvedDeploymentComponents and one
+          ``BrokerRuntimeDeployment`` per active deployment, keyed to its
+          first subscribed account; ``account_ids`` carries the full set.
+        - Paper accounts get ``live_order_submission_enabled=True`` (paper
+          submission is the whole point); live accounts default to False
+          until explicit enablement, per existing doctrine.
+        """
+        from backend.app.domain.risk_profile import (
+            PositionSizingMethod,
+            RiskProfileVersion,
+        )
+        from backend.app.domain.universe import UniverseSnapshot, UniverseSymbol
+        from backend.app.execution_plans.runtime_service import (
+            create_execution_plan_service_from_environment,
+        )
+        from backend.app.features import ResolvedDeploymentComponents
+        from backend.app.runtime.account_trading_orchestrator import (
+            BrokerRuntimeDeployment,
+        )
+        from backend.app.runtime.models import DeploymentContext
+        from backend.app.strategies_v4.runtime_service import (
+            create_strategy_v4_service_from_environment,
+        )
+        from backend.app.strategy_controls.runtime_service import (
+            create_strategy_controls_service_from_environment,
+        )
+
+        strategy_v4_svc = create_strategy_v4_service_from_environment()
+        controls_svc = create_strategy_controls_service_from_environment()
+        plan_svc = create_execution_plan_service_from_environment()
+
+        rows = self._fetch_all(
+            "SELECT deployment_id, name, payload FROM deployments "
+            "WHERE lifecycle_status = 'active'"
+        )
+        results: list[BrokerRuntimeDeployment] = []
+        for row in rows:
+            payload = json.loads(row["payload"])
+            deployment_id = UUID(row["deployment_id"])
+            sv4_id_raw = payload.get("strategy_version_v4_id")
+            controls_id_raw = payload.get("strategy_controls_version_id")
+            plan_id_raw = payload.get("execution_plan_version_id")
+            watchlist_ids_raw = payload.get("watchlist_ids") or []
+            account_ids_raw = payload.get("subscribed_account_ids") or []
+            risk_horizon_raw = payload.get("risk_horizon")
+
+            if sv4_id_raw is None:
+                _LOGGER.warning(
+                    "deployment %s skipped: legacy strategy_version_id deployments "
+                    "are not loaded by this runtime path; only v4 is supported",
+                    deployment_id,
+                )
+                continue
+            if not (controls_id_raw and plan_id_raw and account_ids_raw and watchlist_ids_raw):
+                _LOGGER.warning(
+                    "deployment %s skipped: missing required FK "
+                    "(controls=%s plan=%s accounts=%s watchlists=%s)",
+                    deployment_id,
+                    controls_id_raw,
+                    plan_id_raw,
+                    account_ids_raw,
+                    watchlist_ids_raw,
+                )
+                continue
+
+            try:
+                strategy_v4 = strategy_v4_svc.get(UUID(sv4_id_raw))
+            except Exception as exc:  # noqa: BLE001
+                _LOGGER.warning(
+                    "deployment %s skipped: load v4 strategy %s failed: %s",
+                    deployment_id, sv4_id_raw, exc,
+                )
+                continue
+            try:
+                controls_record = controls_svc.get_version(UUID(controls_id_raw))
+            except Exception as exc:  # noqa: BLE001
+                _LOGGER.warning(
+                    "deployment %s skipped: load controls %s failed: %s",
+                    deployment_id, controls_id_raw, exc,
+                )
+                continue
+            try:
+                plan_record = plan_svc.get_version(UUID(plan_id_raw))
+            except Exception as exc:  # noqa: BLE001
+                _LOGGER.warning(
+                    "deployment %s skipped: load execution plan %s failed: %s",
+                    deployment_id, plan_id_raw, exc,
+                )
+                continue
+
+            wl_row = self._fetch_one(
+                "SELECT payload FROM watchlists WHERE watchlist_id = ?",
+                (str(watchlist_ids_raw[0]),),
+            )
+            if wl_row is None:
+                _LOGGER.warning(
+                    "deployment %s skipped: watchlist %s not found",
+                    deployment_id, watchlist_ids_raw[0],
+                )
+                continue
+            wl_payload = json.loads(wl_row["payload"])
+            symbols_raw = wl_payload.get("static_symbols") or []
+            if not symbols_raw:
+                _LOGGER.warning(
+                    "deployment %s skipped: watchlist %s has no static_symbols",
+                    deployment_id, watchlist_ids_raw[0],
+                )
+                continue
+
+            universe = UniverseSnapshot(
+                id=uuid4(),
+                universe_id=UUID(watchlist_ids_raw[0]),
+                version=1,
+                name=wl_payload.get("name") or "watchlist universe",
+                symbols=[UniverseSymbol(symbol=s.upper()) for s in symbols_raw],
+            )
+
+            risk_profile = RiskProfileVersion(
+                id=uuid4(),
+                risk_profile_id=uuid4(),
+                version=1,
+                name="v4-runtime-stub-fixed-shares-1",
+                sizing_method=PositionSizingMethod.FIXED_SHARES,
+                fixed_shares=1,
+            )
+
+            components = ResolvedDeploymentComponents(
+                strategy=None,
+                strategy_version_v4=strategy_v4,
+                strategy_controls=controls_record.payload,
+                risk_profile=risk_profile,
+                execution_style=plan_record.payload,
+                universe=universe,
+            )
+
+            risk_horizon = TradingHorizon(risk_horizon_raw) if risk_horizon_raw else None
+
+            primary_account_id = UUID(account_ids_raw[0])
+            try:
+                broker_account = self.load_broker_account(primary_account_id)
+            except KeyError:
+                _LOGGER.warning(
+                    "deployment %s skipped: account %s not found",
+                    deployment_id, primary_account_id,
+                )
+                continue
+
+            deployment_context = DeploymentContext(
+                deployment_id=deployment_id,
+                mode=broker_account.mode.value,
+                risk_horizon=risk_horizon,
+            )
+
+            initial_cash = 100_000.0
+            try:
+                snap = self.load_broker_account_snapshot(primary_account_id)
+                if snap.equity is not None and float(snap.equity) > 0:
+                    initial_cash = float(snap.equity)
+            except KeyError:
+                pass
+
+            live_submit_enabled = broker_account.mode.value == "BROKER_PAPER"
+
+            results.append(
+                BrokerRuntimeDeployment(
+                    deployment=deployment_context,
+                    components=components,
+                    account_id=primary_account_id,
+                    active=True,
+                    initial_cash=initial_cash,
+                    account_ids=tuple(UUID(a) for a in account_ids_raw),
+                    live_order_submission_enabled=live_submit_enabled,
+                )
+            )
+        return tuple(results)
 
     def save_broker_position_snapshot(self, snapshot: BrokerPositionSnapshot) -> BrokerPositionSnapshot:
         with self._connect() as connection:
@@ -1268,6 +1467,105 @@ class SQLiteRuntimeStore:
         )
         return tuple(_load_model(RiskDecisionCard, row["payload"]) for row in rows)
 
+    def save_signal_plan(self, signal_plan: SignalPlan) -> SignalPlan:
+        """Persist the Deployment-owned SignalPlan read model.
+
+        SignalPlans stay account-neutral here. Account-level ACCEPT / REJECT /
+        IGNORE outcomes are persisted separately as AccountSignalPlanEvaluation
+        rows keyed back to the same ``signal_plan_id``.
+        """
+
+        persisted_at = utc_now().isoformat()
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO signal_plans
+                    (
+                        signal_plan_id, deployment_id, strategy_id,
+                        strategy_version_id, symbol, side, intent, status,
+                        created_at, published_at, persisted_at, payload
+                    )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(signal_plan_id) DO UPDATE SET
+                    deployment_id = excluded.deployment_id,
+                    strategy_id = excluded.strategy_id,
+                    strategy_version_id = excluded.strategy_version_id,
+                    symbol = excluded.symbol,
+                    side = excluded.side,
+                    intent = excluded.intent,
+                    status = excluded.status,
+                    created_at = excluded.created_at,
+                    published_at = excluded.published_at,
+                    persisted_at = excluded.persisted_at,
+                    payload = excluded.payload
+                """,
+                (
+                    str(signal_plan.signal_plan_id),
+                    str(signal_plan.deployment_id),
+                    str(signal_plan.strategy_id),
+                    str(signal_plan.strategy_version_id),
+                    signal_plan.symbol.upper(),
+                    signal_plan.side.value,
+                    signal_plan.intent.value,
+                    signal_plan.status.value,
+                    signal_plan.created_at.isoformat(),
+                    signal_plan.published_at.isoformat() if signal_plan.published_at is not None else None,
+                    persisted_at,
+                    _dump_model(signal_plan),
+                ),
+            )
+        return signal_plan
+
+    def load_signal_plan(self, signal_plan_id: UUID) -> SignalPlan:
+        row = self._fetch_one(
+            "SELECT payload FROM signal_plans WHERE signal_plan_id = ?",
+            (str(signal_plan_id),),
+        )
+        if row is None:
+            raise KeyError(f"unknown signal plan: {signal_plan_id}")
+        return _load_model(SignalPlan, row["payload"])
+
+    def list_signal_plans(
+        self,
+        *,
+        account_id: UUID | None = None,
+        deployment_id: UUID | None = None,
+        symbol: str | None = None,
+        limit: int = 100,
+    ) -> tuple[SignalPlan, ...]:
+        bounded_limit = max(1, min(int(limit), 500))
+        conditions: list[str] = []
+        params: list[object] = []
+        if deployment_id is not None:
+            conditions.append("deployment_id = ?")
+            params.append(str(deployment_id))
+        if account_id is not None:
+            conditions.append(
+                """
+                signal_plan_id IN (
+                    SELECT signal_plan_id
+                    FROM account_signal_plan_evaluations
+                    WHERE account_id = ?
+                )
+                """
+            )
+            params.append(str(account_id))
+        if symbol is not None:
+            conditions.append("symbol = ?")
+            params.append(symbol.upper())
+        where = f" WHERE {' AND '.join(conditions)}" if conditions else ""
+        params.append(bounded_limit)
+        rows = self._fetch_all(
+            f"""
+            SELECT payload FROM signal_plans
+            {where}
+            ORDER BY created_at DESC, signal_plan_id
+            LIMIT ?
+            """,
+            tuple(params),
+        )
+        return tuple(_load_model(SignalPlan, row["payload"]) for row in rows)
+
     # -- W2-A-2 (audit P0 #2 — pre-T-7 bundle, 2026-04-30) -------------------
     # Durable persistence for every AccountSignalPlanEvaluation. Pre-W2-A
     # the orchestrator built these in memory and Operations reconstructed
@@ -1621,18 +1919,6 @@ class SQLiteRuntimeStore:
         return self._session_factory.connect()
 
     def _migrate_legacy_tables(self, connection: sqlite3.Connection) -> None:
-        legacy_orders = connection.execute(
-            "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'orders'"
-        ).fetchone()
-        if legacy_orders is not None:
-            connection.execute(
-                """
-                INSERT OR IGNORE INTO internal_orders
-                    (order_id, account_id, deployment_id, program_id, client_order_id, status, payload)
-                SELECT order_id, account_id, deployment_id, program_id, client_order_id, 'created', payload
-                FROM orders
-                """
-            )
         legacy_deployments = connection.execute(
             "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'deployment_states'"
         ).fetchone()
@@ -1658,7 +1944,7 @@ class SQLiteRuntimeStore:
             for row in connection.execute("PRAGMA table_info(internal_orders)").fetchall()
         }
         if "origin" not in internal_order_columns:
-            connection.execute("ALTER TABLE internal_orders ADD COLUMN origin TEXT NOT NULL DEFAULT 'program'")
+            connection.execute("ALTER TABLE internal_orders ADD COLUMN origin TEXT NOT NULL DEFAULT 'signal_plan'")
         lineage_columns = {
             "strategy_id",
             "strategy_version_id",
@@ -1677,17 +1963,16 @@ class SQLiteRuntimeStore:
         nullable_lineage = {
             row["name"]: row["notnull"]
             for row in internal_order_info
-            if row["name"] in {"deployment_id", "program_id"}
+            if row["name"] == "deployment_id"
         }
-        if nullable_lineage.get("deployment_id") or nullable_lineage.get("program_id"):
+        if nullable_lineage.get("deployment_id"):
             connection.executescript(
                 """
                 CREATE TABLE IF NOT EXISTS internal_orders_v2 (
                     order_id TEXT PRIMARY KEY,
                     account_id TEXT NOT NULL,
-                    origin TEXT NOT NULL DEFAULT 'program',
+                    origin TEXT NOT NULL,
                     deployment_id TEXT,
-                    program_id TEXT,
                     strategy_id TEXT,
                     strategy_version_id TEXT,
                     signal_plan_id TEXT,
@@ -1704,7 +1989,7 @@ class SQLiteRuntimeStore:
                 );
                 INSERT OR IGNORE INTO internal_orders_v2
                     (
-                        order_id, account_id, origin, deployment_id, program_id,
+                        order_id, account_id, origin, deployment_id,
                         strategy_id, strategy_version_id, signal_plan_id,
                         opening_signal_plan_id, current_signal_plan_id,
                         position_lineage_id, account_evaluation_id,
@@ -1712,7 +1997,9 @@ class SQLiteRuntimeStore:
                         client_order_id, status, payload
                     )
                 SELECT
-                    order_id, account_id, origin, deployment_id, program_id,
+                    order_id, account_id,
+                    CASE WHEN origin = 'program' THEN 'signal_plan' ELSE origin END,
+                    deployment_id,
                     strategy_id, strategy_version_id, signal_plan_id,
                     opening_signal_plan_id, current_signal_plan_id,
                     position_lineage_id, account_evaluation_id,
@@ -1724,7 +2011,6 @@ class SQLiteRuntimeStore:
                 CREATE INDEX IF NOT EXISTS ix_internal_orders_account_id ON internal_orders(account_id);
                 CREATE INDEX IF NOT EXISTS ix_internal_orders_origin ON internal_orders(origin);
                 CREATE INDEX IF NOT EXISTS ix_internal_orders_deployment_id ON internal_orders(deployment_id);
-                CREATE INDEX IF NOT EXISTS ix_internal_orders_program_id ON internal_orders(program_id);
                 CREATE INDEX IF NOT EXISTS ix_internal_orders_signal_plan_id ON internal_orders(signal_plan_id);
                 CREATE INDEX IF NOT EXISTS ix_internal_orders_opening_signal_plan_id ON internal_orders(opening_signal_plan_id);
                 CREATE INDEX IF NOT EXISTS ix_internal_orders_position_lineage_id ON internal_orders(position_lineage_id);
@@ -1794,9 +2080,6 @@ class SQLiteOrderLedger(OrderLedger):
 
     def by_deployment(self, deployment_id: UUID) -> tuple[InternalOrder, ...]:
         return self._runtime_store.list_orders_by_deployment(deployment_id)
-
-    def by_program(self, program_id: UUID) -> tuple[InternalOrder, ...]:
-        return self._runtime_store.list_orders_by_program(program_id)
 
     def by_client_order_id(self, client_order_id: str) -> InternalOrder | None:
         for order in self._runtime_store.list_orders():
@@ -1877,7 +2160,15 @@ def _dump_model(model: BaseModel) -> str:
 
 
 def _load_model(model_type: type[ModelT], payload: str) -> ModelT:
-    return model_type.model_validate(json.loads(payload))
+    data = json.loads(payload)
+    try:
+        return model_type.model_validate(data)
+    except ValidationError:
+        if isinstance(data, dict):
+            trimmed = {key: value for key, value in data.items() if key in model_type.model_fields}
+            if len(trimmed) != len(data):
+                return model_type.model_validate(trimmed)
+        raise
 
 
 def _research_evidence_id(evidence: ResearchEvidence) -> UUID:

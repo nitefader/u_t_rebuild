@@ -3,12 +3,14 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Activity, Clock, Pause, Play, Search, ShieldAlert, TrendingDown, Zap } from "lucide-react";
 import { OperationsApi } from "@/api/operations";
 import { SystemApi } from "@/api/system";
+import { TimelinesApi } from "@/api/timelines";
 import type {
   AccountSummary,
   DeploymentSummary,
   GovernorDecision,
   RuntimeOverview,
 } from "@/api/schemas/operations";
+import type { GovernorDecisionTrace } from "@/api/schemas/timelines";
 import type { DailyRiskStateResponse } from "@/api/schemas/dailyRiskState";
 import type { HubStatus, TradeStreamStatus } from "@/api/schemas/system";
 import { TRADING_HORIZON_LABELS } from "@/api/schemas/risk";
@@ -993,23 +995,89 @@ function resolvedRiskPlanLabel(decision: GovernorDecision): string | null {
   const id = decision.projected_state?.resolved_risk_plan_id as string | undefined;
   const name = decision.projected_state?.resolved_risk_plan_name as string | undefined;
   if (name) return name;
-  if (id) return id.slice(0, 8) + "…";
+  if (id) return id.slice(0, 8) + "...";
+  return null;
+}
+
+function traceReasonText(decision: GovernorDecisionTrace): string {
+  return decision.reasons[0] ?? decision.violations[0] ?? decision.status;
+}
+
+function traceRuleText(decision: GovernorDecisionTrace): string {
+  return decision.violations[0] ?? decision.reasons[0] ?? decision.status;
+}
+
+function traceRiskPlanLabel(decision: GovernorDecisionTrace): string | null {
+  const projected = (decision.projected_state ?? {}) as Record<string, unknown>;
+  const name = projected.resolved_risk_plan_name as string | undefined;
+  const id = projected.resolved_risk_plan_id as string | undefined;
+  if (name) return name;
+  if (id) return id.slice(0, 8) + "...";
   return null;
 }
 
 function RecentDecisionsCard({ overview }: { overview: RuntimeOverview }): JSX.Element {
-  const list = overview.latest_governor_decisions;
+  const timeline = useQuery({
+    queryKey: ["operations", "governor-decisions", "recent"],
+    queryFn: () => TimelinesApi.governorDecisions({ limit: 10 }),
+    refetchInterval: 5_000,
+    retry: false,
+  });
+  const traceList = timeline.data?.governor_decisions ?? [];
+  const legacyList = overview.latest_governor_decisions;
+  const listLength = traceList.length > 0 ? traceList.length : legacyList.length;
+  const hasRejected = traceList.length > 0
+    ? traceList.some((d) => !d.approved)
+    : legacyList.some((d) => !d.approved);
   return (
     <Card>
       <CardHeader>
         <CardTitle>Recent Governor decisions</CardTitle>
-        <StatusBadge tone={list.some((d) => !d.approved) ? "warn" : "ok"}>{list.length}</StatusBadge>
+        <StatusBadge tone={hasRejected ? "warn" : "ok"}>{listLength}</StatusBadge>
       </CardHeader>
       <CardBody className="p-0">
-        {list.length === 0 ? (
+        {listLength === 0 ? (
           <div className="p-4">
             <EmptyState title="No recent decisions" message="Governor decisions will appear here as Deployments emit SignalPlans." />
           </div>
+        ) : traceList.length > 0 ? (
+          <table className="ut-table">
+            <thead>
+              <tr>
+                <th>Approved</th>
+                <th>Reason</th>
+                <th>Rule</th>
+                <th>RiskPlan</th>
+                <th>When</th>
+              </tr>
+            </thead>
+            <tbody>
+              {traceList.map((d) => {
+                const riskPlanLabel = traceRiskPlanLabel(d);
+                return (
+                  <tr key={d.governor_decision_id}>
+                    <td>
+                      <StatusBadge tone={d.approved ? "ok" : "danger"}>
+                        {d.approved ? "approved" : "rejected"}
+                      </StatusBadge>
+                    </td>
+                    <td className="font-medium">{traceReasonText(d)}</td>
+                    <td className="text-fg-muted">{traceRuleText(d)}</td>
+                    <td>
+                      {riskPlanLabel ? (
+                        <StatusBadge tone="neutral" size="sm">
+                          {riskPlanLabel}
+                        </StatusBadge>
+                      ) : (
+                        <span className="text-fg-subtle">-</span>
+                      )}
+                    </td>
+                    <td className="text-fg-muted">{relativeTime(d.evaluated_at)}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
         ) : (
           <table className="ut-table">
             <thead>
@@ -1022,7 +1090,7 @@ function RecentDecisionsCard({ overview }: { overview: RuntimeOverview }): JSX.E
               </tr>
             </thead>
             <tbody>
-              {list.map((d, i) => {
+              {legacyList.map((d, i) => {
                 const riskPlanLabel = resolvedRiskPlanLabel(d);
                 return (
                   <tr key={i}>

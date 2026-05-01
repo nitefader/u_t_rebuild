@@ -99,6 +99,8 @@ class ManualOrderResponse(BaseModel):
     status: InternalOrderStatus
     intent: InternalOrderIntent
     submitted_at: str
+    origin: str
+    source: str
     duplicate: bool = False
 
 
@@ -215,6 +217,7 @@ def _enforce_live_guard(account: BrokerAccount, request: ManualOrderRequest) -> 
 
 
 def _serialize(order: InternalOrder, *, duplicate: bool = False) -> ManualOrderResponse:
+    source = "manual" if order.origin.value == "manual_operator" else order.origin.value
     return ManualOrderResponse(
         order_id=order.order_id,
         client_order_id=order.client_order_id,
@@ -226,6 +229,8 @@ def _serialize(order: InternalOrder, *, duplicate: bool = False) -> ManualOrderR
         status=order.status,
         intent=order.intent,
         submitted_at=order.created_at.isoformat(),
+        origin=order.origin.value,
+        source=source,
         duplicate=duplicate,
     )
 

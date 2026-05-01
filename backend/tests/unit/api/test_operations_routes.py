@@ -10,14 +10,21 @@ from backend.app.operations import (
     AccountSignalPlanEvaluationListResponse,
     DeploymentOperations,
     FlattenRequestResponse,
+    GovernorDecisionListResponse,
     InternalOrderLedgerSummary,
     OrderDetail,
     RuntimeOverview,
+    SignalPlanListResponse,
 )
 from backend.app.domain import (
     AccountEvaluationStatus,
     AccountParticipationDecision,
     AccountSignalPlanEvaluation,
+    GovernorDecisionStatus,
+    GovernorDecisionTrace,
+    SignalPlan,
+    SignalPlanIntent,
+    SignalPlanSide,
 )
 from backend.tests.unit.operations.test_operations_center_service import STRATEGY_VERSION_ID, _backtest_evidence, _order
 from backend.app.runtime import RuntimeStatus
@@ -62,6 +69,27 @@ class RecordingOperationsService:
                 participation_decision=AccountParticipationDecision.PARTICIPATE,
             ),
         )
+        self.signal_plans = (
+            SignalPlan(
+                signal_plan_id=self.evaluations[0].signal_plan_id,
+                deployment_id=DEPLOYMENT_ID,
+                strategy_id=self.evaluations[0].strategy_id,
+                strategy_version_id=STRATEGY_VERSION_ID,
+                symbol="SPY",
+                side=SignalPlanSide.LONG,
+                intent=SignalPlanIntent.OPEN,
+            ),
+        )
+        self.governor_decisions = (
+            GovernorDecisionTrace(
+                governor_decision_id=UUID("55555555-6666-7777-8888-999999999999"),
+                account_id=ACCOUNT_ID,
+                signal_plan_id=self.evaluations[0].signal_plan_id,
+                status=GovernorDecisionStatus.APPROVED,
+                approved=True,
+                reasons=("approved",),
+            ),
+        )
         self.research_evidence = (_backtest_evidence(),)
 
     def get_runtime_overview(self) -> RuntimeOverview:
@@ -97,6 +125,34 @@ class RecordingOperationsService:
         self.calls.append(("signal_plan_id", signal_plan_id or "all"))
         self.calls.append(("limit", str(limit)))
         return self.evaluations
+
+    def list_signal_plans(
+        self,
+        *,
+        account_id: UUID | None = None,
+        deployment_id: UUID | None = None,
+        symbol: str | None = None,
+        limit: int = 100,
+    ) -> tuple[SignalPlan, ...]:
+        self.calls.append(("list_signal_plans", account_id or "all"))
+        self.calls.append(("deployment_id", deployment_id or "all"))
+        self.calls.append(("symbol", symbol or "all"))
+        self.calls.append(("limit", str(limit)))
+        return self.signal_plans
+
+    def list_governor_decision_traces(
+        self,
+        *,
+        account_id: UUID | None = None,
+        deployment_id: UUID | None = None,
+        signal_plan_id: UUID | None = None,
+        limit: int = 100,
+    ) -> tuple[GovernorDecisionTrace, ...]:
+        self.calls.append(("list_governor_decision_traces", account_id or "all"))
+        self.calls.append(("deployment_id", deployment_id or "all"))
+        self.calls.append(("signal_plan_id", signal_plan_id or "all"))
+        self.calls.append(("limit", str(limit)))
+        return self.governor_decisions
 
     def list_research_evidence(
         self,
@@ -170,7 +226,9 @@ def test_routes_are_registered_with_explicit_response_models() -> None:
     assert registered[("GET", f"/api/v1/operations/deployments/{{deployment_id}}")] is DeploymentOperations
     assert registered[("GET", f"/api/v1/operations/orders/{{order_id}}")] is OrderDetail
     assert registered[("GET", "/api/v1/operations/broker-orders/{broker_order_id}")] is OrderDetail
+    assert registered[("GET", "/api/v1/operations/signal-plans")] is SignalPlanListResponse
     assert registered[("GET", "/api/v1/operations/evaluations")] is AccountSignalPlanEvaluationListResponse
+    assert registered[("GET", "/api/v1/operations/governor-decisions")] is GovernorDecisionListResponse
     assert registered[("GET", "/api/v1/operations/research-evidence")] is operations.ResearchEvidenceListResponse
     assert registered[("GET", "/api/v1/operations/research-evidence/{evidence_id}")] is operations.ResearchEvidenceResponse
     assert registered[("POST", f"/api/v1/operations/deployments/{{deployment_id}}/pause")] is operations.ControlCommandResponse
@@ -244,6 +302,47 @@ def test_account_signal_plan_evaluations_route_returns_read_model_with_filters()
     assert response.evaluations == service.evaluations
     assert service.calls == [
         ("list_account_signal_plan_evaluations", ACCOUNT_ID),
+        ("deployment_id", DEPLOYMENT_ID),
+        ("signal_plan_id", signal_plan_id),
+        ("limit", "25"),
+    ]
+
+
+def test_signal_plans_route_returns_read_model_with_filters() -> None:
+    service = RecordingOperationsService()
+
+    response = operations.list_signal_plans(
+        account_id=ACCOUNT_ID,
+        deployment_id=DEPLOYMENT_ID,
+        symbol="SPY",
+        limit=25,
+        service=service,
+    )
+
+    assert response.signal_plans == service.signal_plans
+    assert service.calls == [
+        ("list_signal_plans", ACCOUNT_ID),
+        ("deployment_id", DEPLOYMENT_ID),
+        ("symbol", "SPY"),
+        ("limit", "25"),
+    ]
+
+
+def test_governor_decisions_route_returns_read_model_with_filters() -> None:
+    service = RecordingOperationsService()
+    signal_plan_id = service.governor_decisions[0].signal_plan_id
+
+    response = operations.list_governor_decisions(
+        account_id=ACCOUNT_ID,
+        deployment_id=DEPLOYMENT_ID,
+        signal_plan_id=signal_plan_id,
+        limit=25,
+        service=service,
+    )
+
+    assert response.governor_decisions == service.governor_decisions
+    assert service.calls == [
+        ("list_governor_decision_traces", ACCOUNT_ID),
         ("deployment_id", DEPLOYMENT_ID),
         ("signal_plan_id", signal_plan_id),
         ("limit", "25"),

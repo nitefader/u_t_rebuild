@@ -32,17 +32,19 @@ from .ast_nodes import (
     FunctionCall,
     NumberLit,
     TimeframedFeature,
+    TimeframeVarFeature,
     UnaryOp,
     VariableRef,
 )
 from .errors import ParseError
 from .lexer import Token, tokenize
+from .timeframes import CANONICAL_TIMEFRAMES
 
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
 
-_TIMEFRAMES: frozenset[str] = frozenset({"1m", "5m", "15m", "30m", "1h", "4h", "1d"})
+_TIMEFRAMES: frozenset[str] = CANONICAL_TIMEFRAMES
 
 # Keywords that act as operators at the comparison level
 _CROSS_OPS: frozenset[str] = frozenset({"crosses_above", "crosses_below"})
@@ -64,9 +66,10 @@ _BAR_FIELDS: frozenset[str] = frozenset({"close", "open", "high", "low", "range"
 class _Parser:
     """Internal recursive-descent parser.  Call parse() at module level."""
 
-    def __init__(self, tokens: list[Token]) -> None:
+    def __init__(self, tokens: list[Token], timeframe_variable_names: frozenset[str]) -> None:
         self._tokens = tokens
         self._pos = 0
+        self._timeframe_variables = timeframe_variable_names
 
     # ---- token stream helpers ----
 
@@ -233,6 +236,12 @@ class _Parser:
         if value in _TIMEFRAMES:
             return self._timeframed_feature()
 
+        # ---- Timeframe variable prefix: sig_tf.ema(9) ----
+        if value in self._timeframe_variables:
+            t_next = self._pos + 1
+            if t_next < len(self._tokens) and self._tokens[t_next].kind == "DOT":
+                return self._timeframe_var_feature()
+
         # ---- bar[-N].field lookback ----
         if value == "bar":
             t2_pos = self._pos + 1
@@ -268,6 +277,34 @@ class _Parser:
             self._expect_op(")")
 
         return TimeframedFeature(timeframe=timeframe, name=name, args=tuple(args))
+
+    def _timeframe_var_feature(self) -> AstNode:
+        """Parse sig_tf.ema(9) where sig_tf names a strategy timeframe variable."""
+        var_tok = self._advance()
+        timeframe_var = var_tok.value
+
+        if self._peek().kind != "DOT":
+            raise ParseError(
+                f"Expected '.' after timeframe variable '{timeframe_var}'",
+                line=self._peek().line, col=self._peek().col,
+            )
+        self._advance()  # consume DOT
+
+        name_tok = self._expect_ident()
+        feat_name = name_tok.value
+
+        args: list[AstNode] = []
+        if self._check_op("("):
+            self._advance()
+            if not self._check_op(")"):
+                args = self._arg_list()
+            self._expect_op(")")
+
+        return TimeframeVarFeature(
+            timeframe_variable=timeframe_var,
+            name=feat_name,
+            args=tuple(args),
+        )
 
     def _bar_lookback(self) -> AstNode:
         """Parse bar[-N].field where N is a positive integer (written as -N or +N)."""
@@ -370,13 +407,17 @@ class _Parser:
 # Public function
 # ---------------------------------------------------------------------------
 
-def parse(src: str) -> AstNode:
+def parse(src: str, timeframe_variable_names: frozenset[str] | None = None) -> AstNode:
     """Parse *src* and return the root :class:`AstNode`.
+
+    *timeframe_variable_names* declares identifiers allowed as timeframe prefixes
+    (e.g. ``sig_tf.ema(9``) analogous to literal timeframes ``5m.ema(9)``.
 
     Raises :class:`ParseError` with line/col on any syntax error.
     """
     tokens = tokenize(src)
-    p = _Parser(tokens)
+    tf_vars = timeframe_variable_names if timeframe_variable_names is not None else frozenset()
+    p = _Parser(tokens, tf_vars)
     node = p.expression()
     # Ensure we consumed everything
     trailing = p._peek()

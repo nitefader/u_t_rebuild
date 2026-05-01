@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 from datetime import datetime, timezone
 from uuid import UUID, uuid4
@@ -26,7 +27,6 @@ from backend.app.domain import (
     BacktestRun,
     CandidateSide,
     ChartLabPreviewEvidence,
-    IntentType,
     OrderType,
     RiskPlan,
     RiskPlanConfig,
@@ -50,38 +50,19 @@ from backend.app.persistence import (
     SQLiteTradeLedger,
 )
 from backend.app.runtime import RuntimeState, RuntimeStatus
-from backend.tests.fixtures.legacy_intent import LegacyExecutionIntent as ExecutionIntent
+from backend.tests.fixtures.modern_order import make_signal_plan_order
 from backend.app.simulation import SimulatedOrderIntent, SimulatedTrade
 
 
 ACCOUNT_ID = UUID("11111111-2222-3333-4444-555555555555")
 DEPLOYMENT_ID = UUID("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
-PROGRAM_ID = UUID("99999999-8888-7777-6666-555555555555")
-
-
-def _intent() -> ExecutionIntent:
-    return ExecutionIntent(
-        deployment_id=DEPLOYMENT_ID,
-        program_version_id=PROGRAM_ID,
-        symbol="SPY",
-        side=CandidateSide.LONG,
-        intent_type=IntentType.ENTRY,
-        qty=10,
-        order_type=OrderType.MARKET,
-        time_in_force=TimeInForce.DAY,
-        timestamp=datetime(2026, 1, 2, 14, 30, tzinfo=timezone.utc),
-        signal_name="entry",
-        reason="signal_condition_true",
-        governor_approved=True,
-        governor_reason="approved",
-    )
 
 
 def test_order_persists_across_restart(tmp_path) -> None:  # type: ignore[no-untyped-def]
     db_path = tmp_path / "utos.db"
     ledger = SQLiteOrderLedger(db_path)
     manager = OrderManager(ledger=ledger)
-    order = manager.create_order(account_id=ACCOUNT_ID, execution_intent=_intent())
+    order = make_signal_plan_order(manager, account_id=ACCOUNT_ID, deployment_id=DEPLOYMENT_ID)
     manager.update_status(order_id=order.order_id, status=InternalOrderStatus.ACCEPTED, reason="broker_accepted")
 
     restarted_ledger = SQLiteOrderLedger(db_path)
@@ -91,6 +72,32 @@ def test_order_persists_across_restart(tmp_path) -> None:  # type: ignore[no-unt
     assert persisted.status == InternalOrderStatus.ACCEPTED
     assert persisted.reason == "broker_accepted"
     assert restarted_ledger.by_account(ACCOUNT_ID)[0].client_order_id == order.client_order_id
+
+
+def test_order_load_ignores_stale_payload_extras(tmp_path) -> None:
+    db_path = tmp_path / "utos.db"
+    ledger = SQLiteOrderLedger(db_path)
+    manager = OrderManager(ledger=ledger)
+    order = make_signal_plan_order(manager, account_id=ACCOUNT_ID, deployment_id=DEPLOYMENT_ID)
+
+    with sqlite3.connect(db_path) as connection:
+        payload = json.loads(
+            connection.execute(
+                "SELECT payload FROM internal_orders WHERE order_id = ?",
+                (str(order.order_id),),
+            ).fetchone()[0]
+        )
+        payload["program_id"] = None
+        connection.execute(
+            "UPDATE internal_orders SET payload = ? WHERE order_id = ?",
+            (json.dumps(payload), str(order.order_id)),
+        )
+
+    restarted_ledger = SQLiteOrderLedger(db_path)
+    loaded = restarted_ledger.get(order.order_id)
+
+    assert loaded.order_id == order.order_id
+    assert loaded.origin == OrderOrigin.SIGNAL_PLAN
 
 
 def test_signal_plan_order_lineage_persists_and_indexes(tmp_path) -> None:  # type: ignore[no-untyped-def]
@@ -134,32 +141,8 @@ def test_signal_plan_order_lineage_persists_and_indexes(tmp_path) -> None:  # ty
     assert restarted.list_orders_by_position_lineage(position_lineage_id) == (order,)
 
 
-def test_existing_internal_orders_table_migrates_before_lineage_indexes(tmp_path) -> None:
+def test_fresh_internal_orders_table_has_signal_plan_lineage_indexes(tmp_path) -> None:
     db_path = tmp_path / "utos.db"
-    with sqlite3.connect(db_path) as connection:
-        connection.executescript(
-            """
-            CREATE TABLE internal_orders (
-                order_id TEXT PRIMARY KEY,
-                account_id TEXT NOT NULL,
-                origin TEXT NOT NULL DEFAULT 'program',
-                deployment_id TEXT,
-                program_id TEXT,
-                client_order_id TEXT NOT NULL UNIQUE,
-                status TEXT NOT NULL,
-                payload TEXT NOT NULL
-            );
-            CREATE TABLE broker_accounts (
-                account_id TEXT PRIMARY KEY,
-                provider TEXT NOT NULL,
-                mode TEXT NOT NULL,
-                validation_status TEXT NOT NULL,
-                created_at TEXT NOT NULL,
-                payload TEXT NOT NULL
-            );
-            """
-        )
-
     store = SQLiteRuntimeStore(db_path)
 
     with sqlite3.connect(db_path) as connection:
@@ -168,7 +151,9 @@ def test_existing_internal_orders_table_migrates_before_lineage_indexes(tmp_path
 
     assert "signal_plan_id" in columns
     assert "position_lineage_id" in columns
+    assert "program_id" not in columns
     assert "ix_internal_orders_signal_plan_id" in indexes
+    assert "ix_internal_orders_program_id" not in indexes
     assert store.list_orders() == ()
 
 
@@ -376,7 +361,7 @@ def test_broker_sync_persists_mapping_snapshot_and_freshness(tmp_path) -> None: 
     db_path = tmp_path / "utos.db"
     store = SQLiteRuntimeStore(db_path)
     manager = OrderManager(ledger=SQLiteOrderLedger(db_path))
-    order = manager.create_order(account_id=ACCOUNT_ID, execution_intent=_intent())
+    order = make_signal_plan_order(manager, account_id=ACCOUNT_ID, deployment_id=DEPLOYMENT_ID)
     sync = BrokerSync(ledger=manager.ledger, runtime_store=store, provider="alpaca")
 
     sync.apply_result(
@@ -570,7 +555,7 @@ def test_control_plane_state_persists(tmp_path) -> None:  # type: ignore[no-unty
 def test_runtime_store_does_not_create_orders_without_order_manager(tmp_path) -> None:  # type: ignore[no-untyped-def]
     db_path = tmp_path / "utos.db"
     manager = OrderManager(ledger=SQLiteOrderLedger(db_path))
-    order = manager.create_order(account_id=ACCOUNT_ID, execution_intent=_intent())
+    order = make_signal_plan_order(manager, account_id=ACCOUNT_ID, deployment_id=DEPLOYMENT_ID)
 
     assert SQLiteRuntimeStore(db_path).load_order(order.order_id).order_id == order.order_id
 

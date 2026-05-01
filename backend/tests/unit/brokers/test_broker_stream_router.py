@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from uuid import UUID
 
 import pytest
@@ -20,14 +19,13 @@ from backend.app.brokers import (
     BrokerSync,
     BrokerSyncService,
 )
-from backend.app.domain import CandidateSide, IntentType, OrderType, TimeInForce, TradingMode
+from backend.app.domain import TradingMode
 from backend.app.orders import OrderManager, TradeLedger
-from backend.tests.fixtures.legacy_intent import LegacyExecutionIntent as ExecutionIntent
+from backend.tests.fixtures.modern_order import make_signal_plan_order
 
 
 ACCOUNT_ID = UUID("11111111-2222-3333-4444-555555555555")
 DEPLOYMENT_ID = UUID("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
-PROGRAM_ID = UUID("99999999-8888-7777-6666-555555555555")
 
 
 class _Adapter:
@@ -61,24 +59,6 @@ class _Adapter:
         )
 
 
-def _execution_intent() -> ExecutionIntent:
-    return ExecutionIntent(
-        deployment_id=DEPLOYMENT_ID,
-        program_version_id=PROGRAM_ID,
-        symbol="SPY",
-        side=CandidateSide.LONG,
-        intent_type=IntentType.ENTRY,
-        qty=10,
-        order_type=OrderType.MARKET,
-        time_in_force=TimeInForce.DAY,
-        timestamp=datetime(2026, 1, 2, 14, 30, tzinfo=timezone.utc),
-        signal_name="entry",
-        reason="signal_condition_true",
-        governor_approved=True,
-        governor_reason="approved",
-    )
-
-
 def _service_and_router() -> tuple[BrokerSyncService, BrokerStreamRouter, OrderManager]:
     manager = OrderManager()
     service = BrokerSyncService(
@@ -92,7 +72,7 @@ def _service_and_router() -> tuple[BrokerSyncService, BrokerStreamRouter, OrderM
 
 def test_router_routes_order_update_to_handle_order_update() -> None:
     service, router, manager = _service_and_router()
-    order = manager.create_order(account_id=ACCOUNT_ID, execution_intent=_execution_intent())
+    order = make_signal_plan_order(manager, account_id=ACCOUNT_ID, deployment_id=DEPLOYMENT_ID)
 
     router.route(
         BrokerOrderUpdateEvent(
@@ -165,7 +145,7 @@ def test_router_rejects_unknown_event() -> None:
 def test_router_can_attach_to_alpaca_stream_adapter() -> None:
     """Stream adapter registers exactly one trade-updates handler with TradingStream."""
     service, router, manager = _service_and_router()
-    manager.create_order(account_id=ACCOUNT_ID, execution_intent=_execution_intent())
+    make_signal_plan_order(manager, account_id=ACCOUNT_ID, deployment_id=DEPLOYMENT_ID)
 
     captured: list[object] = []
 
@@ -190,6 +170,62 @@ def test_stream_adapter_rejects_client_without_trade_updates() -> None:
     adapter = AlpacaAccountStreamAdapter(account_id=ACCOUNT_ID, stream_client=IncompatibleStream())
     with _pytest.raises(AlpacaBrokerError):
         adapter.subscribe(lambda event: None)
+
+
+def test_stream_adapter_normalizes_alpaca_multileg_and_rare_statuses() -> None:
+    adapter = AlpacaAccountStreamAdapter(account_id=ACCOUNT_ID)
+
+    cases = [
+        ("held", BrokerOrderStatus.ACCEPTED),
+        ("stopped", BrokerOrderStatus.ACCEPTED),
+        ("calculated", BrokerOrderStatus.DONE_FOR_DAY),
+        ("done_for_day", BrokerOrderStatus.DONE_FOR_DAY),
+        ("suspended", BrokerOrderStatus.SUSPENDED),
+    ]
+    for raw_status, expected in cases:
+        events = adapter.normalize(
+            {
+                "event": raw_status,
+                "order": {
+                    "id": "alpaca-1",
+                    "client_order_id": f"client-{raw_status}",
+                    "symbol": "SPY",
+                    "side": "sell",
+                    "status": raw_status,
+                    "qty": "1",
+                    "filled_qty": "0",
+                },
+            }
+        )
+
+        assert len(events) == 1
+        assert isinstance(events[0], BrokerOrderUpdateEvent)
+        assert events[0].status == expected
+
+
+def test_stream_adapter_prefers_order_status_for_non_status_trade_events() -> None:
+    adapter = AlpacaAccountStreamAdapter(account_id=ACCOUNT_ID)
+
+    for event_name in ("order_cancel_rejected", "order_replace_rejected", "restated"):
+        events = adapter.normalize(
+            {
+                "event": event_name,
+                "order": {
+                    "id": "alpaca-1",
+                    "client_order_id": f"client-{event_name}",
+                    "symbol": "SPY",
+                    "side": "sell",
+                    "status": "accepted",
+                    "qty": "1",
+                    "filled_qty": "0",
+                },
+            }
+        )
+
+        assert len(events) == 1
+        assert isinstance(events[0], BrokerOrderUpdateEvent)
+        assert events[0].status == BrokerOrderStatus.ACCEPTED
+        assert events[0].raw_status == "accepted"
 
 
 def test_build_trading_stream_uses_adapter_credentials_and_paper_flag() -> None:

@@ -27,10 +27,12 @@ from .ast_nodes import (
     FunctionCall,
     NumberLit,
     TimeframedFeature,
+    TimeframeVarFeature,
     UnaryOp,
     VariableRef,
 )
 from .errors import EvalError
+from .timeframes import CANONICAL_TIMEFRAMES, CANONICAL_TIMEFRAMES_ORDER
 
 
 # ---------------------------------------------------------------------------
@@ -49,6 +51,11 @@ def _feature_key_tf(node: TimeframedFeature) -> str:
     if args_str:
         return f"{node.timeframe}.{node.name}({args_str})"
     return f"{node.timeframe}.{node.name}"
+
+
+def _feature_key_tv_resolved(node: TimeframeVarFeature, timeframe: str) -> str:
+    synth = TimeframedFeature(timeframe=timeframe, name=node.name, args=node.args)
+    return _feature_key_tf(synth)
 
 
 def _feature_key_ref(node: FeatureRef) -> str:
@@ -79,12 +86,20 @@ class _Evaluator:
 
         if isinstance(node, VariableRef):
             try:
-                return self._snap.variables[node.name]
+                val = self._snap.variables[node.name]
             except KeyError:
                 raise EvalError(f"Variable '{node.name}' not found in snapshot.variables")
+            if isinstance(val, str):
+                raise EvalError(
+                    f"Variable '{node.name}' is a timeframe binding; use it as {node.name}.<feature>"
+                )
+            return val
 
         if isinstance(node, TimeframedFeature):
             return self._lookup_tf(node)
+
+        if isinstance(node, TimeframeVarFeature):
+            return self._lookup_tv(node)
 
         if isinstance(node, FeatureRef):
             return self._lookup_ref(node)
@@ -109,6 +124,29 @@ class _Evaluator:
         raise EvalError(
             f"Feature '{key}' not found in snapshot.values"
         )
+
+    def _resolve_timeframe_string(self, var_name: str) -> str:
+        try:
+            raw = self._snap.variables[var_name]
+        except KeyError:
+            raise EvalError(f"Timeframe variable '{var_name}' not found in snapshot.variables")
+        if not isinstance(raw, str):
+            raise EvalError(
+                f"Timeframe variable '{var_name}' must be bound to a timeframe string at evaluation"
+            )
+        if raw not in CANONICAL_TIMEFRAMES:
+            raise EvalError(
+                f"Timeframe variable '{var_name}' has invalid value {raw!r}; "
+                f"expected one of {list(CANONICAL_TIMEFRAMES_ORDER)}"
+            )
+        return raw
+
+    def _lookup_tv(self, node: TimeframeVarFeature) -> bool | float:
+        tf = self._resolve_timeframe_string(node.timeframe_variable)
+        key = _feature_key_tv_resolved(node, tf)
+        if key in self._snap.values:
+            return self._snap.values[key]
+        raise EvalError(f"Feature '{key}' not found in snapshot.values")
 
     def _lookup_ref(self, node: FeatureRef) -> bool | float:
         if node.bar_offset is not None:
@@ -234,6 +272,16 @@ class _Evaluator:
         """Get the previous bar's value for a node (used by crosses_above/below)."""
         if isinstance(node, TimeframedFeature):
             key = _feature_key_tf(node)
+            history = self._snap.history.get(key)
+            if history is None or len(history) < 2:
+                raise EvalError(
+                    f"History for '{key}' has fewer than 2 entries; cannot evaluate cross"
+                )
+            return history[1]
+
+        if isinstance(node, TimeframeVarFeature):
+            tf = self._resolve_timeframe_string(node.timeframe_variable)
+            key = _feature_key_tv_resolved(node, tf)
             history = self._snap.history.get(key)
             if history is None or len(history) < 2:
                 raise EvalError(

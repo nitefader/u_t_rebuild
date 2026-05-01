@@ -1,0 +1,1054 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Strategy Blocks v2 — Structured sections + auto-balance</title>
+<style>
+  :root {
+    --bg: #0b1220;
+    --canvas: #0d1626;
+    --panel: #131e30;
+    --line: #233247;
+    --line-2: #2e4262;
+    --text: #e6edf3;
+    --muted: #93a3b8;
+    --muted-2: #6b7d97;
+
+    --accent: #4f8cff;
+    --green: #2ecc71;
+    --green-2: #27ae60;
+    --orange: #f39c12;
+    --orange-2: #e67e22;
+    --purple: #9b59b6;
+    --purple-2: #8e44ad;
+    --red: #e74c3c;
+    --red-2: #c0392b;
+    --teal: #1abc9c;
+    --teal-2: #16a085;
+    --yellow: #f1c40f;
+    --yellow-2: #e1b416;
+    --blue: #3498db;
+    --blue-2: #2980b9;
+    --pink: #ff6b9d;
+    --pink-2: #e84393;
+
+    --shadow: 0 18px 50px rgba(0,0,0,.45);
+    --shadow-block: 0 5px 0 rgba(0,0,0,.20), 0 10px 18px rgba(0,0,0,.32);
+  }
+
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0; min-height: 100%;
+    background:
+      radial-gradient(1100px 700px at 18% -20%, rgba(79,140,255,.12), transparent 70%),
+      radial-gradient(900px 600px at 110% 110%, rgba(155,89,182,.10), transparent 70%),
+      var(--bg);
+    color: var(--text);
+    font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, system-ui, sans-serif;
+    overflow-x: hidden;
+  }
+  button, input, select { font: inherit; color: inherit; }
+  button { cursor: pointer; }
+
+  .topbar {
+    display: flex; align-items: center; justify-content: space-between; gap: 12px;
+    padding: 14px 22px; border-bottom: 1px solid var(--line);
+    background: rgba(11,18,32,.78); backdrop-filter: blur(8px);
+    position: sticky; top: 0; z-index: 30;
+  }
+  .brand { display: flex; align-items: center; gap: 10px; font-weight: 800; }
+  .brand .mark {
+    width: 26px; height: 26px; border-radius: 8px;
+    background: linear-gradient(135deg, var(--accent), var(--purple));
+    box-shadow: 0 0 22px rgba(79,140,255,.35);
+  }
+  .crumb { color: var(--muted); font-size: 12px; }
+  .h1 { font-size: 18px; margin: 0; font-weight: 700; }
+  .btn {
+    background: #1b2740; color: var(--text); border: 1px solid var(--line-2);
+    padding: 7px 12px; border-radius: 8px; font-size: 13px;
+    display: inline-flex; align-items: center; gap: 6px;
+  }
+  .btn:hover { background: #233252; }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: white; box-shadow: 0 8px 22px rgba(79,140,255,.28); }
+  .btn-row { display: flex; gap: 8px; align-items: center; }
+
+  .shell {
+    display: grid;
+    grid-template-columns: 280px minmax(0, 1fr) 320px;
+    height: calc(100vh - 60px);
+    min-height: 640px;
+  }
+  .palette, .inspector {
+    background: rgba(15,24,40,.85);
+    border-right: 1px solid var(--line);
+    overflow-y: auto;
+  }
+  .inspector { border-right: 0; border-left: 1px solid var(--line); }
+  .canvas-wrap { position: relative; overflow: hidden; }
+
+  .palette-search {
+    margin: 12px 14px 0;
+    width: calc(100% - 28px);
+    padding: 8px 10px; background: #0d1626; color: var(--text);
+    border: 1px solid var(--line-2); border-radius: 8px; outline: none;
+  }
+  .palette-search:focus { border-color: var(--accent); }
+  .palette-section { padding: 14px 14px 6px; }
+  .palette-section h4 {
+    margin: 0 0 8px; font-size: 11px; color: var(--muted-2);
+    text-transform: uppercase; letter-spacing: .8px; font-weight: 700;
+    display: flex; align-items: center; gap: 6px;
+  }
+  .palette-section h4 .sw {
+    width: 10px; height: 10px; border-radius: 3px; display: inline-block;
+  }
+  .palette-list { display: flex; flex-direction: column; align-items: flex-start; }
+  .legend {
+    margin: 12px 14px 8px; padding: 10px 12px;
+    background: rgba(255,255,255,.03); border: 1px solid var(--line);
+    border-radius: 10px; font-size: 11px; color: var(--muted); line-height: 1.6;
+  }
+
+  /* Block styles */
+  .block {
+    position: relative;
+    display: inline-flex; align-items: center; gap: 7px;
+    padding: 9px 13px;
+    color: white; font-weight: 700; font-size: 13px;
+    border-radius: 10px;
+    box-shadow: var(--shadow-block);
+    user-select: none; cursor: grab;
+    border: 2px solid rgba(0,0,0,.18);
+    white-space: nowrap; margin: 5px;
+    transition: transform .08s ease;
+  }
+  .block:hover { transform: translateY(-1px); }
+  .block.dragging { opacity: .7; }
+  .block.compact { padding: 7px 10px; font-size: 12px; }
+  .block.cat-cond    { background: linear-gradient(180deg, var(--orange), var(--orange-2)); }
+  .block.cat-stop    { background: linear-gradient(180deg, var(--red), var(--red-2)); }
+  .block.cat-target  { background: linear-gradient(180deg, var(--teal), var(--teal-2)); }
+  .block.cat-runner  { background: linear-gradient(180deg, var(--yellow), var(--yellow-2)); color: #2a1c00; }
+  .block.cat-onfill  { background: linear-gradient(180deg, #45aaf2, #2d98da); }
+  .block.cat-exit    { background: linear-gradient(180deg, var(--blue), var(--blue-2)); }
+
+  .block .icon {
+    width: 20px; height: 20px; border-radius: 5px;
+    display: inline-flex; align-items: center; justify-content: center;
+    background: rgba(0,0,0,.22); font-size: 12px;
+  }
+  .block .badge {
+    background: rgba(0,0,0,.30); padding: 2px 7px; border-radius: 999px;
+    font-size: 11px; font-weight: 600;
+  }
+
+  /* Canvas */
+  .canvas { position: absolute; inset: 0;
+    background-image:
+      radial-gradient(rgba(255,255,255,.04) 1px, transparent 1px),
+      radial-gradient(rgba(255,255,255,.03) 1px, transparent 1px);
+    background-size: 20px 20px, 60px 60px;
+    background-position: 0 0, 10px 10px;
+    overflow: auto;
+  }
+  .canvas-inner { padding: 22px 28px 80px; min-height: 100%; }
+
+  /* Bindings */
+  .bindings { display: flex; gap: 12px; margin-bottom: 16px; flex-wrap: wrap; }
+  .binding-card {
+    background: rgba(255,255,255,.04); border: 1px solid var(--line);
+    border-radius: 12px; padding: 9px 12px; min-width: 220px;
+  }
+  .binding-card .lbl { font-size: 10px; color: var(--muted-2); letter-spacing: .8px; text-transform: uppercase; font-weight: 700; }
+  .binding-card .name { font-weight: 700; font-size: 13px; margin-top: 2px; }
+  .binding-card .meta { color: var(--muted); font-size: 11px; }
+
+  /* SECTION boxes — fixed structure */
+  .section {
+    background: linear-gradient(180deg, rgba(255,255,255,.04), rgba(255,255,255,.01));
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    padding: 14px 16px;
+    margin-bottom: 14px;
+  }
+  .section h3 {
+    margin: 0 0 10px; font-size: 13px; color: var(--muted);
+    text-transform: uppercase; letter-spacing: .8px; font-weight: 700;
+    display: flex; align-items: center; gap: 8px; justify-content: space-between;
+  }
+  .section h3 .left { display: flex; align-items: center; gap: 8px; }
+  .section h3 .swatch { width: 12px; height: 12px; border-radius: 4px; }
+  .section.entry { border-left: 4px solid var(--green); }
+  .section.entry h3 .swatch { background: var(--green); }
+  .section.legs { border-left: 4px solid var(--purple); }
+  .section.legs h3 .swatch { background: var(--purple); }
+  .section.exit { border-left: 4px solid var(--blue); }
+  .section.exit h3 .swatch { background: var(--blue); }
+
+  .section h3 .pill {
+    background: rgba(0,0,0,.3); color: var(--text); padding: 2px 8px;
+    border-radius: 999px; font-size: 11px; font-weight: 700; letter-spacing: .3px;
+  }
+
+  /* Entry trigger summary box */
+  .entry-trigger {
+    display: flex; align-items: center; gap: 10px;
+    background: rgba(46,204,113,.08);
+    border: 1px solid rgba(46,204,113,.25);
+    padding: 8px 12px; border-radius: 10px;
+    margin-bottom: 10px; font-size: 13px;
+  }
+  .entry-trigger .lbl { color: var(--green); font-weight: 700; font-size: 11px; text-transform: uppercase; letter-spacing: .8px; }
+  .entry-trigger .v { color: var(--text); font-weight: 600; }
+  .entry-trigger .swap { margin-left: auto; }
+
+  /* Stack drop zones (for entry conditions and exits) */
+  .stack { display: flex; flex-direction: column; align-items: flex-start; gap: 1px; }
+  .drop-zone {
+    width: 320px; height: 14px; border-radius: 8px;
+    border: 2px dashed transparent;
+    transition: border-color .12s ease, background .12s ease, height .12s ease;
+    margin: -1px 0;
+  }
+  .drop-zone.hot { border-color: rgba(79,140,255,.7); background: rgba(79,140,255,.10); height: 26px; }
+  .drop-zone.empty {
+    border-color: rgba(147,163,184,.30); height: 36px; width: 340px;
+    display: flex; align-items: center; justify-content: center;
+    color: var(--muted-2); font-size: 12px; font-style: italic;
+  }
+  .placed { cursor: pointer; }
+  .placed.selected { outline: 3px solid rgba(255,255,255,.85); outline-offset: 2px; border-radius: 12px; }
+
+  /* Stops table — clean structured rows */
+  .legs-rows { display: flex; flex-direction: column; gap: 8px; margin-bottom: 8px; }
+  .leg-row {
+    display: grid;
+    grid-template-columns: 32px 1fr 1fr 1fr 28px;
+    gap: 10px; align-items: center;
+    background: rgba(0,0,0,.18);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 10px 12px;
+  }
+  .leg-row.head {
+    background: transparent; border: none; padding: 4px 12px;
+    font-size: 10px; color: var(--muted-2); text-transform: uppercase;
+    letter-spacing: .8px; font-weight: 700;
+  }
+  .leg-row .num {
+    width: 28px; height: 28px; border-radius: 8px;
+    display: flex; align-items: center; justify-content: center;
+    font-weight: 800; color: white; font-size: 13px;
+    background: linear-gradient(180deg, var(--purple), var(--purple-2));
+  }
+  .leg-row.runner .num {
+    background: linear-gradient(180deg, var(--yellow), var(--yellow-2)); color: #2a1c00;
+  }
+  .leg-row .col { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  .leg-row .rm-leg { background: transparent; border: none; color: var(--muted-2); font-size: 18px; cursor: pointer; }
+  .leg-row .rm-leg:hover { color: var(--red); }
+
+  /* Stops & sizes section above legs */
+  .stops-row {
+    display: grid; grid-template-columns: 32px 1fr 28px; gap: 10px;
+    align-items: center; margin-bottom: 6px;
+    padding: 9px 12px; background: rgba(231,76,60,.06);
+    border: 1px solid rgba(231,76,60,.22); border-radius: 10px;
+  }
+  .stops-row .num {
+    width: 28px; height: 28px; border-radius: 8px;
+    background: linear-gradient(180deg, var(--red), var(--red-2));
+    color: white; display: flex; align-items: center; justify-content: center;
+    font-weight: 800; font-size: 12px;
+  }
+  .stops-row .col { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+
+  .add-row {
+    border: 2px dashed var(--line-2); background: transparent; color: var(--muted);
+    padding: 8px 14px; border-radius: 10px; cursor: pointer;
+    font-weight: 600; font-size: 12px; margin-right: 8px;
+  }
+  .add-row:hover { border-color: var(--accent); color: var(--accent); }
+
+  /* Inline editable param chips */
+  .chip {
+    display: inline-flex; align-items: center; gap: 4px;
+    background: rgba(0,0,0,.28); border: 1px solid rgba(255,255,255,.12);
+    padding: 4px 8px; border-radius: 8px;
+    font-size: 12px; font-weight: 600;
+  }
+  .chip-input {
+    background: transparent; border: none; color: white;
+    width: 50px; outline: none; padding: 0; font: inherit;
+    text-align: right;
+  }
+  .chip-input.size-input { width: 40px; }
+  .chip-select {
+    background: transparent; border: none; color: white; outline: none;
+    font: inherit; padding: 0; cursor: pointer;
+  }
+  .chip-select option { color: black; }
+  .chip .lbl { color: rgba(255,255,255,.7); font-weight: 500; font-size: 11px; }
+
+  .size-summary {
+    display: flex; align-items: center; gap: 12px;
+    padding: 8px 12px; background: rgba(155,89,182,.08);
+    border: 1px solid rgba(155,89,182,.22); border-radius: 10px;
+    font-size: 12px; margin-top: 8px;
+  }
+  .size-summary.bad { background: rgba(231,76,60,.10); border-color: rgba(231,76,60,.32); color: var(--red); }
+  .size-summary.good { color: var(--green); }
+  .size-bar {
+    flex: 1; height: 8px; background: rgba(255,255,255,.06); border-radius: 4px;
+    overflow: hidden; display: flex;
+  }
+  .size-bar .seg {
+    background: var(--purple); border-right: 2px solid #0d1626;
+  }
+  .size-bar .seg.runner { background: var(--yellow); }
+
+  /* Inspector */
+  .insp-head { padding: 14px 16px; border-bottom: 1px solid var(--line); }
+  .insp-head h4 { margin: 0 0 4px; font-size: 14px; }
+  .insp-head .desc { color: var(--muted); font-size: 12px; }
+  .insp-body { padding: 14px 16px; }
+  .field { margin-bottom: 12px; }
+  label { display: block; color: var(--muted); font-size: 11px;
+    text-transform: uppercase; letter-spacing: .6px; margin-bottom: 5px; font-weight: 600; }
+  .input, .select {
+    width: 100%; background: #0d1626; color: var(--text);
+    border: 1px solid var(--line-2); border-radius: 8px;
+    padding: 7px 9px; outline: none;
+  }
+  .input:focus, .select:focus { border-color: var(--accent); }
+  .empty-insp { color: var(--muted); font-size: 13px; text-align: center; padding: 30px 14px; }
+  .empty-insp .big { font-size: 32px; margin-bottom: 6px; }
+
+  .toast {
+    position: fixed; right: 22px; bottom: 22px; z-index: 200;
+    background: #131e30; border: 1px solid var(--line-2);
+    padding: 10px 13px; border-radius: 10px; box-shadow: var(--shadow);
+    color: var(--text); font-size: 13px; opacity: 0;
+    transform: translateY(8px); transition: opacity .15s, transform .15s;
+  }
+  .toast.show { opacity: 1; transform: translateY(0); }
+</style>
+</head>
+<body>
+  <div class="topbar">
+    <div style="display:flex; align-items:center; gap:14px;">
+      <div class="brand"><span class="mark"></span> Ultimate Trader</div>
+      <div>
+        <div class="crumb">Strategies / Compose with Blocks · v2</div>
+        <h1 class="h1">ORB 5min Long — draft</h1>
+      </div>
+    </div>
+    <div class="btn-row">
+      <button class="btn">Switch to Form view</button>
+      <button class="btn">Validate</button>
+      <button class="btn primary">Save Strategy v1</button>
+    </div>
+  </div>
+
+  <div class="shell">
+
+    <!-- ============== PALETTE ============== -->
+    <aside class="palette">
+      <input class="palette-search" placeholder="Search blocks..." />
+
+      <div class="legend">
+        <b style="color:var(--text)">Structure:</b><br/>
+        Three fixed sections: Long Entry → Trade Legs → Logical Exits.<br/>
+        Every strategy needs at least one entry condition + one stop + one target.
+      </div>
+
+      <div class="palette-section">
+        <h4><span class="sw" style="background:var(--orange)"></span> Entry conditions</h4>
+        <div class="palette-list">
+          <div class="block cat-cond" draggable="true" data-kind="cond" data-template="ema_cross_up">
+            <span class="icon">↗</span> EMA crosses above EMA
+          </div>
+          <div class="block cat-cond" draggable="true" data-kind="cond" data-template="vwap_reclaim">
+            <span class="icon">⤴</span> VWAP reclaim
+          </div>
+          <div class="block cat-cond" draggable="true" data-kind="cond" data-template="orb_break">
+            <span class="icon">⛰</span> ORB high break
+          </div>
+          <div class="block cat-cond" draggable="true" data-kind="cond" data-template="rsi_oversold">
+            <span class="icon">↘</span> RSI &lt; level
+          </div>
+          <div class="block cat-cond" draggable="true" data-kind="cond" data-template="macd_signal_cross">
+            <span class="icon">≷</span> MACD signal cross
+          </div>
+          <div class="block cat-cond" draggable="true" data-kind="cond" data-template="volume_spike">
+            <span class="icon">📊</span> Volume &gt; N×avg
+          </div>
+          <div class="block cat-cond" draggable="true" data-kind="cond" data-template="trend_filter">
+            <span class="icon">🧭</span> Trend filter
+          </div>
+        </div>
+      </div>
+
+      <div class="palette-section">
+        <h4><span class="sw" style="background:var(--blue)"></span> Logical exits</h4>
+        <div class="palette-list">
+          <div class="block cat-exit" draggable="true" data-kind="exit" data-template="exit_no_progress">
+            <span class="icon">⏱</span> No-progress timeout
+          </div>
+          <div class="block cat-exit" draggable="true" data-kind="exit" data-template="exit_opposite_cross">
+            <span class="icon">↩</span> Opposite EMA cross
+          </div>
+          <div class="block cat-exit" draggable="true" data-kind="exit" data-template="exit_session_end">
+            <span class="icon">🌅</span> Force flat at close
+          </div>
+          <div class="block cat-exit" draggable="true" data-kind="exit" data-template="exit_bars_since">
+            <span class="icon">▦</span> Exit after N bars
+          </div>
+        </div>
+      </div>
+
+      <div class="legend" style="margin-top:18px;">
+        <b style="color:var(--text)">Legs:</b><br/>
+        Built directly inline below — no dragging needed. Click + Add target / + Add stop. Sizes auto-balance.
+      </div>
+    </aside>
+
+    <!-- ============== CANVAS ============== -->
+    <div class="canvas-wrap">
+      <div class="canvas">
+        <div class="canvas-inner">
+
+          <div class="bindings">
+            <div class="binding-card">
+              <div class="lbl">Strategy Controls</div>
+              <div class="name">Day Trader Default · v3</div>
+              <div class="meta">09:45–15:30 · skip power hour · 5/day cap</div>
+            </div>
+            <div class="binding-card">
+              <div class="lbl">Execution Profile</div>
+              <div class="name">Aggressive Market In/Out · v2</div>
+              <div class="meta">market entry · native bracket · Alpaca trail</div>
+            </div>
+          </div>
+
+          <!-- =================== LONG ENTRY =================== -->
+          <div class="section entry">
+            <h3>
+              <span class="left"><span class="swatch"></span> Long entry conditions</span>
+              <span class="pill">ALL must be true</span>
+            </h3>
+            <div class="stack" data-stack="long_entry"></div>
+          </div>
+
+          <!-- =================== TRADE LEGS =================== -->
+          <div class="section legs">
+            <h3>
+              <span class="left"><span class="swatch"></span> Trade legs</span>
+              <span class="pill" id="legsCountPill">3 legs · stop + 2 targets</span>
+            </h3>
+
+            <!-- Entry trigger summary -->
+            <div class="entry-trigger">
+              <span class="lbl">Entry order</span>
+              <span class="v">Market (from Execution Profile)</span>
+              <span style="color:var(--muted); font-size:12px;">— fires when long entry conditions match</span>
+              <button class="btn swap" style="padding:4px 10px; font-size:11px;">Swap profile</button>
+            </div>
+
+            <!-- STOPS section (separate from targets, lives at top of legs) -->
+            <div class="leg-row head">
+              <div></div><div>Stops</div><div></div><div></div><div></div>
+            </div>
+            <div id="stopsContainer"></div>
+            <button class="add-row" id="addStopBtn">+ Add stop</button>
+
+            <!-- TARGETS / RUNNER section -->
+            <div class="leg-row head" style="margin-top:14px;">
+              <div></div><div>Size</div><div>Target</div><div>On-fill: move stops</div><div></div>
+            </div>
+            <div class="legs-rows" id="targetsContainer"></div>
+            <button class="add-row" id="addTargetBtn">+ Add target</button>
+            <button class="add-row" id="addRunnerBtn">+ Add runner</button>
+
+            <div class="size-summary" id="sizeSummary">
+              <span style="font-weight:700;">Position size split</span>
+              <div class="size-bar" id="sizeBar"></div>
+              <span id="sizeText">100% allocated ✓</span>
+            </div>
+          </div>
+
+          <!-- =================== LOGICAL EXIT =================== -->
+          <div class="section exit">
+            <h3>
+              <span class="left"><span class="swatch"></span> Logical exits</span>
+              <span class="pill">ANY can fire</span>
+            </h3>
+            <div class="stack" data-stack="logical_exit"></div>
+          </div>
+
+        </div>
+      </div>
+    </div>
+
+    <!-- ============== INSPECTOR ============== -->
+    <aside class="inspector">
+      <div class="insp-head">
+        <h4 id="inspTitle">Inspector</h4>
+        <div class="desc" id="inspDesc">Click a block on the canvas, or edit values directly inline.</div>
+      </div>
+      <div class="insp-body" id="inspBody">
+        <div class="empty-insp">
+          <div class="big">🧩</div>
+          <div>No block selected.</div>
+          <div style="margin-top:6px; font-size:12px;">Most edits work inline on the canvas — try clicking a number on a leg.</div>
+        </div>
+      </div>
+    </aside>
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+<script>
+/* ---------- Block templates ---------- */
+const TEMPLATES = {
+  ema_cross_up: { kind:'cond', label:'EMA crosses above EMA', icon:'↗', cat:'cat-cond',
+    fields:[{k:'fast',label:'Fast EMA',default:9},{k:'slow',label:'Slow EMA',default:21},{k:'tf',label:'Timeframe',type:'select',options:['1m','5m','15m','1h'],default:'5m'}] },
+  vwap_reclaim: { kind:'cond', label:'VWAP reclaim', icon:'⤴', cat:'cat-cond',
+    fields:[{k:'side',label:'Side',type:'select',options:['above','below'],default:'above'},{k:'tf',label:'Timeframe',type:'select',options:['1m','5m','15m'],default:'5m'}] },
+  orb_break: { kind:'cond', label:'ORB break', icon:'⛰', cat:'cat-cond',
+    fields:[{k:'window',label:'Window',type:'select',options:['5m','15m','30m'],default:'15m'},{k:'side',label:'Direction',type:'select',options:['above high','below low'],default:'above high'}] },
+  rsi_oversold: { kind:'cond', label:'RSI < level', icon:'↘', cat:'cat-cond',
+    fields:[{k:'period',label:'Period',default:2},{k:'level',label:'Level',default:5},{k:'tf',label:'Timeframe',type:'select',options:['1m','5m','15m','1h','1d'],default:'1d'}] },
+  macd_signal_cross: { kind:'cond', label:'MACD signal cross', icon:'≷', cat:'cat-cond',
+    fields:[{k:'fast',default:12},{k:'slow',default:26},{k:'signal',default:9},{k:'side',type:'select',options:['above','below'],default:'above'}] },
+  volume_spike: { kind:'cond', label:'Volume > N×avg', icon:'📊', cat:'cat-cond',
+    fields:[{k:'mult',default:1.5},{k:'window',default:20}] },
+  trend_filter: { kind:'cond', label:'Trend filter EMA > EMA', icon:'🧭', cat:'cat-cond',
+    fields:[{k:'fast',default:20},{k:'slow',default:50},{k:'tf',type:'select',options:['5m','15m','1h','1d'],default:'1d'}] },
+
+  exit_no_progress:    { kind:'exit', label:'No-progress timeout', icon:'⏱', cat:'cat-exit', fields:[{k:'minutes',default:30}] },
+  exit_opposite_cross: { kind:'exit', label:'Opposite EMA cross', icon:'↩', cat:'cat-exit', fields:[{k:'fast',default:9},{k:'slow',default:21}] },
+  exit_session_end:    { kind:'exit', label:'Force flat at close', icon:'🌅', cat:'cat-exit', fields:[] },
+  exit_bars_since:     { kind:'exit', label:'Exit after N bars', icon:'▦', cat:'cat-exit', fields:[{k:'bars',default:20}] },
+};
+
+/* ---------- State ---------- */
+let nextId = 1;
+const stacks = { long_entry: [], logical_exit: [] };
+
+// Stops are first-class objects, separate from targets
+// Each: { id, type:'%'|'ATR'|'$'|'feature', value, scope:'all'|'leg-N', feature?: }
+let stops = [
+  { id: 's1', type: '%', value: 0.5, scope: 'all' }
+];
+
+// Each leg is target or runner; size auto-balanced
+// { id, kind:'target'|'runner', size, targetType:'%'|'ATR'|'$'|'R'|'feature', targetValue, onFillType, onFillValue, manualSize:false }
+let legs = [
+  { id: 'l1', kind: 'target', size: 33, targetType: '%', targetValue: 1.0, onFillType: 'be_plus', onFillValue: 0.10, manualSize: false },
+  { id: 'l2', kind: 'target', size: 33, targetType: 'ATR', targetValue: 2.0, onFillType: 'tighten', onFillValue: 0.5, manualSize: false },
+  { id: 'l3', kind: 'runner', size: 34, targetType: 'trail-ATR', targetValue: 1.5, onFillType: 'na', onFillValue: 0, manualSize: false },
+];
+
+let selected = null;
+
+/* ---------- Helpers ---------- */
+function uid(p='b'){ return p + (nextId++); }
+
+function instance(templateId) {
+  const t = TEMPLATES[templateId];
+  const inst = { id: uid(), templateId, kind: t.kind, params: {} };
+  t.fields.forEach(f => inst.params[f.k] = f.default);
+  return inst;
+}
+
+function summary(inst) {
+  const p = inst.params;
+  const t = inst.templateId;
+  if (t === 'ema_cross_up') return `${p.tf} ${p.fast}>${p.slow}`;
+  if (t === 'rsi_oversold') return `${p.tf} RSI(${p.period})<${p.level}`;
+  if (t === 'orb_break') return `${p.window} ${p.side}`;
+  if (t === 'macd_signal_cross') return `${p.fast}/${p.slow}/${p.signal} ${p.side}`;
+  if (t === 'volume_spike') return `>${p.mult}×${p.window}`;
+  if (t === 'trend_filter') return `${p.tf} ${p.fast}>${p.slow}`;
+  if (t === 'vwap_reclaim') return `${p.tf} ${p.side}`;
+  if (t === 'exit_no_progress') return `${p.minutes}min`;
+  if (t === 'exit_opposite_cross') return `${p.fast}/${p.slow}`;
+  if (t === 'exit_bars_since') return `${p.bars} bars`;
+  return '';
+}
+
+function blockEl(inst) {
+  const t = TEMPLATES[inst.templateId];
+  const el = document.createElement('div');
+  el.className = `block ${t.cat} placed`;
+  el.dataset.id = inst.id;
+  el.innerHTML = `<span class="icon">${t.icon}</span><span class="lbl">${t.label}</span> <span class="badge">${summary(inst)}</span>`;
+  if (selected && selected.id === inst.id) el.classList.add('selected');
+  el.addEventListener('click', (e) => { e.stopPropagation(); select(inst); });
+  return el;
+}
+
+/* ---------- Stop row (inline editable) ---------- */
+function stopRowEl(stop, idx) {
+  const row = document.createElement('div');
+  row.className = 'stops-row';
+  row.dataset.id = stop.id;
+
+  const num = document.createElement('div');
+  num.className = 'num';
+  num.textContent = '⛔';
+  row.appendChild(num);
+
+  const col = document.createElement('div');
+  col.className = 'col';
+
+  // Type chip
+  const typeChip = document.createElement('span');
+  typeChip.className = 'chip';
+  typeChip.innerHTML = `<span class="lbl">type</span>`;
+  const typeSel = document.createElement('select');
+  typeSel.className = 'chip-select';
+  ['%','ATR','$','feature'].forEach(o => {
+    const op = document.createElement('option');
+    op.value = o; op.textContent = o;
+    if (stop.type === o) op.selected = true;
+    typeSel.appendChild(op);
+  });
+  typeSel.addEventListener('change', () => { stop.type = typeSel.value; render(); });
+  typeChip.appendChild(typeSel);
+  col.appendChild(typeChip);
+
+  // Value chip
+  const valChip = document.createElement('span');
+  valChip.className = 'chip';
+  valChip.innerHTML = `<span class="lbl">value</span>`;
+  const valIn = document.createElement('input');
+  valIn.className = 'chip-input';
+  valIn.type = 'number'; valIn.step = 'any';
+  valIn.value = stop.value;
+  valIn.addEventListener('input', () => { stop.value = parseFloat(valIn.value)||0; });
+  valChip.appendChild(valIn);
+  col.appendChild(valChip);
+
+  // Scope chip — applies to all legs by default, or specific leg
+  const scopeChip = document.createElement('span');
+  scopeChip.className = 'chip';
+  scopeChip.innerHTML = `<span class="lbl">applies to</span>`;
+  const scopeSel = document.createElement('select');
+  scopeSel.className = 'chip-select';
+  const scopeOpts = [{v:'all',t:'all legs'}];
+  legs.forEach((l,i) => scopeOpts.push({v:`leg-${i+1}`, t:`leg ${i+1} only`}));
+  scopeOpts.forEach(o => {
+    const op = document.createElement('option');
+    op.value = o.v; op.textContent = o.t;
+    if (stop.scope === o.v) op.selected = true;
+    scopeSel.appendChild(op);
+  });
+  scopeSel.addEventListener('change', () => { stop.scope = scopeSel.value; });
+  scopeChip.appendChild(scopeSel);
+  col.appendChild(scopeChip);
+
+  row.appendChild(col);
+
+  const rm = document.createElement('button');
+  rm.className = 'rm-leg';
+  rm.textContent = '×';
+  rm.title = 'Remove stop';
+  rm.addEventListener('click', () => {
+    if (stops.length === 1) { toast('At least one stop is required.'); return; }
+    stops.splice(idx, 1); render();
+  });
+  row.appendChild(rm);
+  return row;
+}
+
+/* ---------- Leg row (inline editable) ---------- */
+function legRowEl(leg, idx) {
+  const row = document.createElement('div');
+  row.className = 'leg-row' + (leg.kind === 'runner' ? ' runner' : '');
+
+  const num = document.createElement('div');
+  num.className = 'num';
+  num.textContent = idx + 1;
+  row.appendChild(num);
+
+  // Size
+  const sizeCol = document.createElement('div');
+  sizeCol.className = 'col';
+  const sizeChip = document.createElement('span');
+  sizeChip.className = 'chip';
+  const sizeIn = document.createElement('input');
+  sizeIn.className = 'chip-input size-input';
+  sizeIn.type = 'number'; sizeIn.min = 0; sizeIn.max = 100;
+  sizeIn.value = leg.size;
+  sizeIn.addEventListener('input', () => {
+    leg.manualSize = true;
+    leg.size = parseFloat(sizeIn.value) || 0;
+    rebalanceSizes(leg.id);
+    render();
+  });
+  sizeChip.appendChild(sizeIn);
+  const sizePct = document.createElement('span');
+  sizePct.className = 'lbl'; sizePct.textContent = '%';
+  sizeChip.appendChild(sizePct);
+  sizeCol.appendChild(sizeChip);
+  row.appendChild(sizeCol);
+
+  // Target
+  const tgtCol = document.createElement('div');
+  tgtCol.className = 'col';
+  if (leg.kind === 'runner') {
+    const trailLabel = document.createElement('span');
+    trailLabel.style.color = 'var(--yellow)';
+    trailLabel.style.fontWeight = '700';
+    trailLabel.style.fontSize = '11px';
+    trailLabel.textContent = 'TRAIL';
+    tgtCol.appendChild(trailLabel);
+    const typeChip = document.createElement('span');
+    typeChip.className = 'chip';
+    const typeSel = document.createElement('select');
+    typeSel.className = 'chip-select';
+    ['ATR','%','$'].forEach(o => {
+      const op = document.createElement('option');
+      op.value = 'trail-'+o; op.textContent = o;
+      if (leg.targetType === 'trail-'+o) op.selected = true;
+      typeSel.appendChild(op);
+    });
+    typeSel.addEventListener('change', () => { leg.targetType = typeSel.value; });
+    typeChip.appendChild(typeSel);
+    tgtCol.appendChild(typeChip);
+    const valChip = document.createElement('span');
+    valChip.className = 'chip';
+    const valIn = document.createElement('input');
+    valIn.className = 'chip-input';
+    valIn.type = 'number'; valIn.step = 'any'; valIn.value = leg.targetValue;
+    valIn.addEventListener('input', () => { leg.targetValue = parseFloat(valIn.value) || 0; });
+    valChip.appendChild(valIn);
+    tgtCol.appendChild(valChip);
+  } else {
+    const typeChip = document.createElement('span');
+    typeChip.className = 'chip';
+    const typeSel = document.createElement('select');
+    typeSel.className = 'chip-select';
+    ['%','ATR','$','R','feature'].forEach(o => {
+      const op = document.createElement('option');
+      op.value = o; op.textContent = o;
+      if (leg.targetType === o) op.selected = true;
+      typeSel.appendChild(op);
+    });
+    typeSel.addEventListener('change', () => { leg.targetType = typeSel.value; });
+    typeChip.appendChild(typeSel);
+    tgtCol.appendChild(typeChip);
+    const valChip = document.createElement('span');
+    valChip.className = 'chip';
+    const valIn = document.createElement('input');
+    valIn.className = 'chip-input';
+    valIn.type = 'number'; valIn.step = 'any'; valIn.value = leg.targetValue;
+    valIn.addEventListener('input', () => { leg.targetValue = parseFloat(valIn.value) || 0; });
+    valChip.appendChild(valIn);
+    tgtCol.appendChild(valChip);
+  }
+  row.appendChild(tgtCol);
+
+  // On-fill
+  const ofCol = document.createElement('div');
+  ofCol.className = 'col';
+  if (leg.kind === 'runner') {
+    const span = document.createElement('span');
+    span.style.color = 'var(--muted-2)'; span.style.fontSize = '11px';
+    span.textContent = 'n/a (runner)';
+    ofCol.appendChild(span);
+  } else {
+    const ofChip = document.createElement('span');
+    ofChip.className = 'chip';
+    const ofSel = document.createElement('select');
+    ofSel.className = 'chip-select';
+    [
+      ['be_exact', 'BE exact'],
+      ['be_plus',  'BE + offset'],
+      ['be_minus', 'BE − offset'],
+      ['tighten',  'tighten ATR'],
+      ['leave',    'leave alone'],
+    ].forEach(([v,t]) => {
+      const op = document.createElement('option');
+      op.value = v; op.textContent = t;
+      if (leg.onFillType === v) op.selected = true;
+      ofSel.appendChild(op);
+    });
+    ofSel.addEventListener('change', () => { leg.onFillType = ofSel.value; render(); });
+    ofChip.appendChild(ofSel);
+    ofCol.appendChild(ofChip);
+    if (leg.onFillType === 'be_plus' || leg.onFillType === 'be_minus' || leg.onFillType === 'tighten') {
+      const valChip = document.createElement('span');
+      valChip.className = 'chip';
+      const valIn = document.createElement('input');
+      valIn.className = 'chip-input';
+      valIn.type = 'number'; valIn.step = 'any'; valIn.value = leg.onFillValue;
+      valIn.addEventListener('input', () => { leg.onFillValue = parseFloat(valIn.value) || 0; });
+      valChip.appendChild(valIn);
+      ofCol.appendChild(valChip);
+    }
+  }
+  row.appendChild(ofCol);
+
+  // Remove
+  const rm = document.createElement('button');
+  rm.className = 'rm-leg';
+  rm.textContent = '×';
+  rm.title = 'Remove leg';
+  rm.addEventListener('click', () => {
+    const targetCount = legs.filter(l => l.kind === 'target').length;
+    if (leg.kind === 'target' && targetCount === 1) { toast('At least one target is required.'); return; }
+    legs.splice(idx, 1);
+    rebalanceSizes(null);
+    render();
+  });
+  row.appendChild(rm);
+  return row;
+}
+
+/* ---------- Auto-balance sizes ---------- */
+function rebalanceSizes(touchedLegId) {
+  // Sum sizes of manually-set legs (excluding the one being typed if it's the touched one)
+  const total = 100;
+  const manualLegs = legs.filter(l => l.manualSize);
+  const autoLegs = legs.filter(l => !l.manualSize);
+
+  if (autoLegs.length === 0) {
+    // All manual — let user manage
+    return;
+  }
+
+  const manualSum = manualLegs.reduce((s, l) => s + (l.size || 0), 0);
+  const remaining = Math.max(0, total - manualSum);
+  const perAuto = autoLegs.length > 0 ? Math.floor((remaining / autoLegs.length) * 10) / 10 : 0;
+
+  autoLegs.forEach(l => l.size = perAuto);
+
+  // Fix rounding by topping up the last auto leg
+  const newSum = legs.reduce((s, l) => s + (l.size || 0), 0);
+  const diff = total - newSum;
+  if (autoLegs.length > 0 && Math.abs(diff) > 0.01) {
+    autoLegs[autoLegs.length - 1].size = Math.round((autoLegs[autoLegs.length - 1].size + diff) * 10) / 10;
+  }
+}
+
+/* ---------- Render ---------- */
+function render() {
+  // Stacks (entry & exit)
+  ['long_entry','logical_exit'].forEach(name => {
+    const stackEl = document.querySelector(`[data-stack="${name}"]`);
+    stackEl.innerHTML = '';
+    if (stacks[name].length === 0) {
+      const empty = document.createElement('div');
+      empty.className = 'drop-zone empty';
+      empty.dataset.stack = name; empty.dataset.idx = 0;
+      empty.textContent = name === 'logical_exit' ? 'Drop logical exits here (optional)' : 'Drop entry conditions here — at least one required';
+      stackEl.appendChild(empty);
+    } else {
+      const top = document.createElement('div');
+      top.className = 'drop-zone';
+      top.dataset.stack = name; top.dataset.idx = 0;
+      stackEl.appendChild(top);
+      stacks[name].forEach((inst, i) => {
+        stackEl.appendChild(blockEl(inst));
+        const dz = document.createElement('div');
+        dz.className = 'drop-zone';
+        dz.dataset.stack = name; dz.dataset.idx = i+1;
+        stackEl.appendChild(dz);
+      });
+    }
+  });
+
+  // Stops
+  const stopsEl = document.getElementById('stopsContainer');
+  stopsEl.innerHTML = '';
+  stops.forEach((s, i) => stopsEl.appendChild(stopRowEl(s, i)));
+
+  // Legs
+  const legsEl = document.getElementById('targetsContainer');
+  legsEl.innerHTML = '';
+  legs.forEach((l, i) => legsEl.appendChild(legRowEl(l, i)));
+
+  // Size summary
+  const sumEl = document.getElementById('sizeSummary');
+  const txt = document.getElementById('sizeText');
+  const bar = document.getElementById('sizeBar');
+  const total = legs.reduce((s,l) => s + (parseFloat(l.size)||0), 0);
+  bar.innerHTML = '';
+  legs.forEach(l => {
+    const seg = document.createElement('div');
+    seg.className = 'seg' + (l.kind === 'runner' ? ' runner' : '');
+    seg.style.width = `${(l.size||0)}%`;
+    bar.appendChild(seg);
+  });
+  if (Math.abs(total - 100) < 0.5) {
+    txt.textContent = `100% allocated ✓`;
+    sumEl.classList.remove('bad'); sumEl.classList.add('good');
+  } else {
+    txt.textContent = `${total.toFixed(1)}% allocated — ${total < 100 ? 'add ' + (100-total).toFixed(1) + '% more' : 'over by ' + (total-100).toFixed(1) + '%'}`;
+    sumEl.classList.remove('good'); sumEl.classList.add('bad');
+  }
+
+  // Counts pill
+  const targetCount = legs.filter(l => l.kind === 'target').length;
+  const runnerCount = legs.filter(l => l.kind === 'runner').length;
+  document.getElementById('legsCountPill').textContent =
+    `${stops.length} stop${stops.length>1?'s':''} · ${targetCount} target${targetCount>1?'s':''}${runnerCount?` · ${runnerCount} runner`:''}`;
+}
+
+/* ---------- Drag & drop for entry/exit blocks ---------- */
+let dragData = null;
+document.querySelectorAll('.palette .block[draggable="true"]').forEach(el => {
+  el.addEventListener('dragstart', (e) => {
+    dragData = { templateId: el.dataset.template, kind: el.dataset.kind };
+    el.classList.add('dragging');
+    e.dataTransfer.effectAllowed = 'copy';
+  });
+  el.addEventListener('dragend', () => {
+    el.classList.remove('dragging');
+    document.querySelectorAll('.drop-zone.hot').forEach(d => d.classList.remove('hot'));
+  });
+});
+document.addEventListener('dragover', (e) => {
+  if (!dragData) return;
+  const dz = e.target.closest && e.target.closest('.drop-zone');
+  if (dz) {
+    const stackName = dz.dataset.stack;
+    if (canDropInStack(dragData.kind, stackName)) {
+      e.preventDefault();
+      document.querySelectorAll('.drop-zone.hot').forEach(d => d.classList.remove('hot'));
+      dz.classList.add('hot');
+    }
+  }
+});
+document.addEventListener('drop', (e) => {
+  if (!dragData) return;
+  const dz = e.target.closest && e.target.closest('.drop-zone');
+  if (dz) {
+    const stackName = dz.dataset.stack;
+    if (!canDropInStack(dragData.kind, stackName)) return;
+    e.preventDefault();
+    const idx = parseInt(dz.dataset.idx,10);
+    const inst = instance(dragData.templateId);
+    stacks[stackName].splice(idx, 0, inst);
+    select(inst);
+    toast(`Added: ${TEMPLATES[dragData.templateId].label}`);
+    render();
+    dragData = null;
+  }
+});
+function canDropInStack(kind, stackName) {
+  if (stackName === 'long_entry') return kind === 'cond';
+  if (stackName === 'logical_exit') return kind === 'exit';
+  return false;
+}
+
+/* ---------- Buttons ---------- */
+document.getElementById('addStopBtn').addEventListener('click', () => {
+  stops.push({ id: uid('s'), type: '%', value: 0.5, scope: 'all' });
+  render();
+});
+document.getElementById('addTargetBtn').addEventListener('click', () => {
+  // Insert a new target before any runner
+  const newLeg = { id: uid('l'), kind:'target', size: 0, targetType: '%', targetValue: 1.0, onFillType: 'be_plus', onFillValue: 0.10, manualSize: false };
+  const runnerIdx = legs.findIndex(l => l.kind === 'runner');
+  if (runnerIdx === -1) legs.push(newLeg);
+  else legs.splice(runnerIdx, 0, newLeg);
+  rebalanceSizes(null);
+  render();
+});
+document.getElementById('addRunnerBtn').addEventListener('click', () => {
+  if (legs.find(l => l.kind === 'runner')) { toast('Only one runner per strategy.'); return; }
+  legs.push({ id: uid('l'), kind:'runner', size: 0, targetType: 'trail-ATR', targetValue: 1.5, onFillType: 'na', onFillValue: 0, manualSize: false });
+  rebalanceSizes(null);
+  render();
+});
+
+/* ---------- Selection ---------- */
+function select(inst) {
+  selected = inst;
+  render();
+  renderInspector();
+}
+function renderInspector() {
+  const title = document.getElementById('inspTitle');
+  const desc = document.getElementById('inspDesc');
+  const body = document.getElementById('inspBody');
+  if (!selected) {
+    title.textContent = 'Inspector';
+    desc.textContent = 'Click a block on the canvas, or edit values directly inline.';
+    body.innerHTML = `<div class="empty-insp"><div class="big">🧩</div><div>No block selected.</div><div style="margin-top:6px; font-size:12px;">Most edits work inline — try clicking a number on a leg.</div></div>`;
+    return;
+  }
+  const t = TEMPLATES[selected.templateId];
+  title.textContent = t.label;
+  desc.textContent = `Edit parameters here.`;
+  body.innerHTML = '';
+  if (t.fields.length === 0) {
+    body.innerHTML = `<div class="empty-insp"><div>No parameters.</div></div>`;
+  } else {
+    t.fields.forEach(f => {
+      const wrap = document.createElement('div');
+      wrap.className = 'field';
+      wrap.innerHTML = `<label>${f.label || f.k}</label>`;
+      let input;
+      if (f.type === 'select') {
+        input = document.createElement('select');
+        input.className = 'select';
+        f.options.forEach(o => {
+          const op = document.createElement('option');
+          op.value = o; op.textContent = o;
+          if (selected.params[f.k] === o) op.selected = true;
+          input.appendChild(op);
+        });
+      } else {
+        input = document.createElement('input');
+        input.className = 'input';
+        input.value = selected.params[f.k];
+      }
+      input.addEventListener('input', () => {
+        selected.params[f.k] = input.value;
+        render();
+      });
+      wrap.appendChild(input);
+      body.appendChild(wrap);
+    });
+  }
+  const del = document.createElement('button');
+  del.className = 'btn'; del.style.marginTop = '8px';
+  del.textContent = '🗑 Remove block';
+  del.addEventListener('click', () => {
+    Object.keys(stacks).forEach(name => stacks[name] = stacks[name].filter(b => b.id !== selected.id));
+    selected = null;
+    render(); renderInspector();
+  });
+  body.appendChild(del);
+}
+document.querySelector('.canvas-wrap').addEventListener('click', () => {
+  selected = null; render(); renderInspector();
+});
+
+/* ---------- Toast ---------- */
+const toastEl = document.getElementById('toast');
+let toastTimer;
+function toast(msg) {
+  toastEl.textContent = msg;
+  toastEl.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => toastEl.classList.remove('show'), 1700);
+}
+
+/* ---------- Initial seed: ORB-style strategy preloaded ---------- */
+stacks.long_entry.push(instance('orb_break'));
+stacks.long_entry.push(instance('trend_filter'));
+stacks.long_entry.push(instance('volume_spike'));
+stacks.logical_exit.push(instance('exit_no_progress'));
+stacks.logical_exit.push(instance('exit_session_end'));
+render(); renderInspector();
+</script>
+</body>
+</html>

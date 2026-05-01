@@ -10,7 +10,6 @@ from backend.app.domain import (
     AllowedDirections,
     SessionPreference,
     StrategyControlsVersion,
-    TradingHorizon,
 )
 
 
@@ -29,7 +28,6 @@ def _kwargs(**overrides):
 def test_defaults_match_safe_baseline() -> None:
     controls = StrategyControlsVersion(**_kwargs())
 
-    assert controls.trading_horizon == TradingHorizon.INTRADAY
     assert controls.allowed_directions == AllowedDirections.LONG
     assert controls.session_preference == SessionPreference.REGULAR_ONLY
     assert controls.higher_timeframe_confirmation_required is False
@@ -42,20 +40,17 @@ def test_defaults_match_safe_baseline() -> None:
     assert controls.time_based_exit_after_days is None
 
 
-def test_all_horizons_directions_session_preferences_round_trip() -> None:
-    for horizon in TradingHorizon:
-        for direction in AllowedDirections:
-            for session in SessionPreference:
-                controls = StrategyControlsVersion(
-                    **_kwargs(
-                        trading_horizon=horizon,
-                        allowed_directions=direction,
-                        session_preference=session,
-                    )
+def test_all_directions_and_session_preferences_round_trip() -> None:
+    for direction in AllowedDirections:
+        for session in SessionPreference:
+            controls = StrategyControlsVersion(
+                **_kwargs(
+                    allowed_directions=direction,
+                    session_preference=session,
                 )
-                assert controls.trading_horizon == horizon
-                assert controls.allowed_directions == direction
-                assert controls.session_preference == session
+            )
+            assert controls.allowed_directions == direction
+            assert controls.session_preference == session
 
 
 def test_time_based_exit_units_are_mutually_exclusive() -> None:

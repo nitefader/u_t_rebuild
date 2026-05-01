@@ -5,7 +5,14 @@ from datetime import datetime, timedelta, timezone
 from uuid import UUID, uuid4
 
 from backend.app.broker_accounts.models import BrokerAccount, BrokerAccountValidationStatus
-from backend.app.brokers import BrokerOrderResult, BrokerOrderStatus, BrokerSync, FakeBrokerAdapter
+from backend.app.brokers import (
+    BrokerOrderResult,
+    BrokerOrderStatus,
+    BrokerPositionSide,
+    BrokerPositionSnapshot,
+    BrokerSync,
+    FakeBrokerAdapter,
+)
 from backend.app.control_plane import ControlPlane
 from backend.app.decision import SignalEngine
 from backend.app.domain import (
@@ -17,6 +24,13 @@ from backend.app.domain import (
     OrderType,
     ProgramVersion,
     RiskProfileVersion,
+    SignalPlan,
+    SignalPlanEntry,
+    SignalPlanIntent,
+    SignalPlanSide,
+    SignalPlanStop,
+    SignalPlanTarget,
+    SignalPlanTargetAction,
     StrategyControlsVersion,
     StrategyVersion,
     TimeInForce,
@@ -24,12 +38,22 @@ from backend.app.domain import (
     UniverseSnapshot,
     UniverseSymbol,
 )
+from backend.app.decision.signal_plan_builder import post_fill_pct_rule
 from backend.app.domain.risk_profile import PositionSizingMethod
 from backend.app.domain.strategy import SignalRule
+from backend.app.domain.strategy_v4 import (
+    OnFillActionV4,
+    StrategyEntriesV4,
+    StrategyEntryV4,
+    StrategyLegV4,
+    StrategyStopV4,
+    StrategyVersionV4,
+)
 from backend.app.features import NormalizedBar, ResolvedDeploymentComponents
 from backend.app.governor import GovernorPolicy, PortfolioGovernor, PortfolioSnapshot
-from backend.app.orders import OrderManager, OrderManagerError
+from backend.app.orders import InternalOrder, InternalOrderIntent, InternalOrderStatus, OrderManager, OrderManagerError, OrderOrigin
 from backend.app.persistence import SQLiteOrderLedger, SQLiteRuntimeStore
+from backend.app.runtime.daily_account_state import DailyAccountState
 from backend.app.runtime import BrokerRuntimeDeployment, BrokerRuntimeOrchestrator, DeploymentContext, RuntimeState, RuntimeStatus
 
 
@@ -114,6 +138,36 @@ def _components(*, symbol: str = "SPY") -> ResolvedDeploymentComponents:
     )
 
 
+def _components_with_v4_atr(*, symbol: str = "SPY") -> ResolvedDeploymentComponents:
+    components = _components(symbol=symbol)
+    strategy_v4 = StrategyVersionV4(
+        version=1,
+        name="Runtime ATR v4",
+        entries=StrategyEntriesV4(long=StrategyEntryV4(expression_text="1m.close < 1m.open")),
+        stops=(
+            StrategyStopV4(
+                mode="simple",
+                scope="all",
+                simple_type="ATR",
+                simple_value=2.0,
+                feature_requirements=("atr:length=14[0]",),
+            ),
+        ),
+        legs=(
+            StrategyLegV4(
+                position=1,
+                kind="target",
+                size_pct=1.0,
+                target_type="ATR",
+                target_value=4.0,
+                on_fill_action=OnFillActionV4(kind="leave"),
+            ),
+        ),
+        feature_requirements=("1m.close", "1m.open", "atr:length=14[0]"),
+    )
+    return components.model_copy(update={"strategy_version_v4": strategy_v4})
+
+
 def _deployment(
     components: ResolvedDeploymentComponents,
     *,
@@ -167,6 +221,80 @@ def _seed_account(store: SQLiteRuntimeStore, account_id: UUID = ACCOUNT_ID, *, m
     )
 
 
+def _bracket_signal_plan(components: ResolvedDeploymentComponents, *, symbol: str = "SPY") -> SignalPlan:
+    strategy = components.strategy
+    assert strategy is not None
+    return SignalPlan(
+        signal_plan_id=uuid4(),
+        deployment_id=DEPLOYMENT_ID,
+        strategy_id=strategy.strategy_id,
+        strategy_version_id=strategy.id,
+        watchlist_snapshot_id=components.universe.id,
+        symbol=symbol.upper(),
+        side=SignalPlanSide.LONG,
+        intent=SignalPlanIntent.OPEN,
+        entry=SignalPlanEntry(order_type=OrderType.MARKET, time_in_force_preference=TimeInForce.DAY),
+        stop=SignalPlanStop(type="percent", rule=post_fill_pct_rule(5.0), required=True),
+        targets=(
+            SignalPlanTarget(
+                label="t1",
+                action=SignalPlanTargetAction.CLOSE,
+                quantity_pct=100.0,
+                rule=post_fill_pct_rule(10.0),
+            ),
+        ),
+        reason="restart_protection_fixture",
+    )
+
+
+def _filled_parent_order(
+    signal_plan: SignalPlan,
+    *,
+    account_id: UUID = ACCOUNT_ID,
+    deployment_id: UUID = DEPLOYMENT_ID,
+    quantity: float = 10.0,
+) -> InternalOrder:
+    now = datetime.now(timezone.utc)
+    return InternalOrder(
+        order_id=uuid4(),
+        client_order_id=f"parent-{uuid4().hex[:12]}",
+        account_id=account_id,
+        origin=OrderOrigin.SIGNAL_PLAN,
+        deployment_id=deployment_id,
+        strategy_id=signal_plan.strategy_id,
+        strategy_version_id=signal_plan.strategy_version_id,
+        signal_plan_id=signal_plan.signal_plan_id,
+        opening_signal_plan_id=signal_plan.signal_plan_id,
+        current_signal_plan_id=signal_plan.signal_plan_id,
+        position_lineage_id=signal_plan.signal_plan_id,
+        account_evaluation_id=uuid4(),
+        governor_decision_id=uuid4(),
+        symbol=signal_plan.symbol,
+        side=CandidateSide.LONG,
+        quantity=quantity,
+        filled_quantity=quantity,
+        order_type=OrderType.MARKET,
+        time_in_force=TimeInForce.DAY,
+        intent=InternalOrderIntent.OPEN,
+        status=InternalOrderStatus.FILLED,
+        created_at=now,
+        updated_at=now,
+        signal_name=signal_plan.reason,
+        reason=signal_plan.reason,
+    )
+
+
+def _broker_position(*, account_id: UUID = ACCOUNT_ID, symbol: str = "SPY", qty: float = 10.0) -> BrokerPositionSnapshot:
+    return BrokerPositionSnapshot(
+        account_id=account_id,
+        symbol=symbol,
+        qty=qty,
+        side=BrokerPositionSide.LONG if qty > 0 else BrokerPositionSide.SHORT,
+        avg_entry_price=100.0,
+        market_value=abs(qty) * 100.0,
+    )
+
+
 def _runtime(
     tmp_path,
     *,
@@ -179,6 +307,7 @@ def _runtime(
     order_manager: OrderManager | None = None,
     broker_sync: BrokerSync | None = None,
     bar_source=None,
+    startup_warmup_bars_source=None,
     mode: TradingMode = TradingMode.BROKER_PAPER,
     live_order_submission_enabled: bool = False,
 ) -> tuple[BrokerRuntimeOrchestrator, SQLiteRuntimeStore, FakeBrokerAdapter]:
@@ -214,6 +343,7 @@ def _runtime(
         control_plane=control_plane or ControlPlane(state_store=store),
         governor=governor,
         bar_source=bar_source,
+        startup_warmup_bars_source=startup_warmup_bars_source,
         portfolio_snapshot_factory=lambda _aid: PortfolioSnapshot(equity=100_000),
     )
     return runtime, store, adapter
@@ -404,6 +534,58 @@ def test_broker_sync_failure_marks_runtime_degraded_and_blocks_further_opens(tmp
     assert len(broker.submitted_orders) == 1
 
 
+def _degraded_runtime(tmp_path, *, last_error: str) -> tuple[BrokerRuntimeOrchestrator, SQLiteRuntimeStore, FakeBrokerAdapter]:
+    store = SQLiteRuntimeStore(tmp_path / "degraded.sqlite")
+    _seed_account(store)
+    store.save_deployment_runtime_state(
+        RuntimeState(deployment_id=DEPLOYMENT_ID, status=RuntimeStatus.DEGRADED, last_error=last_error)
+    )
+    ledger = SQLiteOrderLedger(tmp_path / "degraded.sqlite")
+    broker = FakeBrokerAdapter([BrokerOrderStatus.ACCEPTED])
+    runtime = BrokerRuntimeOrchestrator(
+        deployments=(BrokerRuntimeDeployment(deployment=_deployment(_components()), components=_components(), account_id=ACCOUNT_ID),),
+        runtime_store=store,
+        broker_adapter=broker,
+        broker_sync=BrokerSync(ledger=ledger, adapter=broker, runtime_store=store, provider="alpaca"),
+        order_manager=OrderManager(ledger=ledger),
+        control_plane=ControlPlane(state_store=store),
+        portfolio_snapshot_factory=lambda _aid: PortfolioSnapshot(equity=100_000),
+    )
+    runtime._recovery_completed.add(DEPLOYMENT_ID)
+    return runtime, store, broker
+
+
+def test_degraded_from_freshness_gap_auto_clears_when_sync_recovers(tmp_path) -> None:
+    # Sticky-DEGRADED bug: when a transient broker-sync stale (e.g. post-
+    # restart WS reconnect taking >30s) tripped the freshness gate, the
+    # deployment stayed degraded forever even after sync caught up.
+    # Regression: degradation tagged with a freshness-origin last_error
+    # must auto-clear once load_broker_sync_freshness reports fresh.
+    runtime, store, broker = _degraded_runtime(
+        tmp_path, last_error="broker_sync_stale:broker_truth_age_exceeded_30s"
+    )
+
+    result = runtime.process_completed_bar(DEPLOYMENT_ID, _bar())
+
+    assert result is not None, "expected the bar to be processed after auto-clear"
+    state = store.load_deployment_runtime_state(DEPLOYMENT_ID)
+    assert state.status == RuntimeStatus.RUNNING
+    assert len(broker.submitted_orders) == 1
+
+
+def test_degraded_from_non_freshness_fault_stays_sticky(tmp_path) -> None:
+    # The auto-clear must NOT activate when DEGRADED was set by a non-
+    # freshness fault (e.g. apply_result exception). Those represent
+    # broker-side malfunctions and require operator action to clear.
+    runtime, store, broker = _degraded_runtime(tmp_path, last_error="sync failed")
+
+    assert runtime.process_completed_bar(DEPLOYMENT_ID, _bar()) is None
+
+    state = store.load_deployment_runtime_state(DEPLOYMENT_ID)
+    assert state.status == RuntimeStatus.DEGRADED
+    assert broker.submitted_orders == []
+
+
 def test_broker_account_mode_must_match_deployment_mode(tmp_path) -> None:
     runtime, store, broker = _runtime(tmp_path)
     _seed_account(store, ACCOUNT_ID, mode=TradingMode.BROKER_LIVE)
@@ -433,6 +615,247 @@ def test_runtime_restart_resumes_idempotently_without_duplicate_order_submission
     assert restarted.process_completed_bar(DEPLOYMENT_ID, _bar()) is None
 
     assert len(broker.submitted_orders) == 1
+
+
+def test_startup_places_protective_oco_for_naked_filled_deployment_position(tmp_path) -> None:
+    components = _components()
+    position = _broker_position(qty=10.0)
+    broker = FakeBrokerAdapter(
+        [BrokerOrderStatus.ACCEPTED],
+        positions_by_account={ACCOUNT_ID: (position,)},
+    )
+    runtime, store, broker = _runtime(tmp_path, components=components, broker=broker)
+    signal_plan = _bracket_signal_plan(components)
+    parent = _filled_parent_order(signal_plan)
+    store.save_signal_plan(signal_plan)
+    store.save_order(parent)
+
+    status = runtime.start_deployment_runtime(DEPLOYMENT_ID)
+
+    assert status.running is True
+    assert len(broker.submitted_orders) == 1
+    child = broker.submitted_orders[0]
+    assert child.intent == InternalOrderIntent.TAKE_PROFIT
+    assert child.order_class == "oco"
+    assert child.parent_order_id == parent.order_id
+    assert child.quantity == 10.0
+    assert child.limit_price == 110.0
+    assert child.bracket_stop_loss_stop_price == 95.0
+    assert store.load_order(child.order_id).status == InternalOrderStatus.ACCEPTED
+    assert any(event.event_type.value == "protection_placed" for event in runtime.latest_events)
+
+
+def test_startup_recovers_pre_fix_v4_atr_stop_rule_from_deployment_components(tmp_path) -> None:
+    components = _components_with_v4_atr(symbol="TQQQ")
+    position = _broker_position(symbol="TQQQ", qty=1.0)
+    broker = FakeBrokerAdapter(
+        [BrokerOrderStatus.ACCEPTED],
+        positions_by_account={ACCOUNT_ID: (position,)},
+    )
+    runtime, store, broker = _runtime(tmp_path, components=components, broker=broker)
+    signal_plan = _bracket_signal_plan(components, symbol="TQQQ").model_copy(
+        update={
+            "stop": SignalPlanStop(type="atr", required=True),
+            "targets": (
+                SignalPlanTarget(
+                    label="t1",
+                    action=SignalPlanTargetAction.CLOSE,
+                    quantity_pct=100.0,
+                    rule="atr:4.0",
+                ),
+            ),
+            "feature_snapshot": {"atr:length=14[0]": 1.25},
+        }
+    )
+    store.save_signal_plan(signal_plan)
+    store.save_order(_filled_parent_order(signal_plan, quantity=1.0))
+
+    status = runtime.start_deployment_runtime(DEPLOYMENT_ID)
+
+    assert status.running is True
+    assert len(broker.submitted_orders) == 1
+    child = broker.submitted_orders[0]
+    assert child.intent == InternalOrderIntent.TAKE_PROFIT
+    assert child.order_class == "oco"
+    assert child.quantity == 1.0
+    assert child.limit_price == 105.0
+    assert child.bracket_stop_loss_stop_price == 97.5
+
+
+def test_startup_recomputes_missing_v4_atr_from_recent_warmup_bars(tmp_path) -> None:
+    components = _components_with_v4_atr(symbol="TQQQ")
+    position = _broker_position(symbol="TQQQ", qty=1.0)
+    broker = FakeBrokerAdapter(
+        [BrokerOrderStatus.ACCEPTED],
+        positions_by_account={ACCOUNT_ID: (position,)},
+    )
+
+    def warmup_source(_entry, symbol: str, timeframe: str, warmup_bars: int):
+        return tuple(
+            _bar(index, symbol=symbol, open_=100.0, close=100.0)
+            .model_copy(update={"timeframe": timeframe})
+            for index in range(warmup_bars)
+        )
+
+    runtime, store, broker = _runtime(
+        tmp_path,
+        components=components,
+        broker=broker,
+        startup_warmup_bars_source=warmup_source,
+    )
+    signal_plan = _bracket_signal_plan(components, symbol="TQQQ").model_copy(
+        update={
+            "stop": SignalPlanStop(type="atr", required=True),
+            "targets": (
+                SignalPlanTarget(
+                    label="t1",
+                    action=SignalPlanTargetAction.CLOSE,
+                    quantity_pct=100.0,
+                    rule="atr:4.0",
+                ),
+            ),
+            "feature_snapshot": {"1m.close": 65.1, "1m.open": 66.0},
+        }
+    )
+    store.save_signal_plan(signal_plan)
+    store.save_order(_filled_parent_order(signal_plan, quantity=1.0))
+
+    status = runtime.start_deployment_runtime(DEPLOYMENT_ID)
+
+    assert status.running is True
+    assert len(broker.submitted_orders) == 1
+    child = broker.submitted_orders[0]
+    assert child.intent == InternalOrderIntent.TAKE_PROFIT
+    assert child.order_class == "oco"
+    assert child.quantity == 1.0
+    assert child.limit_price == 116.0
+    assert child.bracket_stop_loss_stop_price == 92.0
+    persisted_plan = store.load_signal_plan(signal_plan.signal_plan_id)
+    assert persisted_plan.stop is not None
+    assert persisted_plan.stop.rule is None
+    assert persisted_plan.feature_snapshot == {"1m.close": 65.1, "1m.open": 66.0}
+
+
+def test_startup_reports_exact_blocker_when_atr_cannot_be_recomputed(tmp_path) -> None:
+    components = _components_with_v4_atr(symbol="TQQQ")
+    position = _broker_position(symbol="TQQQ", qty=1.0)
+    broker = FakeBrokerAdapter(
+        [BrokerOrderStatus.ACCEPTED],
+        positions_by_account={ACCOUNT_ID: (position,)},
+    )
+
+    def insufficient_source(_entry, symbol: str, timeframe: str, _warmup_bars: int):
+        return tuple(
+            _bar(index, symbol=symbol, open_=100.0, close=100.0)
+            .model_copy(update={"timeframe": timeframe})
+            for index in range(5)
+        )
+
+    runtime, store, broker = _runtime(
+        tmp_path,
+        components=components,
+        broker=broker,
+        startup_warmup_bars_source=insufficient_source,
+    )
+    signal_plan = _bracket_signal_plan(components, symbol="TQQQ").model_copy(
+        update={
+            "stop": SignalPlanStop(type="atr", required=True),
+            "targets": (
+                SignalPlanTarget(
+                    label="t1",
+                    action=SignalPlanTargetAction.CLOSE,
+                    quantity_pct=100.0,
+                    rule="atr:4.0",
+                ),
+            ),
+            "feature_snapshot": {"1m.close": 65.1, "1m.open": 66.0},
+        }
+    )
+    store.save_signal_plan(signal_plan)
+    store.save_order(_filled_parent_order(signal_plan, quantity=1.0))
+
+    status = runtime.start_deployment_runtime(DEPLOYMENT_ID)
+
+    assert status.running is True
+    assert broker.submitted_orders == []
+    naked_events = [event for event in runtime.latest_events if event.event_type.value == "protection_naked"]
+    assert naked_events
+    details = naked_events[-1].details
+    assert details["reason"] == "startup_atr_recompute_unavailable"
+    assert details["symbol"] == "TQQQ"
+    unavailable = details["unavailable_atr_features"]
+    assert isinstance(unavailable, list)
+    assert unavailable[0]["availability"] == "warmup"
+    assert unavailable[0]["bars_seen"] == 5
+    assert unavailable[0]["warmup_bars"] == 42
+
+
+def test_startup_protection_is_idempotent_after_oco_is_accepted(tmp_path) -> None:
+    components = _components()
+    position = _broker_position(qty=10.0)
+    broker = FakeBrokerAdapter(
+        [BrokerOrderStatus.ACCEPTED],
+        positions_by_account={ACCOUNT_ID: (position,)},
+    )
+    runtime, store, broker = _runtime(tmp_path, components=components, broker=broker)
+    signal_plan = _bracket_signal_plan(components)
+    store.save_signal_plan(signal_plan)
+    store.save_order(_filled_parent_order(signal_plan))
+
+    assert runtime.start_deployment_runtime(DEPLOYMENT_ID).running is True
+    assert runtime.start_deployment_runtime(DEPLOYMENT_ID).running is True
+
+    assert len(broker.submitted_orders) == 1
+
+
+def test_startup_protection_covers_current_broker_qty_when_historical_fills_are_larger(tmp_path) -> None:
+    components = _components()
+    position = _broker_position(qty=2.0)
+    broker = FakeBrokerAdapter(
+        [BrokerOrderStatus.ACCEPTED, BrokerOrderStatus.ACCEPTED],
+        positions_by_account={ACCOUNT_ID: (position,)},
+    )
+    runtime, store, broker = _runtime(tmp_path, components=components, broker=broker)
+    for _ in range(3):
+        signal_plan = _bracket_signal_plan(components)
+        store.save_signal_plan(signal_plan)
+        store.save_order(_filled_parent_order(signal_plan, quantity=1.0))
+
+    status = runtime.start_deployment_runtime(DEPLOYMENT_ID)
+
+    assert status.running is True
+    assert len(broker.submitted_orders) == 2
+    assert sum(order.quantity for order in broker.submitted_orders) == 2.0
+    assert all(order.order_class == "oco" for order in broker.submitted_orders)
+
+
+def test_startup_protection_refuses_ambiguous_same_symbol_deployment_ownership(tmp_path) -> None:
+    components = _components()
+    position = _broker_position(qty=10.0)
+    broker = FakeBrokerAdapter(
+        [BrokerOrderStatus.ACCEPTED],
+        positions_by_account={ACCOUNT_ID: (position,)},
+    )
+    runtime, store, broker = _runtime(tmp_path, components=components, broker=broker)
+    signal_plan = _bracket_signal_plan(components)
+    other_plan = signal_plan.model_copy(update={"signal_plan_id": uuid4(), "deployment_id": OTHER_DEPLOYMENT_ID})
+    store.save_signal_plan(signal_plan)
+    store.save_order(_filled_parent_order(signal_plan, quantity=10.0))
+    store.save_order(
+        _filled_parent_order(
+            other_plan,
+            deployment_id=OTHER_DEPLOYMENT_ID,
+            quantity=10.0,
+        )
+    )
+
+    status = runtime.start_deployment_runtime(DEPLOYMENT_ID)
+
+    assert status.running is True
+    assert broker.submitted_orders == []
+    naked_events = [event for event in runtime.latest_events if event.event_type.value == "protection_naked"]
+    assert naked_events
+    assert naked_events[-1].details["reason"] == "ambiguous_position_ownership"
 
 
 def test_multiple_broker_accounts_and_deployments_run_independently(tmp_path) -> None:
@@ -543,3 +966,16 @@ def test_operations_center_detail_endpoint_returns_runtime_loop_status_and_times
     assert detail.last_governor_decision is not None
     assert detail.last_order_id is not None
     assert detail.last_broker_sync_timestamp is not None
+
+
+def test_daily_state_factory_does_not_bleed_across_market_day_boundary(tmp_path) -> None:
+    runtime, _store, _broker = _runtime(tmp_path)
+    runtime._daily_states[ACCOUNT_ID] = DailyAccountState(
+        account_id=ACCOUNT_ID,
+        market_day="2000-01-01",
+        realized_pnl=-250.0,
+        total_loss_today=250.0,
+        last_loss_at=datetime(2000, 1, 1, 20, 59, tzinfo=timezone.utc),
+    )
+
+    assert runtime._daily_state_for(ACCOUNT_ID) is None

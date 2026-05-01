@@ -1,9 +1,12 @@
 import { z } from "zod";
 import { api } from "./client";
 import {
+  DeploymentBindingHistoryListResponseSchema,
   DeploymentListResponseSchema,
   DeploymentResponseSchema,
+  type DeploymentBindingHistoryListResponse,
   type DeploymentListResponse,
+  type DeploymentRebindRequest,
   type DeploymentResponse,
   type DeploymentWriteRequest,
 } from "./schemas/deployments";
@@ -44,4 +47,13 @@ export const DeploymentsApi = {
     api.post(DeploymentResponseSchema, `/api/v1/deployments/${id}/unsubscribe`, {
       account_id: accountId,
     }),
+
+  rebind: (id: string, req: DeploymentRebindRequest): Promise<DeploymentResponse> =>
+    api.post(DeploymentResponseSchema, `/api/v1/deployments/${id}/rebind`, req),
+
+  getBindingHistory: (id: string): Promise<DeploymentBindingHistoryListResponse> =>
+    api.get(
+      DeploymentBindingHistoryListResponseSchema,
+      `/api/v1/deployments/${id}/binding-history`,
+    ),
 };

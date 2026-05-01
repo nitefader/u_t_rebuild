@@ -104,7 +104,7 @@ interface AggregatedOrder {
   status: string;
   intent: string;
   submittedAt: string;
-  source: "manual" | "broker";
+  source: string;
 }
 
 function aggregate(
@@ -197,7 +197,7 @@ function aggregate(
           status: o.status,
           intent: typeof o.intent === "string" ? o.intent : String(o.intent),
           submittedAt: o.submitted_at,
-          source: "manual",
+          source: orderSource(o),
         });
       }
     }
@@ -380,7 +380,7 @@ function OrdersCard({
                     <StatusBadge tone={statusTone(o.status)}>{o.status}</StatusBadge>
                   </td>
                   <td>
-                    <StatusBadge tone={o.source === "manual" ? "info" : "muted"}>{o.source}</StatusBadge>
+                    <StatusBadge tone={sourceTone(o.source)}>{sourceLabel(o.source)}</StatusBadge>
                   </td>
                   <td className="text-fg-muted">{o.intent}</td>
                 </tr>
@@ -391,6 +391,46 @@ function OrdersCard({
       </CardBody>
     </Card>
   );
+}
+
+function orderSource(order: ManualOrderResponse): string {
+  const raw = (order.source ?? order.origin ?? "").trim().toLowerCase();
+  if (raw === "manual_operator") return "manual";
+  return raw || "unknown";
+}
+
+function sourceLabel(source: string): string {
+  switch (source) {
+    case "manual":
+      return "Manual";
+    case "signal_plan":
+      return "SignalPlan";
+    case "program":
+      return "Program";
+    case "broker":
+      return "Broker";
+    default:
+      return source
+        .split(/[_\s-]+/)
+        .filter(Boolean)
+        .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+        .join(" ") || "Unknown";
+  }
+}
+
+function sourceTone(source: string): "ok" | "warn" | "danger" | "info" | "muted" | "neutral" {
+  switch (source) {
+    case "signal_plan":
+      return "ok";
+    case "manual":
+      return "info";
+    case "broker":
+      return "muted";
+    case "unknown":
+      return "warn";
+    default:
+      return "neutral";
+  }
 }
 
 function statusTone(status: string): "ok" | "warn" | "danger" | "info" | "muted" | "neutral" {

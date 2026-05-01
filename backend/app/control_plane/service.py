@@ -181,16 +181,21 @@ class ControlPlane:
         errors: list[str] = []
 
         for broker_order in open_orders:
-            if not self._in_scope(broker_order, scope=scope, deployment_id=deployment_id):
+            local_order = local_orders_by_client_id.get(broker_order.client_order_id)
+            if not self._in_scope(
+                broker_order,
+                local_order=local_order,
+                scope=scope,
+                deployment_id=deployment_id,
+            ):
                 continue
-            intent = parse_order_intent(broker_order.client_order_id)
+            intent = self._sweep_intent(broker_order, local_order)
             if intent == "unknown":
                 skipped_unknown.append(broker_order.client_order_id)
                 continue
-            if intent in {"sl", "tp", "close", "scale"}:
+            if intent != "open":
                 skipped_protective.append(broker_order.client_order_id)
                 continue
-            local_order = local_orders_by_client_id.get(broker_order.client_order_id)
             if local_order is None:
                 skipped_unknown.append(broker_order.client_order_id)
                 continue
@@ -215,14 +220,28 @@ class ControlPlane:
             scope=scope,
         )
 
-    def _in_scope(self, broker_order: BrokerOpenOrderSnapshot, *, scope: str, deployment_id: UUID | None) -> bool:
+    def _in_scope(
+        self,
+        broker_order: BrokerOpenOrderSnapshot,
+        *,
+        local_order,
+        scope: str,
+        deployment_id: UUID | None,
+    ) -> bool:
         if scope in {CancellationScope.GLOBAL.value, CancellationScope.ACCOUNT.value}:
             return True
         if scope != CancellationScope.DEPLOYMENT.value:
             raise ValueError(f"unsupported cancellation scope: {scope}")
         if deployment_id is None:
             raise ValueError("deployment scope requires deployment_id")
+        if local_order is not None:
+            return local_order.deployment_id == deployment_id
         return parse_order_deployment_id(broker_order.client_order_id) == deployment_id.hex[:8]
+
+    def _sweep_intent(self, broker_order: BrokerOpenOrderSnapshot, local_order) -> str:
+        if local_order is not None:
+            return local_order.intent.value
+        return parse_order_intent(broker_order.client_order_id)
 
     def _cancel_broker_order(self, broker_adapter, local_order) -> None:
         parameter = next(iter(inspect.signature(broker_adapter.cancel_order).parameters.values()), None)

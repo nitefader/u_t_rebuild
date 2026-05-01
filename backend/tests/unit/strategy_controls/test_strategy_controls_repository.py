@@ -10,7 +10,6 @@ import pytest
 from backend.app.domain.strategy_controls import (
     AllowedDirections,
     StrategyControlsVersion,
-    TradingHorizon,
 )
 from backend.app.strategy_controls import (
     StrategyControlsRepository,
@@ -25,7 +24,6 @@ def _make_controls(*, version: int = 1, strategy_controls_id=None) -> StrategyCo
         version=version,
         name=f"controls v{version}",
         timeframe="5m",
-        trading_horizon=TradingHorizon.INTRADAY,
         allowed_directions=AllowedDirections.LONG,
         cooldown_minutes=15,
         max_trades_per_session=3,
@@ -43,7 +41,6 @@ def test_save_and_load_strategy_controls_version_roundtrip(tmp_path: Path) -> No
     assert loaded.payload.id == controls.id
     assert loaded.payload.cooldown_minutes == 15
     assert loaded.payload.max_trades_per_session == 3
-    assert loaded.payload.trading_horizon == TradingHorizon.INTRADAY
 
 
 def test_load_version_raises_when_missing(tmp_path: Path) -> None:

@@ -1,68 +1,18 @@
+/**
+ * Minimal schemas for the legacy /api/v1/strategies backend.
+ *
+ * The legacy strategy backend stays alive through Slice 11 (runtime swap)
+ * because research surfaces (Backtests, Walk-Forward, Optimization, Sim Lab)
+ * and Deployments need it for strategy/version pickers and human-readable
+ * run labels. This file is NOT the v4 IDE schema — that lives in
+ * frontend/src/api/schemas/strategiesV4.ts.
+ *
+ * Only the types required by surviving consumers are exported here. The
+ * strategy builder / composer schemas (ConditionNode, SignalRule, etc.) are
+ * gone with the deleted UI surfaces.
+ */
+
 import { z } from "zod";
-
-export const StrategyStatusSchema = z.enum(["draft", "active", "deprecated"]);
-export const StrategyVersionStatusSchema = z.enum(["draft", "frozen"]);
-
-export const ConditionOperatorSchema = z.enum([
-  "gt",
-  "greater_than",
-  "gte",
-  "lt",
-  "less_than",
-  "lte",
-  "eq",
-  "cross_above",
-  "cross_below",
-]);
-
-export const CandidateSideSchema = z.enum(["long", "short"]);
-export const IntentTypeSchema = z.enum(["entry", "exit"]);
-
-export const ConditionNodeSchema: z.ZodTypeAny = z
-  .object({
-    kind: z.literal("condition"),
-    left_feature: z.string(),
-    operator: ConditionOperatorSchema,
-    right_feature: z.string().nullable().optional(),
-    right_value: z.union([z.number(), z.string(), z.boolean()]).nullable().optional(),
-    label: z.string().nullable().optional(),
-  })
-  .passthrough();
-
-// Recursive — children can be ConditionNode or ConditionGroup.
-const conditionExpression: z.ZodTypeAny = z.lazy(() =>
-  z.union([ConditionNodeSchema, ConditionGroupSchema]),
-);
-
-export const ConditionGroupSchema: z.ZodTypeAny = z
-  .object({
-    kind: z.literal("group"),
-    operator: z.enum(["all", "any", "and", "or"]),
-    children: z.array(conditionExpression).min(1),
-    label: z.string().nullable().optional(),
-  })
-  .passthrough();
-
-export const SignalRuleSchema = z
-  .object({
-    name: z.string(),
-    side: CandidateSideSchema,
-    intent_type: IntentTypeSchema,
-    // condition is optional now — exit rules may carry only a logical_exit_rule
-    // (per the LogicalExitRule slice; doctrine: time/bars/session/feature/hybrid
-    // exits all live under SignalPlan.intent=logical_exit, never as a sibling
-    // top-level intent). Backend validates that at least one of (condition,
-    // logical_exit_rule) is set per SignalRule.
-    condition: conditionExpression.nullable().optional(),
-    logical_exit_rule: z
-      .object({ kind: z.string() })
-      .passthrough()
-      .nullable()
-      .optional(),
-    stop_candidate_feature: z.string().nullable().optional(),
-    target_candidate_feature: z.string().nullable().optional(),
-  })
-  .passthrough();
 
 export const StrategyVersionPayloadSchema = z
   .object({
@@ -72,8 +22,6 @@ export const StrategyVersionPayloadSchema = z
     name: z.string(),
     description: z.string().nullable().optional(),
     feature_refs: z.array(z.string()).default([]),
-    entry_rules: z.array(SignalRuleSchema).default([]),
-    exit_rules: z.array(SignalRuleSchema).default([]),
     tags: z.array(z.string()).default([]),
     created_at: z.string(),
   })

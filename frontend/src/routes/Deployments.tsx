@@ -1,12 +1,15 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useNavigate } from "react-router-dom";
 import { Pause, Play, Plus, Square, Trash2 } from "lucide-react";
 import { EditDeploymentDrawer } from "./EditDeploymentDrawer";
+import { RebindDeploymentDrawer } from "./RebindDeploymentDrawer";
 import { ApiError } from "@/api/client";
 import { AccountsApi } from "@/api/accounts";
 import { DeploymentsApi } from "@/api/deployments";
 import { StrategiesApi } from "@/api/strategies";
 import { WatchlistsApi } from "@/api/watchlists";
+import { listAllHeads } from "@/api/strategiesV4";
 import type { Deployment } from "@/api/schemas/deployments";
 import type { Strategy, StrategyVersionRecord } from "@/api/schemas/strategies";
 import { TRADING_HORIZON_LABELS, type TradingHorizon } from "@/api/schemas/risk";
@@ -33,8 +36,10 @@ import { ErrorState } from "@/components/empty/ErrorState";
 import { EmptyState } from "@/components/empty/EmptyState";
 import { PageHeader } from "./PageHeader";
 import { relativeTime } from "@/lib/format";
+import { ROUTE_DEPLOYMENTS_NEW, deploymentDetailPath } from "@/strategy_ide_v4/routes";
 
 export function Deployments(): JSX.Element {
+  const navigate = useNavigate();
   const list = useQuery({
     queryKey: ["deployments", "list"],
     queryFn: () => DeploymentsApi.list(),
@@ -50,11 +55,32 @@ export function Deployments(): JSX.Element {
     queryFn: () => StrategiesApi.list(),
     staleTime: 60_000,
   });
+  const strategiesV4 = useQuery({
+    queryKey: ["strategies-v4", "heads"],
+    queryFn: listAllHeads,
+    staleTime: 60_000,
+  });
   const [createOpen, setCreateOpen] = useState(false);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
   const [bulkMessage, setBulkMessage] = useState<string | null>(null);
   const qc = useQueryClient();
+
+  // Unified strategy name lookup: v4 heads take priority over legacy.
+  const strategyNameById: Record<string, string> = useMemo(() => {
+    const map: Record<string, string> = {};
+    for (const s of strategies.data?.strategies ?? []) {
+      if (s.latest_version_id) map[s.latest_version_id] = s.name;
+      for (const fid of s.frozen_version_ids ?? []) {
+        map[fid] = s.name;
+      }
+    }
+    for (const h of strategiesV4.data ?? []) {
+      map[h.strategy_v4_id] = h.name;
+      map[h.head_version_id] = h.name;
+    }
+    return map;
+  }, [strategies.data, strategiesV4.data]);
 
   const deployments = list.data?.deployments ?? [];
   const selectedDeployments = deployments.filter((d) => selectedIds.includes(d.deployment_id));
@@ -117,7 +143,7 @@ export function Deployments(): JSX.Element {
             size="sm"
             variant="primary"
             leftIcon={<Plus className="h-3.5 w-3.5" aria-hidden="true" />}
-            onClick={() => setCreateOpen(true)}
+            onClick={() => navigate(ROUTE_DEPLOYMENTS_NEW)}
           >
             New Deployment
           </Button>
@@ -162,6 +188,7 @@ export function Deployments(): JSX.Element {
               d={d}
               watchlists={watchlists.data?.watchlists ?? []}
               strategies={strategies.data?.strategies ?? []}
+              strategyNameById={strategyNameById}
               selected={selectedIds.includes(d.deployment_id)}
               onSelectedChange={(checked) => toggleSelected(d.deployment_id, checked)}
             />
@@ -171,6 +198,7 @@ export function Deployments(): JSX.Element {
       )}
 
       <CreateDeploymentDrawer open={createOpen} onOpenChange={setCreateOpen} />
+      {/* createOpen kept for legacy drawer fallback; primary path is the 6-step screen */}
       <HoldToArmConfirm
         open={bulkDeleteOpen}
         onOpenChange={setBulkDeleteOpen}
@@ -256,19 +284,23 @@ function DeploymentCard({
   d,
   watchlists,
   strategies,
+  strategyNameById,
   selected,
   onSelectedChange,
 }: {
   d: Deployment;
   watchlists: { watchlist_id: string; name: string; kind: string }[];
   strategies: Strategy[];
+  strategyNameById: Record<string, string>;
   selected: boolean;
   onSelectedChange: (checked: boolean) => void;
 }): JSX.Element {
+  const navigate = useNavigate();
   const qc = useQueryClient();
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [stopOpen, setStopOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
+  const [rebindOpen, setRebindOpen] = useState(false);
 
   const start = useMutation({
     mutationFn: () => DeploymentsApi.start(d.deployment_id, "operator start"),
@@ -296,10 +328,24 @@ function DeploymentCard({
   const watchlistNames = d.watchlist_ids.map(
     (id) => watchlists.find((w) => w.watchlist_id === id)?.name ?? "Watchlist loading",
   );
-  const strategyName =
-    strategies.find(
-      (s) => s.latest_version_id === d.strategy_version_id || s.frozen_version_ids.includes(d.strategy_version_id),
-    )?.name ?? "Strategy version";
+  // Prefer v4 name, fall back to legacy strategy name lookup.
+  const strategyName = (() => {
+    if (d.strategy_version_v4_id && strategyNameById[d.strategy_version_v4_id]) {
+      return strategyNameById[d.strategy_version_v4_id];
+    }
+    if (d.strategy_version_id) {
+      return (
+        strategyNameById[d.strategy_version_id] ??
+        strategies.find(
+          (s) =>
+            s.latest_version_id === d.strategy_version_id ||
+            s.frozen_version_ids.includes(d.strategy_version_id!),
+        )?.name ??
+        "Strategy version"
+      );
+    }
+    return "Strategy version";
+  })();
 
   return (
     <Card>
@@ -336,6 +382,12 @@ function DeploymentCard({
         <div className="flex flex-col gap-0.5">
           <span className="text-fg-subtle">Started</span>
           <span>{d.started_at ? relativeTime(d.started_at) : "—"}</span>
+        </div>
+        <div className="flex flex-col gap-0.5">
+          <span className="text-fg-subtle">Horizon</span>
+          <span>
+            {d.risk_horizon ? TRADING_HORIZON_LABELS[d.risk_horizon] : "—"}
+          </span>
         </div>
       </div>
       <div className="px-4 pb-2 text-xs">
@@ -403,6 +455,18 @@ function DeploymentCard({
         <Button size="sm" variant="ghost" onClick={() => setEditOpen(true)}>
           Edit
         </Button>
+        {d.lifecycle_status === "active" ? (
+          <Button size="sm" variant="secondary" onClick={() => setRebindOpen(true)}>
+            Rebind
+          </Button>
+        ) : null}
+        <Button
+          size="sm"
+          variant="ghost"
+          onClick={() => navigate(deploymentDetailPath(d.deployment_id))}
+        >
+          Details
+        </Button>
         {d.lifecycle_status === "draft" || d.lifecycle_status === "stopped" ? (
           <Button
             size="sm"
@@ -416,6 +480,13 @@ function DeploymentCard({
       </div>
 
       <EditDeploymentDrawer open={editOpen} onOpenChange={setEditOpen} deployment={d} />
+      {d.lifecycle_status === "active" ? (
+        <RebindDeploymentDrawer
+          open={rebindOpen}
+          onOpenChange={setRebindOpen}
+          deployment={d}
+        />
+      ) : null}
 
       <HoldToArmConfirm
         open={deleteOpen}

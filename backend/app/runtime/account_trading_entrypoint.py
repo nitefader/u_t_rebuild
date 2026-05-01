@@ -24,12 +24,15 @@ import os
 import signal
 import threading
 from collections.abc import Iterable
+from datetime import timedelta
 from pathlib import Path
+from typing import Any
 
 from uuid import UUID
 
 from backend.app.brokers import (
     AlpacaBrokerAdapter,
+    AlpacaBrokerError,
     BrokerSync,
 )
 from backend.app.control_plane import ControlPlane
@@ -37,7 +40,9 @@ from backend.app.governor import PortfolioSnapshot, PositionSummary
 from backend.app.market_data import MarketDataStreamHub
 from backend.app.orders import OrderManager
 from backend.app.config.runtime_paths import get_runtime_db_path
-from backend.app.persistence import SQLiteRuntimeStore
+from backend.app.domain._base import utc_now
+from backend.app.features import NormalizedBar
+from backend.app.persistence import SQLiteOrderLedger, SQLiteRuntimeStore
 
 from .account_trading_orchestrator import BrokerRuntimeDeployment, BrokerRuntimeOrchestrator
 from .account_trading_supervisor import BrokerRuntimeSupervisor
@@ -48,6 +53,142 @@ logger = logging.getLogger(__name__)
 
 class BrokerRuntimeEntrypointError(RuntimeError):
     """Raised when the runtime cannot start safely (missing env, bad store, etc.)."""
+
+
+class AccountScopedAlpacaBrokerAdapter:
+    """Route broker calls to the Alpaca credentials for the target Account."""
+
+    provider = "alpaca"
+
+    def __init__(self, broker_account_service: Any) -> None:
+        self._broker_account_service = broker_account_service
+        self._adapters_by_account_id: dict[UUID, AlpacaBrokerAdapter] = {}
+
+    def mode_for_account(self, account_id: UUID):
+        return self._account_for(account_id).mode
+
+    def submit_order(self, order):
+        return self._adapter_for_account(order.account_id).submit_order(order)
+
+    def get_order(self, order):
+        return self._adapter_for_account(order.account_id).get_order(order)
+
+    def cancel_order(self, order):
+        return self._adapter_for_account(order.account_id).cancel_order(order)
+
+    def cancel_orders(self, account_id: UUID, scope: str):
+        return self._adapter_for_account(account_id).cancel_orders(account_id, scope)
+
+    def replace_order(self, order, new_params):
+        return self._adapter_for_account(order.account_id).replace_order(order, new_params)
+
+    def list_open_orders(self, account_id: UUID):
+        return self._adapter_for_account(account_id).list_open_orders(account_id)
+
+    def get_account_snapshot(self, account_id: UUID):
+        return self._adapter_for_account(account_id).get_account_snapshot(account_id)
+
+    def get_positions(self, account_id: UUID):
+        return self._adapter_for_account(account_id).get_positions(account_id)
+
+    def get_market_clock(self) -> dict[str, Any]:
+        return self._adapter_for_account(self._first_usable_account_id()).get_market_clock()
+
+    def _adapter_for_account(self, account_id: UUID) -> AlpacaBrokerAdapter:
+        existing = self._adapters_by_account_id.get(account_id)
+        if existing is not None:
+            return existing
+        account = self._account_for(account_id)
+        api_key, api_secret = self._broker_account_service.get_credentials(account_id)
+        adapter = AlpacaBrokerAdapter(
+            mode=account.mode,
+            api_key=api_key,
+            secret_key=api_secret,
+        )
+        self._adapters_by_account_id[account_id] = adapter
+        return adapter
+
+    def _account_for(self, account_id: UUID):
+        for account in self._broker_account_service.list_broker_accounts():
+            if account.id == account_id:
+                if account.provider != "alpaca":
+                    raise AlpacaBrokerError(
+                        "unsupported_account_provider",
+                        f"Account {account_id} is not an Alpaca account",
+                    )
+                if account.is_archived or account.needs_credentials:
+                    raise AlpacaBrokerError(
+                        "account_credentials_unavailable",
+                        f"Account {account_id} cannot be used for broker execution",
+                    )
+                return account
+        raise AlpacaBrokerError("missing_broker_account", f"Unknown broker account: {account_id}")
+
+    def _first_usable_account_id(self) -> UUID:
+        for account in self._broker_account_service.list_broker_accounts():
+            if account.provider == "alpaca" and not account.is_archived and not account.needs_credentials:
+                return account.id
+        raise AlpacaBrokerError("missing_broker_account", "No usable Alpaca broker account is registered")
+
+
+class RuntimeHistoricalWarmupBarsSource:
+    """Fetch recent bars through Data Center for startup feature warmup."""
+
+    def __init__(self, runtime_store: SQLiteRuntimeStore) -> None:
+        self._runtime_store = runtime_store
+
+    def __call__(
+        self,
+        entry: BrokerRuntimeDeployment,  # noqa: ARG002 - source is deployment-scoped for future provider routing.
+        symbol: str,
+        timeframe: str,
+        warmup_bars: int,
+    ) -> tuple[NormalizedBar, ...]:
+        from backend.app.data_center.ingest_service import (
+            HistoricalBarIngestRequest,
+            HistoricalBarIngestService,
+            alpaca_bars_source_from_runtime,
+        )
+
+        end = utc_now()
+        start = end - _startup_warmup_window(timeframe=timeframe, warmup_bars=warmup_bars)
+        service = HistoricalBarIngestService(
+            store=self._runtime_store,
+            sources={"alpaca": alpaca_bars_source_from_runtime(self._runtime_store)},
+        )
+        result = service.ensure_bars(
+            HistoricalBarIngestRequest(
+                provider="alpaca",
+                symbol=symbol,
+                timeframe=timeframe,
+                start=start,
+                end=end,
+            )
+        )
+        bars = tuple(
+            sorted(
+                (
+                    bar
+                    for bar in result.bars
+                    if bar.symbol.upper() == symbol.upper() and bar.timeframe == timeframe
+                ),
+                key=lambda bar: bar.timestamp,
+            )
+        )
+        return bars[-max(int(warmup_bars), 1):]
+
+
+def _startup_warmup_window(*, timeframe: str, warmup_bars: int) -> timedelta:
+    bars = max(int(warmup_bars), 1)
+    if timeframe.endswith("m") and timeframe[:-1].isdigit():
+        minutes = int(timeframe[:-1])
+        return max(timedelta(minutes=minutes * bars * 4), timedelta(days=7))
+    if timeframe.endswith("h") and timeframe[:-1].isdigit():
+        hours = int(timeframe[:-1])
+        return max(timedelta(hours=hours * bars * 4), timedelta(days=30))
+    if timeframe == "1d":
+        return timedelta(days=bars * 3 + 14)
+    return timedelta(days=max(bars * 3, 14))
 
 
 def build_portfolio_snapshot_factory(runtime_store: SQLiteRuntimeStore):
@@ -71,7 +212,7 @@ def build_portfolio_snapshot_factory(runtime_store: SQLiteRuntimeStore):
        crash construction.
     3. Snapshot exists with equity>0 → ``PortfolioSnapshot(equity=...)``.
        Positions are intentionally empty until ``BrokerPositionSnapshot``
-       carries ``program_id`` (deferred to a follow-up slice); the
+       carries SignalPlan position lineage; the
        Governor still enforces equity-bounded percentage gates against
        incremental candidate exposure (the core W2-A-1a fix).
     """
@@ -124,13 +265,8 @@ def run_account_trading(
             "no usable Alpaca broker account is registered. "
             "Add one (or re-enter credentials) on the Brokers page before starting the runtime."
         )
-    api_key, api_secret = broker_account_service.get_credentials(primary.id)
-    broker_adapter = AlpacaBrokerAdapter(
-        mode=primary.mode,
-        api_key=api_key,
-        secret_key=api_secret,
-    )
-    order_manager = OrderManager()
+    broker_adapter = AccountScopedAlpacaBrokerAdapter(broker_account_service)
+    order_manager = OrderManager(ledger=SQLiteOrderLedger(sqlite_path))
     broker_sync = BrokerSync(
         ledger=order_manager.ledger,
         adapter=broker_adapter,
@@ -151,6 +287,7 @@ def run_account_trading(
         order_manager=order_manager,
         control_plane=control_plane,
         portfolio_snapshot_factory=build_portfolio_snapshot_factory(runtime_store),
+        startup_warmup_bars_source=RuntimeHistoricalWarmupBarsSource(runtime_store),
     )
 
     active_entries = account_trading.load_active_account_deployments()

@@ -1,10 +1,19 @@
 from __future__ import annotations
 
+import logging
+import threading
 from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
+from backend.app.domain import CandidateSide
 from backend.app.orders.ledger import OrderLedger
-from backend.app.orders.models import InternalOrder, InternalOrderStatus, OrderManagerError
+from backend.app.orders.models import (
+    InternalOrder,
+    InternalOrderIntent,
+    InternalOrderStatus,
+    OrderManagerError,
+    OrderOrigin,
+)
 
 from .adapter import BrokerAdapter
 from .models import (
@@ -23,6 +32,18 @@ from .models import (
     BrokerReconciliationReport,
     BrokerSyncState,
 )
+
+
+_LIVE_TERMINAL_STATUSES = frozenset(
+    {
+        InternalOrderStatus.FILLED,
+        InternalOrderStatus.CANCELED,
+        InternalOrderStatus.REJECTED,
+        InternalOrderStatus.FAILED,
+    }
+)
+
+_LOG = logging.getLogger(__name__)
 
 
 class BrokerSync:
@@ -53,6 +74,7 @@ class BrokerSync:
             filled_quantity = order.quantity
         if filled_quantity > order.quantity:
             raise OrderManagerError("broker result filled_quantity exceeds internal order quantity")
+        previous_status = order.status
         updated = order.model_copy(
             update={
                 "status": status,
@@ -64,7 +86,65 @@ class BrokerSync:
         )
         persisted = self._ledger.replace(updated)
         self._persist_mapping(result=result, order=persisted)
+        # P0-3 safety net: when an internal-OCO leg fills, cancel its sibling.
+        # Until the AlpacaBrokerAdapter learns native OCO submission, the
+        # post-fill bracket pair is two unlinked broker orders — without this
+        # cancel a target fill leaves the stop live, and the next stop trigger
+        # would invert the position (long → flat → silently short).
+        if (
+            status == InternalOrderStatus.FILLED
+            and previous_status != InternalOrderStatus.FILLED
+            and persisted.order_class == "oco"
+            and persisted.parent_order_id is not None
+        ):
+            self._cancel_oco_siblings(persisted, received_at=result.received_at)
         return persisted
+
+    def _cancel_oco_siblings(
+        self,
+        filled_leg: InternalOrder,
+        *,
+        received_at: datetime,
+    ) -> None:
+        """Cancel any live OCO siblings of *filled_leg*.
+
+        Siblings share the same ``parent_order_id`` and the same slice suffix
+        (``leg_label`` after the ``@`` separator), differ by ``order_id``, and
+        are not yet terminal. When the broker adapter is unavailable (test
+        path), the sibling is left untouched and the local ledger is not
+        speculatively mutated — BrokerSync remains the only writer of broker
+        truth.
+        """
+        if self._adapter is None:
+            return
+        slice_key = self._slice_suffix_of(filled_leg.leg_label)
+        for candidate in self._ledger.by_account(filled_leg.account_id):
+            if candidate.order_id == filled_leg.order_id:
+                continue
+            if candidate.parent_order_id != filled_leg.parent_order_id:
+                continue
+            if candidate.order_class != "oco":
+                continue
+            if candidate.status in _LIVE_TERMINAL_STATUSES:
+                continue
+            if candidate.cancel_requested_at is not None:
+                continue
+            if self._slice_suffix_of(candidate.leg_label) != slice_key:
+                continue
+            try:
+                cancel_result = self._adapter.cancel_order(candidate)
+            except Exception:
+                # Cancel best-effort; broker reconciliation will surface a
+                # stuck sibling on the next sync pass.
+                continue
+            self.apply_result(cancel_result)
+
+    @staticmethod
+    def _slice_suffix_of(leg_label: str | None) -> str | None:
+        if leg_label is None:
+            return None
+        idx = leg_label.find("@")
+        return leg_label[idx:] if idx >= 0 else None
 
     def sync_open_orders(self, account_id: UUID) -> tuple[InternalOrder, ...]:
         adapter = self._require_adapter()
@@ -80,7 +160,11 @@ class BrokerSync:
         return tuple(updates)
 
     def sync_positions(self, account_id: UUID) -> tuple[BrokerPositionSnapshot, ...]:
-        positions = self._require_adapter().get_positions(account_id)
+        positions = _enrich_position_snapshots_with_lineage(
+            account_id,
+            self._require_adapter().get_positions(account_id),
+            self._ledger,
+        )
         for position in positions:
             self.record_position_snapshot(position)
         return positions
@@ -173,6 +257,10 @@ class BrokerSync:
         return snapshot
 
     def record_position_snapshot(self, snapshot: BrokerPositionSnapshot) -> BrokerPositionSnapshot:
+        snapshot = _enrich_position_snapshot_with_lineage(
+            snapshot,
+            self._ledger.by_account(snapshot.account_id),
+        )
         if self._runtime_store is not None and hasattr(self._runtime_store, "save_broker_position_snapshot"):
             self._runtime_store.save_broker_position_snapshot(snapshot)
         return snapshot
@@ -280,6 +368,8 @@ class BrokerSyncService:
         self._runtime_store = runtime_store
         self._daily_state_aggregator = daily_state_aggregator
         self._daily_states: dict[UUID, object] = daily_states if daily_states is not None else {}
+        self._daily_state_locks_guard = threading.Lock()
+        self._daily_state_locks: dict[UUID, threading.Lock] = {}
         self._last_event_at_by_account: dict[UUID, datetime] = {}
         self._last_poll_sync_at_by_account: dict[UUID, datetime] = {}
         self._last_successful_sync_at_by_account: dict[UUID, datetime] = {}
@@ -437,24 +527,47 @@ class BrokerSyncService:
     def _apply_daily_state_fill(self, event: BrokerFillUpdateEvent) -> None:
         if self._daily_state_aggregator is None:
             return
-        current = self._daily_states.get(event.account_id)
-        snapshot = self._account_snapshots_by_account.get(event.account_id)
-        equity: float | None = float(snapshot.equity) if snapshot is not None and snapshot.equity > 0 else None
-        try:
-            updated = self._daily_state_aggregator.apply_fill(current, event, equity=equity)
-        except Exception:
-            return
-        self._daily_states[event.account_id] = updated
-        if self._runtime_store is not None and hasattr(self._runtime_store, "save_daily_account_state"):
+        with self._daily_state_lock_for(event.account_id):
+            current = self._daily_states.get(event.account_id)
+            snapshot = self._account_snapshots_by_account.get(event.account_id)
+            equity: float | None = float(snapshot.equity) if snapshot is not None and snapshot.equity > 0 else None
             try:
-                self._runtime_store.save_daily_account_state(updated)
+                updated = self._daily_state_aggregator.apply_fill(current, event, equity=equity)
             except Exception:
-                pass
+                return
+            self._daily_states[event.account_id] = updated
+            if self._runtime_store is not None and hasattr(self._runtime_store, "save_daily_account_state"):
+                try:
+                    self._runtime_store.save_daily_account_state(updated)
+                except Exception:
+                    _LOG.warning(
+                        "BrokerSyncService: failed to persist daily account state for account %s market_day %s",
+                        event.account_id,
+                        updated.market_day,
+                        exc_info=True,
+                        extra={
+                            "event": "broker_sync_daily_state_persist_failed",
+                            "account_id": str(event.account_id),
+                            "market_day": updated.market_day,
+                        },
+                    )
+
+    def _daily_state_lock_for(self, account_id: UUID) -> threading.Lock:
+        with self._daily_state_locks_guard:
+            lock = self._daily_state_locks.get(account_id)
+            if lock is None:
+                lock = threading.Lock()
+                self._daily_state_locks[account_id] = lock
+            return lock
 
     def daily_state_for(self, account_id: UUID) -> object | None:
         return self._daily_states.get(account_id)
 
     def handle_position_update(self, event: BrokerPositionSnapshot) -> BrokerPositionSnapshot:
+        event = _enrich_position_snapshot_with_lineage(
+            event,
+            self._order_ledger.by_account(event.account_id),
+        )
         positions = self._positions_by_account.setdefault(event.account_id, {})
         positions[event.symbol.upper()] = event
         self._persist_position_snapshot(event)
@@ -486,9 +599,7 @@ class BrokerSyncService:
         open_orders = self.fetch_open_orders(account_id)
         self._account_snapshots_by_account[account_id] = account_snapshot
         self._persist_account_snapshot(account_snapshot)
-        self._persist_position_snapshots(account_id, positions)
         self._persist_open_order_snapshots(account_id, open_orders)
-        self._positions_by_account[account_id] = {position.symbol.upper(): position for position in positions}
         sync_status = self.sync_state(account_snapshot)
         self._last_poll_sync_at_by_account[account_id] = checked_at
         if not sync_status.is_stale:
@@ -590,6 +701,10 @@ class BrokerSyncService:
                         actual=broker_order.filled_qty,
                     )
                 )
+
+        positions = _enrich_position_snapshots_with_lineage(account_id, positions, self._order_ledger)
+        self._persist_position_snapshots(account_id, positions)
+        self._positions_by_account[account_id] = {position.symbol.upper(): position for position in positions}
 
         position_deltas = self._position_deltas(
             positions=positions,
@@ -758,6 +873,159 @@ def _persist_sync_freshness(runtime_store: object | None, state: BrokerSyncState
     if runtime_store is None or not hasattr(runtime_store, "save_broker_sync_freshness"):
         return
     runtime_store.save_broker_sync_freshness(state)
+
+
+def _enrich_position_snapshots_with_lineage(
+    account_id: UUID,
+    snapshots: tuple[BrokerPositionSnapshot, ...],
+    order_ledger: OrderLedger,
+) -> tuple[BrokerPositionSnapshot, ...]:
+    orders = order_ledger.by_account(account_id)
+    return tuple(_enrich_position_snapshot_with_lineage(snapshot, orders) for snapshot in snapshots)
+
+
+def _enrich_position_snapshot_with_lineage(
+    snapshot: BrokerPositionSnapshot,
+    orders: tuple[InternalOrder, ...],
+) -> BrokerPositionSnapshot:
+    if snapshot.qty == 0:
+        return snapshot
+    if (
+        snapshot.deployment_id is not None
+        and snapshot.opening_signal_plan_id is not None
+        and snapshot.position_lineage_id is not None
+    ):
+        return snapshot
+
+    symbol = snapshot.symbol.upper()
+    matching_orders = tuple(
+        order
+        for order in orders
+        if order.origin == OrderOrigin.SIGNAL_PLAN
+        and order.account_id == snapshot.account_id
+        and order.symbol.upper() == symbol
+        and order.deployment_id is not None
+        and order.position_lineage_id is not None
+        and order.filled_quantity > 0
+    )
+    if not matching_orders:
+        return snapshot
+
+    net_by_lineage: dict[tuple[UUID, UUID], float] = {}
+    for order in matching_orders:
+        assert order.deployment_id is not None
+        assert order.position_lineage_id is not None
+        key = (order.deployment_id, order.position_lineage_id)
+        net_by_lineage[key] = net_by_lineage.get(key, 0.0) + _signed_order_quantity(order)
+
+    candidates = tuple(
+        key
+        for key, net_qty in net_by_lineage.items()
+        if _same_quantity(net_qty, snapshot.qty)
+        and (snapshot.deployment_id is None or key[0] == snapshot.deployment_id)
+        and (snapshot.position_lineage_id is None or key[1] == snapshot.position_lineage_id)
+    )
+    if len(candidates) != 1:
+        deployment_enriched = _deployment_only_position_snapshot(snapshot, matching_orders)
+        if deployment_enriched is not None:
+            return deployment_enriched
+        return snapshot
+
+    deployment_id, position_lineage_id = candidates[0]
+    anchor = _lineage_anchor_order(
+        snapshot,
+        matching_orders,
+        deployment_id=deployment_id,
+        position_lineage_id=position_lineage_id,
+    )
+    if anchor is None:
+        return snapshot
+
+    return snapshot.model_copy(
+        update={
+            "deployment_id": snapshot.deployment_id or deployment_id,
+            "strategy_id": snapshot.strategy_id or anchor.strategy_id,
+            "opening_signal_plan_id": snapshot.opening_signal_plan_id
+            or anchor.opening_signal_plan_id
+            or anchor.signal_plan_id,
+            "position_lineage_id": snapshot.position_lineage_id or position_lineage_id,
+        }
+    )
+
+
+def _deployment_only_position_snapshot(
+    snapshot: BrokerPositionSnapshot,
+    orders: tuple[InternalOrder, ...],
+) -> BrokerPositionSnapshot | None:
+    if snapshot.deployment_id is not None:
+        return None
+    net_by_deployment: dict[UUID, float] = {}
+    for order in orders:
+        if order.deployment_id is None:
+            continue
+        net_by_deployment[order.deployment_id] = net_by_deployment.get(order.deployment_id, 0.0) + _signed_order_quantity(order)
+    candidates = tuple(
+        deployment_id
+        for deployment_id, net_qty in net_by_deployment.items()
+        if _same_quantity(net_qty, snapshot.qty)
+    )
+    if len(candidates) != 1:
+        return None
+    deployment_id = candidates[0]
+    deployment_orders = tuple(order for order in orders if order.deployment_id == deployment_id)
+    if not deployment_orders:
+        return None
+    anchor = min(deployment_orders, key=lambda order: (order.created_at, order.order_id.hex))
+    return snapshot.model_copy(
+        update={
+            "deployment_id": deployment_id,
+            "strategy_id": snapshot.strategy_id or anchor.strategy_id,
+        }
+    )
+
+
+def _lineage_anchor_order(
+    snapshot: BrokerPositionSnapshot,
+    orders: tuple[InternalOrder, ...],
+    *,
+    deployment_id: UUID,
+    position_lineage_id: UUID,
+) -> InternalOrder | None:
+    lineage_orders = tuple(
+        order
+        for order in orders
+        if order.deployment_id == deployment_id
+        and order.position_lineage_id == position_lineage_id
+        and order.filled_quantity > 0
+    )
+    opening_orders = tuple(
+        order
+        for order in lineage_orders
+        if order.intent == InternalOrderIntent.OPEN
+        and order.parent_order_id is None
+        and _order_side_matches_position(order, snapshot)
+    )
+    candidates = opening_orders or lineage_orders
+    if not candidates:
+        return None
+    return min(candidates, key=lambda order: (order.created_at, order.order_id.hex))
+
+
+def _signed_order_quantity(order: InternalOrder) -> float:
+    sign = 1.0 if order.side == CandidateSide.LONG else -1.0
+    return sign * float(order.filled_quantity)
+
+
+def _order_side_matches_position(order: InternalOrder, snapshot: BrokerPositionSnapshot) -> bool:
+    if snapshot.qty > 0:
+        return order.side == CandidateSide.LONG
+    if snapshot.qty < 0:
+        return order.side == CandidateSide.SHORT
+    return False
+
+
+def _same_quantity(left: float, right: float) -> bool:
+    return abs(float(left) - float(right)) <= 1e-6
 
 
 def _requires_broker_order_reconcile(order: InternalOrder) -> bool:

@@ -40,6 +40,7 @@ from backend.app.domain.signal_plan import (
 )
 from backend.app.orders import (
     InternalOrderIntent,
+    InternalOrderStatus,
     OrderManager,
     OrderManagerError,
 )
@@ -163,6 +164,27 @@ def test_attach_native_bracket_short_entry_supports_inverted_prices() -> None:
     assert updated.bracket_stop_loss_stop_price == pytest.approx(105.0)
 
 
+def test_attach_native_bracket_reattach_tolerates_minor_float_drift() -> None:
+    manager = OrderManager()
+    plan = _signal_plan(side=SignalPlanSide.LONG)
+    parent = _seed_parent_entry(manager, plan)
+
+    first = manager.attach_native_bracket_to_entry(
+        order_id=parent.order_id,
+        take_profit_limit_price=110.0,
+        stop_loss_stop_price=95.0,
+    )
+    second = manager.attach_native_bracket_to_entry(
+        order_id=parent.order_id,
+        take_profit_limit_price=110.0000005,
+        stop_loss_stop_price=95.0000005,
+    )
+
+    assert second.order_id == first.order_id
+    assert second.bracket_take_profit_limit_price == pytest.approx(110.0)
+    assert second.bracket_stop_loss_stop_price == pytest.approx(95.0)
+
+
 def test_attach_native_bracket_does_not_mutate_unrelated_fields() -> None:
     manager = OrderManager()
     plan = _signal_plan(side=SignalPlanSide.LONG)
@@ -220,3 +242,93 @@ def test_attach_native_bracket_rejects_child_orders() -> None:
             take_profit_limit_price=110.0,
             stop_loss_stop_price=95.0,
         )
+
+
+def test_create_protective_oco_order_post_fill_builds_single_native_child() -> None:
+    from backend.app.orders.protective_placer import ProtectiveOrderPlacer
+
+    manager = OrderManager()
+    plan = _signal_plan(side=SignalPlanSide.LONG)
+    parent = _seed_parent_entry(manager, plan)
+    placer = ProtectiveOrderPlacer()
+    placement = placer.compute_protective_plan(
+        signal_plan=plan,
+        parent_order_id=parent.order_id,
+        account_id=ACCOUNT_ID,
+        fill_price=100.0,
+        cumulative_filled_qty=10.0,
+    )
+
+    child = manager.create_protective_oco_order_post_fill(plan=placement, parent_order=parent)
+
+    assert child.parent_order_id == parent.order_id
+    assert child.order_class == "oco"
+    assert child.intent == InternalOrderIntent.TAKE_PROFIT
+    assert child.order_type == OrderType.LIMIT
+    assert child.limit_price == pytest.approx(110.0)
+    assert child.bracket_stop_loss_stop_price == pytest.approx(95.0)
+    assert child.leg_label == "oco@10"
+
+
+def test_create_protective_oco_order_retries_after_terminal_rejection() -> None:
+    from backend.app.orders.protective_placer import ProtectiveOrderPlacer
+
+    manager = OrderManager()
+    plan = _signal_plan(side=SignalPlanSide.LONG)
+    parent = _seed_parent_entry(manager, plan)
+    placement = ProtectiveOrderPlacer().compute_protective_plan(
+        signal_plan=plan,
+        parent_order_id=parent.order_id,
+        account_id=ACCOUNT_ID,
+        fill_price=100.0,
+        cumulative_filled_qty=10.0,
+    )
+    first = manager.create_protective_oco_order_post_fill(plan=placement, parent_order=parent)
+    manager.ledger.update_status(
+        order_id=first.order_id,
+        status=InternalOrderStatus.REJECTED,
+        reason="broker_adapter_error:validation_error",
+    )
+
+    retry = manager.create_protective_oco_order_post_fill(plan=placement, parent_order=parent)
+
+    assert retry.order_id != first.order_id
+    assert retry.client_order_id != first.client_order_id
+    assert retry.leg_label == "oco@10:retry1"
+    assert retry.status == InternalOrderStatus.CREATED
+    assert retry.limit_price == pytest.approx(first.limit_price)
+    assert retry.bracket_stop_loss_stop_price == pytest.approx(first.bracket_stop_loss_stop_price)
+
+
+def test_create_protective_oco_order_post_fill_rejects_non_two_leg_plan() -> None:
+    from backend.app.orders.protective_placer import ProtectiveOrderPlacer
+
+    manager = OrderManager()
+    plan = _signal_plan(side=SignalPlanSide.LONG)
+    parent = _seed_parent_entry(manager, plan)
+    placer = ProtectiveOrderPlacer()
+    placement = placer.compute_protective_plan(
+        signal_plan=plan,
+        parent_order_id=parent.order_id,
+        account_id=ACCOUNT_ID,
+        fill_price=100.0,
+        cumulative_filled_qty=10.0,
+    )
+    extra_target = placement.legs[1].__class__(
+        label="target2",
+        side=placement.legs[1].side,
+        quantity=placement.legs[1].quantity,
+        stop_price=placement.legs[1].stop_price,
+        limit_price=placement.legs[1].limit_price,
+        rule=placement.legs[1].rule,
+    )
+    three_leg = placement.__class__(
+        parent_order_id=placement.parent_order_id,
+        signal_plan_id=placement.signal_plan_id,
+        account_id=placement.account_id,
+        covered_qty=placement.covered_qty,
+        legs=placement.legs + (extra_target,),
+    )
+
+    with pytest.raises(OrderManagerError, match="exactly two legs"):
+        manager.create_protective_oco_order_post_fill(plan=three_leg, parent_order=parent)

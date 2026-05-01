@@ -41,6 +41,7 @@ from backend.app.operations import OperationsCenterService
 from backend.app.orders import InternalOrderStatus, OrderLedger, OrderManager
 from backend.app.persistence import SQLiteRuntimeStore
 from backend.app.runtime import RuntimeState, RuntimeStatus
+from backend.tests.fixtures.modern_order import make_signal_plan_order
 
 
 def _master_key() -> bytes:
@@ -341,8 +342,7 @@ def test_active_runtime_account_cannot_silently_replace_credentials(tmp_path: Pa
     ).account
     deployment_id = UUID("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
     store.save_deployment_runtime_state(RuntimeState(deployment_id=deployment_id, status=RuntimeStatus.RUNNING))
-    from backend.tests.unit.operations.test_operations_center_service import _intent
-    order = OrderManager().create_order(account_id=account.id, execution_intent=_intent(deployment_id=deployment_id))
+    order = make_signal_plan_order(OrderManager(), account_id=account.id, deployment_id=deployment_id)
     store.save_order(order)
 
     with pytest.raises(BrokerAccountCreationError, match="must be paused"):
@@ -362,8 +362,7 @@ def test_paused_active_runtime_account_can_replace_credentials(tmp_path: Path) -
     ).account
     deployment_id = UUID("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
     store.save_deployment_runtime_state(RuntimeState(deployment_id=deployment_id, status=RuntimeStatus.RUNNING))
-    from backend.tests.unit.operations.test_operations_center_service import _intent
-    store.save_order(OrderManager().create_order(account_id=account.id, execution_intent=_intent(deployment_id=deployment_id)))
+    store.save_order(make_signal_plan_order(OrderManager(), account_id=account.id, deployment_id=deployment_id))
     ControlPlane(state_store=store).pause_account(account.id)
 
     response = service.replace_credentials(
@@ -402,8 +401,11 @@ def test_account_with_running_deployment_cannot_be_deleted(tmp_path: Path) -> No
         api_key="K",
         api_secret="Ssample12",
     ).account
-    from backend.tests.unit.operations.test_operations_center_service import _intent
-    order = OrderManager().create_order(account_id=account.id, execution_intent=_intent())
+    order = make_signal_plan_order(
+        OrderManager(),
+        account_id=account.id,
+        deployment_id=UUID("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"),
+    )
     order = order.model_copy(update={"status": InternalOrderStatus.FILLED})
     store.save_order(order)
     store.save_deployment_runtime_state(RuntimeState(deployment_id=order.deployment_id, status=RuntimeStatus.RUNNING))
@@ -447,8 +449,11 @@ def test_archive_drops_credentials_from_store(tmp_path: Path) -> None:
     )
     store.save_broker_account(account)
     store.save_broker_sync_freshness(BrokerSyncState(account_id=account.id, last_sync_at=datetime.now(timezone.utc), is_stale=False))
-    from backend.tests.unit.operations.test_operations_center_service import _intent
-    order = OrderManager().create_order(account_id=account.id, execution_intent=_intent())
+    order = make_signal_plan_order(
+        OrderManager(),
+        account_id=account.id,
+        deployment_id=UUID("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"),
+    )
     order = order.model_copy(update={"status": InternalOrderStatus.FILLED})
     store.save_order(order)
     # Pre-seed credentials so we can prove they're removed on archive.

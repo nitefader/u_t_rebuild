@@ -15,7 +15,7 @@ from backend.app.brokers.models import (
 )
 from backend.app.runtime.daily_account_state import DailyAccountState
 from backend.app.control_plane.service import ControlPlaneState
-from backend.app.domain import AccountSignalPlanEvaluation
+from backend.app.domain import AccountSignalPlanEvaluation, GovernorDecisionTrace, SignalPlan
 from backend.app.governor.models import GovernorDecision, GovernorPolicy
 from backend.app.orders.models import InternalOrder, InternalOrderStatus
 from backend.app.pipeline.models import PipelineEvent
@@ -93,10 +93,10 @@ class OperatorPositionView(BaseModel):
     immediately.
 
     ``protection_status`` is one of:
-    - ``protected`` — at least one open child stop order references the
-      entry that opened this position.
-    - ``pending_protection`` — entry filled but no protective child has
-      been accepted yet (in-flight protective placement).
+    - ``protected`` — live protective child quantity fully covers the
+      current position quantity.
+    - ``pending_protection`` — entry filled and some live protective
+      quantity exists, but coverage is still partial.
     - ``naked`` — entry filled, ProtectivePlacer / OrderManager could
       not place a stop child (placement failed or rejected). Operator
       action required.
@@ -109,6 +109,8 @@ class OperatorPositionView(BaseModel):
     snapshot: BrokerPositionSnapshot
     protection_status: str = "unknown"
     protective_order_count: int = 0
+    protection_coverage_pct: float = Field(default=0.0, ge=0.0, le=1.0)
+    warnings: tuple[str, ...] = ()
 
 
 class AccountOperations(BaseModel):
@@ -130,6 +132,18 @@ class AccountSignalPlanEvaluationListResponse(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     evaluations: tuple[AccountSignalPlanEvaluation, ...] = ()
+
+
+class SignalPlanListResponse(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    signal_plans: tuple[SignalPlan, ...] = ()
+
+
+class GovernorDecisionListResponse(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    governor_decisions: tuple[GovernorDecisionTrace, ...] = ()
 
 
 class DeploymentOperations(BaseModel):

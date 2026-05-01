@@ -93,10 +93,11 @@ class AlpacaAccountStreamAdapter:
     def _order_update(self, data: dict[str, Any]) -> BrokerOrderUpdateEvent:
         order = self._response_to_dict(data.get("order") or data)
         event_at = self._optional_datetime(data.get("timestamp") or data.get("event_at") or order.get("updated_at")) or utc_now()
+        raw_status = self._stream_order_status(data=data, order=order)
         return BrokerOrderUpdateEvent(
             account_id=self.account_id,
             client_order_id=str(order.get("client_order_id") or ""),
-            status=self._normalize_status(data.get("event") or order.get("status") or ""),
+            status=self._normalize_status(raw_status),
             broker_order_id=str(order["id"]) if order.get("id") is not None else None,
             symbol=self._optional_str(order.get("symbol")),
             side=self._optional_str(order.get("side")),
@@ -115,7 +116,7 @@ class AlpacaAccountStreamAdapter:
             filled_at=self._optional_datetime(order.get("filled_at")),
             canceled_at=self._optional_datetime(order.get("canceled_at")),
             reject_code=self._optional_str(order.get("reject_code")),
-            raw_status=str(data.get("event") or order.get("status") or ""),
+            raw_status=str(raw_status),
             broker_reference=str(order["id"]) if order.get("id") is not None else None,
         )
 
@@ -166,10 +167,14 @@ class AlpacaAccountStreamAdapter:
     def _normalize_status(self, status: object) -> BrokerOrderStatus:
         if self._normalizer is not None:
             return self._normalizer.normalize_status(status)
-        token = str(getattr(status, "value", status)).lower()
+        token = self._status_token(status)
         mapping = {
             "new": BrokerOrderStatus.ACCEPTED,
             "accepted": BrokerOrderStatus.ACCEPTED,
+            "pending_new": BrokerOrderStatus.ACCEPTED,
+            "accepted_for_bidding": BrokerOrderStatus.ACCEPTED,
+            "held": BrokerOrderStatus.ACCEPTED,
+            "stopped": BrokerOrderStatus.ACCEPTED,
             "fill": BrokerOrderStatus.FILLED,
             "filled": BrokerOrderStatus.FILLED,
             "partial_fill": BrokerOrderStatus.PARTIAL_FILL,
@@ -178,11 +183,29 @@ class AlpacaAccountStreamAdapter:
             "cancelled": BrokerOrderStatus.CANCELED,
             "rejected": BrokerOrderStatus.REJECTED,
             "expired": BrokerOrderStatus.EXPIRED,
+            "pending_cancel": BrokerOrderStatus.PENDING_CANCEL,
+            "pending_replace": BrokerOrderStatus.REPLACED,
+            "replaced": BrokerOrderStatus.REPLACED,
+            "suspended": BrokerOrderStatus.SUSPENDED,
+            "done_for_day": BrokerOrderStatus.DONE_FOR_DAY,
+            "calculated": BrokerOrderStatus.DONE_FOR_DAY,
         }
         try:
             return mapping[token]
         except KeyError as exc:
             raise AlpacaBrokerError("unknown_stream_order_status", f"Unknown Alpaca stream order status: {status}") from exc
+
+    def _stream_order_status(self, *, data: dict[str, Any], order: dict[str, Any]) -> object:
+        order_status = order.get("status")
+        if order_status is not None and order_status != "":
+            return order_status
+        return data.get("event") or ""
+
+    def _status_token(self, status: object) -> str:
+        token = str(getattr(status, "value", status)).strip()
+        if "." in token:
+            token = token.rsplit(".", 1)[-1]
+        return token.lower()
 
     def _response_to_dict(self, response: object) -> dict[str, Any]:
         if isinstance(response, dict):

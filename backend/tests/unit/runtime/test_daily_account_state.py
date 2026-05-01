@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
+import logging
+import sys
 from uuid import uuid4
 
 import pytest
@@ -12,6 +14,7 @@ from backend.app.runtime.daily_account_state import (
     _et_market_day,
     _fill_cash_flow,
 )
+import backend.app.runtime.daily_account_state as daily_account_state_module
 
 ACCOUNT_ID = uuid4()
 
@@ -26,11 +29,12 @@ def _fill(
     price: float = 100.0,
     event_at: datetime = _T_NY_MORNING,
     account_id=ACCOUNT_ID,
+    symbol: str = "SPY",
 ) -> BrokerFillUpdateEvent:
     return BrokerFillUpdateEvent(
         account_id=account_id,
         client_order_id="ord-1",
-        symbol="SPY",
+        symbol=symbol,
         qty=qty,
         price=price,
         side=side,
@@ -55,7 +59,7 @@ def test_et_market_day_rollover_near_midnight_et() -> None:
     assert _et_market_day(after_midnight_et) == "2026-04-30"
 
 
-# ── _fill_cash_flow ──────────────────────────────────────────────────────────
+# ── _fill_cash_flow (kept for diagnostic callers) ───────────────────────────
 
 def test_fill_cash_flow_buy_is_negative() -> None:
     assert _fill_cash_flow(_fill(side="buy", qty=10, price=100)) == -1000.0
@@ -65,125 +69,193 @@ def test_fill_cash_flow_sell_is_positive() -> None:
     assert _fill_cash_flow(_fill(side="sell", qty=10, price=100)) == 1000.0
 
 
-def test_fill_cash_flow_sell_short_is_positive() -> None:
-    assert _fill_cash_flow(_fill(side="sell_short", qty=5, price=200)) == 1000.0
+# ── DailyAccountStateAggregator: opening fills do NOT realize PnL ──────────
 
 
-def test_fill_cash_flow_short_alias_is_positive() -> None:
-    assert _fill_cash_flow(_fill(side="short", qty=5, price=200)) == 1000.0
+class TestOpeningFillsDoNotRegisterLoss:
+    """P0-1 fix: opening a long must not look like a loss to Governor."""
 
-
-# ── DailyAccountStateAggregator ──────────────────────────────────────────────
-
-class TestAggregatorFreshState:
-    def test_none_current_creates_fresh_state(self) -> None:
-        agg = DailyAccountStateAggregator()
-        state = agg.apply_fill(None, _fill(side="buy", qty=10, price=100), equity=None)
-
-        assert state.account_id == ACCOUNT_ID
-        assert state.market_day == "2026-04-30"
-        assert state.realized_pnl == -1000.0
-        assert state.total_loss_today == 1000.0
-        assert state.last_loss_at is not None
-
-    def test_new_market_day_resets_state(self) -> None:
-        agg = DailyAccountStateAggregator()
-        prev = agg.apply_fill(None, _fill(side="sell", qty=10, price=100, event_at=_T_NY_MORNING), equity=None)
-
-        assert prev.realized_pnl == 1000.0
-
-        state = agg.apply_fill(prev, _fill(side="buy", qty=5, price=200, event_at=_T_NY_NEXT_DAY), equity=None)
-
-        assert state.market_day == "2026-05-01"
-        assert state.realized_pnl == -1000.0  # fresh day, only this fill
-
-
-class TestAggregatorAccumulation:
-    def test_multiple_buys_accumulate_loss(self) -> None:
-        agg = DailyAccountStateAggregator()
-        s1 = agg.apply_fill(None, _fill(side="buy", qty=10, price=100), equity=10_000)
-        s2 = agg.apply_fill(s1, _fill(side="buy", qty=5, price=100), equity=10_000)
-
-        assert s2.realized_pnl == pytest.approx(-1500.0)
-        assert s2.total_loss_today == pytest.approx(1500.0)
-
-    def test_sell_then_buy_nets_pnl(self) -> None:
-        agg = DailyAccountStateAggregator()
-        s1 = agg.apply_fill(None, _fill(side="sell", qty=10, price=100), equity=None)
-        s2 = agg.apply_fill(s1, _fill(side="buy", qty=10, price=80), equity=None)
-
-        # sold 10@100 = +1000; bought 10@80 = -800; net = +200
-        assert s2.realized_pnl == pytest.approx(200.0)
-        assert s2.total_loss_today == pytest.approx(800.0)
-        assert s2.last_loss_at is not None
-
-    def test_gain_fill_does_not_update_last_loss_at(self) -> None:
-        agg = DailyAccountStateAggregator()
-        state = agg.apply_fill(None, _fill(side="sell", qty=10, price=100), equity=None)
-
-        assert state.last_loss_at is None
-        assert state.total_loss_today == 0.0
-
-
-class TestAggregatorDrawdown:
-    def test_drawdown_zero_when_pnl_positive(self) -> None:
-        agg = DailyAccountStateAggregator()
-        state = agg.apply_fill(None, _fill(side="sell", qty=10, price=100), equity=10_000)
-
-        assert state.drawdown_pct == 0.0
-
-    def test_drawdown_computed_from_equity(self) -> None:
+    def test_open_long_does_not_register_loss(self) -> None:
         agg = DailyAccountStateAggregator()
         state = agg.apply_fill(None, _fill(side="buy", qty=10, price=100), equity=10_000)
 
-        # realized_pnl = -1000, equity = 10_000 → drawdown = 10%
-        assert state.drawdown_pct == pytest.approx(10.0)
+        assert state.realized_pnl == 0.0
+        assert state.total_loss_today == 0.0
+        assert state.last_loss_at is None
+        assert state.drawdown_pct == 0.0
 
-    def test_drawdown_capped_at_100(self) -> None:
+    def test_open_short_does_not_register_loss(self) -> None:
         agg = DailyAccountStateAggregator()
-        state = agg.apply_fill(None, _fill(side="buy", qty=100, price=100), equity=500)
+        state = agg.apply_fill(None, _fill(side="sell_short", qty=10, price=100), equity=10_000)
 
-        # loss = 10_000 on equity 500 → would be 2000%, capped at 100%
-        assert state.drawdown_pct == pytest.approx(100.0)
+        assert state.realized_pnl == 0.0
+        assert state.total_loss_today == 0.0
+        assert state.last_loss_at is None
+
+    def test_adding_to_long_does_not_realize(self) -> None:
+        agg = DailyAccountStateAggregator()
+        s1 = agg.apply_fill(None, _fill(side="buy", qty=10, price=100), equity=10_000)
+        s2 = agg.apply_fill(s1, _fill(side="buy", qty=10, price=120), equity=10_000)
+
+        assert s2.realized_pnl == 0.0
+        assert s2.total_loss_today == 0.0
+        # 20 shares; weighted avg cost = (10*100 + 10*120)/20 = 110
+        lot = s2.lots["SPY"]
+        assert lot.qty == pytest.approx(20.0)
+        assert lot.avg_cost == pytest.approx(110.0)
+
+
+# ── Round-trip realized PnL ─────────────────────────────────────────────────
+
+
+class TestRoundTripRealizedPnL:
+    def test_long_close_at_higher_price_is_gain(self) -> None:
+        agg = DailyAccountStateAggregator()
+        s1 = agg.apply_fill(None, _fill(side="buy", qty=10, price=100), equity=None)
+        s2 = agg.apply_fill(s1, _fill(side="sell", qty=10, price=110), equity=None)
+
+        assert s2.realized_pnl == pytest.approx(100.0)
+        assert s2.total_loss_today == 0.0
+        assert s2.last_loss_at is None
+        assert "SPY" not in s2.lots
+
+    def test_long_close_at_lower_price_is_loss(self) -> None:
+        agg = DailyAccountStateAggregator()
+        s1 = agg.apply_fill(None, _fill(side="buy", qty=10, price=100), equity=10_000)
+        s2 = agg.apply_fill(s1, _fill(side="sell", qty=10, price=90, event_at=_T_NY_MORNING), equity=10_000)
+
+        assert s2.realized_pnl == pytest.approx(-100.0)
+        assert s2.total_loss_today == pytest.approx(100.0)
+        assert s2.last_loss_at == _T_NY_MORNING
+
+    def test_partial_close_realizes_proportional_pnl(self) -> None:
+        agg = DailyAccountStateAggregator()
+        s1 = agg.apply_fill(None, _fill(side="buy", qty=10, price=100), equity=None)
+        s2 = agg.apply_fill(s1, _fill(side="sell", qty=4, price=110), equity=None)
+
+        # 4 shares closed @ +10 each = +40
+        assert s2.realized_pnl == pytest.approx(40.0)
+        # Remaining lot: 6 shares @ 100 (avg unchanged on partial close)
+        lot = s2.lots["SPY"]
+        assert lot.qty == pytest.approx(6.0)
+        assert lot.avg_cost == pytest.approx(100.0)
+
+    def test_short_close_at_lower_price_is_gain(self) -> None:
+        agg = DailyAccountStateAggregator()
+        s1 = agg.apply_fill(None, _fill(side="sell_short", qty=10, price=100), equity=None)
+        s2 = agg.apply_fill(s1, _fill(side="buy", qty=10, price=90), equity=None)
+
+        # short: gain = closing_qty * (avg_cost - cover_price) = 10 * (100 - 90) = 100
+        assert s2.realized_pnl == pytest.approx(100.0)
+
+    def test_flip_long_to_short_realizes_long_pnl_then_opens_short(self) -> None:
+        agg = DailyAccountStateAggregator()
+        s1 = agg.apply_fill(None, _fill(side="buy", qty=10, price=100), equity=None)
+        # Sell 15 — closes 10 long @ 110 (+100) and opens 5 short @ 110.
+        s2 = agg.apply_fill(s1, _fill(side="sell", qty=15, price=110), equity=None)
+
+        assert s2.realized_pnl == pytest.approx(100.0)
+        lot = s2.lots["SPY"]
+        assert lot.qty == pytest.approx(-5.0)
+        assert lot.avg_cost == pytest.approx(110.0)
+
+
+# ── Market-day rollover ─────────────────────────────────────────────────────
+
+
+class TestMarketDayRollover:
+    def test_new_market_day_resets_state_and_lots(self) -> None:
+        agg = DailyAccountStateAggregator()
+        s1 = agg.apply_fill(None, _fill(side="buy", qty=10, price=100), equity=None)
+        s2 = agg.apply_fill(
+            s1, _fill(side="buy", qty=5, price=200, event_at=_T_NY_NEXT_DAY), equity=None
+        )
+
+        assert s2.market_day == "2026-05-01"
+        assert s2.realized_pnl == 0.0
+        assert s2.total_loss_today == 0.0
+        # Lot dict is fresh — yesterday's lot does not carry over to the new day's risk gate.
+        assert "SPY" in s2.lots and s2.lots["SPY"].qty == pytest.approx(5.0)
+        assert s2.lots["SPY"].avg_cost == pytest.approx(200.0)
+
+
+# ── Drawdown ───────────────────────────────────────────────────────────────
+
+
+class TestDrawdown:
+    def test_drawdown_zero_when_only_open_position(self) -> None:
+        # Crucial: opening a position does NOT register drawdown.
+        agg = DailyAccountStateAggregator()
+        state = agg.apply_fill(None, _fill(side="buy", qty=10, price=100), equity=10_000)
+
+        assert state.drawdown_pct == 0.0
+
+    def test_drawdown_computed_from_realized_loss(self) -> None:
+        agg = DailyAccountStateAggregator()
+        s1 = agg.apply_fill(None, _fill(side="buy", qty=10, price=100), equity=10_000)
+        s2 = agg.apply_fill(s1, _fill(side="sell", qty=10, price=90), equity=10_000)
+
+        # realized -100 on equity 10_000 → 1.0%
+        assert s2.drawdown_pct == pytest.approx(1.0)
 
     def test_drawdown_zero_when_equity_is_none(self) -> None:
         agg = DailyAccountStateAggregator()
-        state = agg.apply_fill(None, _fill(side="buy", qty=10, price=100), equity=None)
+        s1 = agg.apply_fill(None, _fill(side="buy", qty=10, price=100), equity=None)
+        s2 = agg.apply_fill(s1, _fill(side="sell", qty=10, price=90), equity=None)
 
-        assert state.drawdown_pct == 0.0
+        assert s2.drawdown_pct == 0.0
 
-    def test_drawdown_zero_when_equity_is_zero(self) -> None:
+
+# ── Cooldown / last_loss_at ─────────────────────────────────────────────────
+
+
+class TestCooldown:
+    def test_last_loss_at_only_set_on_realized_loss(self) -> None:
         agg = DailyAccountStateAggregator()
-        state = agg.apply_fill(None, _fill(side="buy", qty=10, price=100), equity=0)
+        # Opening buy + closing sell at gain — no loss.
+        s1 = agg.apply_fill(None, _fill(side="buy", qty=10, price=100), equity=None)
+        s2 = agg.apply_fill(s1, _fill(side="sell", qty=10, price=110), equity=None)
 
-        assert state.drawdown_pct == 0.0
+        assert s2.last_loss_at is None
 
-
-class TestAggregatorCooldown:
-    def test_last_loss_at_set_on_buy(self) -> None:
-        agg = DailyAccountStateAggregator()
-        fill = _fill(side="buy", event_at=_T_NY_MORNING)
-        state = agg.apply_fill(None, fill, equity=None)
-
-        assert state.last_loss_at == _T_NY_MORNING
-
-    def test_last_loss_at_updated_on_each_loss(self) -> None:
+    def test_last_loss_at_set_on_realized_loss(self) -> None:
         agg = DailyAccountStateAggregator()
         t1 = datetime(2026, 4, 30, 14, 30, tzinfo=timezone.utc)
         t2 = datetime(2026, 4, 30, 15, 0, tzinfo=timezone.utc)
-
-        s1 = agg.apply_fill(None, _fill(side="buy", event_at=t1), equity=None)
-        s2 = agg.apply_fill(s1, _fill(side="buy", event_at=t2), equity=None)
+        s1 = agg.apply_fill(None, _fill(side="buy", qty=10, price=100, event_at=t1), equity=None)
+        s2 = agg.apply_fill(s1, _fill(side="sell", qty=10, price=90, event_at=t2), equity=None)
 
         assert s2.last_loss_at == t2
 
-    def test_last_loss_at_not_cleared_by_gain(self) -> None:
+    def test_last_loss_at_not_cleared_by_subsequent_gain(self) -> None:
         agg = DailyAccountStateAggregator()
         t1 = datetime(2026, 4, 30, 14, 30, tzinfo=timezone.utc)
         t2 = datetime(2026, 4, 30, 15, 0, tzinfo=timezone.utc)
+        t3 = datetime(2026, 4, 30, 15, 30, tzinfo=timezone.utc)
 
-        s1 = agg.apply_fill(None, _fill(side="buy", event_at=t1), equity=None)
-        s2 = agg.apply_fill(s1, _fill(side="sell", qty=20, price=100, event_at=t2), equity=None)
+        s1 = agg.apply_fill(None, _fill(side="buy", qty=10, price=100, event_at=t1), equity=None)
+        s2 = agg.apply_fill(s1, _fill(side="sell", qty=10, price=90, event_at=t2), equity=None)
+        # New round-trip ending in gain
+        s3 = agg.apply_fill(s2, _fill(side="buy", qty=10, price=100, event_at=t3), equity=None)
+        s4 = agg.apply_fill(
+            s3,
+            _fill(side="sell", qty=10, price=110, event_at=datetime(2026, 4, 30, 16, 0, tzinfo=timezone.utc)),
+            equity=None,
+        )
 
-        # sell is a gain; last_loss_at should still point to the buy time
-        assert s2.last_loss_at == t1
+        assert s4.last_loss_at == t2
+
+
+def test_et_market_day_logs_warning_when_zoneinfo_unavailable(monkeypatch, caplog) -> None:
+    monkeypatch.setattr(daily_account_state_module, "_TZ_FALLBACK_WARNED", False)
+    # Import succeeds, but missing ZoneInfo attribute forces fallback path.
+    monkeypatch.setitem(sys.modules, "zoneinfo", object())
+
+    with caplog.at_level(logging.WARNING, logger="backend.app.runtime.daily_account_state"):
+        day = _et_market_day(_T_NY_MORNING)
+
+    assert day == "2026-04-30"
+    assert any(
+        getattr(record, "event", None) == "daily_account_state_timezone_fallback"
+        for record in caplog.records
+    )

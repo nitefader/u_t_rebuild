@@ -18,6 +18,14 @@ from backend.app.domain import (
 )
 from backend.app.domain.risk_profile import PositionSizingMethod
 from backend.app.domain.strategy import CandidateSide, IntentType, SignalRule
+from backend.app.domain.strategy_v4 import (
+    OnFillActionV4,
+    StrategyEntriesV4,
+    StrategyEntryV4,
+    StrategyLegV4,
+    StrategyStopV4,
+    StrategyVersionV4,
+)
 from backend.app.features import FeaturePlanError, ResolvedDeploymentComponents, build_feature_plan
 
 
@@ -109,6 +117,42 @@ def _components(
     )
 
 
+def _v4_components() -> ResolvedDeploymentComponents:
+    components = _components()
+    strategy_v4 = StrategyVersionV4(
+        version=1,
+        name="V4 ATR",
+        entries=StrategyEntriesV4(
+            long=StrategyEntryV4(expression_text="1m.close < 1m.open")
+        ),
+        stops=(
+            StrategyStopV4(
+                mode="simple",
+                scope="all",
+                simple_type="ATR",
+                simple_value=2.0,
+            ),
+        ),
+        legs=(
+            StrategyLegV4(
+                position=1,
+                kind="target",
+                size_pct=1.0,
+                target_type="ATR",
+                target_value=4.0,
+                on_fill_action=OnFillActionV4(kind="leave"),
+            ),
+        ),
+        feature_requirements=("1m.close", "1m.open"),
+    )
+    return components.model_copy(
+        update={
+            "strategy": None,
+            "strategy_version_v4": strategy_v4,
+        }
+    )
+
+
 def test_feature_plan_deduplicates_by_feature_key() -> None:
     components = _components(
         strategy_feature_refs=["5m.close[0]", "5m.close", "5m.ema:length=20[0]"],
@@ -132,6 +176,13 @@ def test_feature_plan_defaults_bare_bar_refs_to_strategy_controls_timeframe() ->
     specs = {(spec.timeframe, spec.kind) for spec in plan.feature_specs}
     assert ("5m", "close") in specs
     assert ("5m", "open") in specs
+
+
+def test_v4_atr_stop_and_target_add_deployment_timeframe_atr_requirement() -> None:
+    plan = build_feature_plan(_v4_components(), consumer="runtime")
+
+    specs = {(spec.timeframe, spec.kind) for spec in plan.feature_specs}
+    assert ("5m", "atr") in specs
 
 
 def test_feature_plan_includes_multi_timeframe_requirements() -> None:

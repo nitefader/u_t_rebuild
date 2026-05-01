@@ -57,7 +57,10 @@ from backend.app.brokers import (
 from backend.app.brokers.fake import FakeBrokerAdapter
 from backend.app.domain import CandidateSide, OrderType, TimeInForce, TradingMode
 from backend.app.orders import (
+    InternalOrder,
+    InternalOrderIntent,
     InternalOrderStatus,
+    OrderOrigin,
     OrderManager,
     OrderManagerError,
     TradeLedger,
@@ -568,6 +571,52 @@ def test_list_manual_orders_returns_orders_for_account() -> None:
 
     assert len(listing.orders) == 2
     assert all(order.client_order_id.startswith("manual-") for order in listing.orders)
+    assert all(order.origin == "manual_operator" for order in listing.orders)
+    assert all(order.source == "manual" for order in listing.orders)
+
+
+def test_list_orders_surfaces_signal_plan_origin_truthfully() -> None:
+    manager, _, _, _ = _build_stack()
+    service = _FakeBrokerAccountService(_make_paper_account())
+    now = datetime.now(timezone.utc)
+    lineage_id = uuid4()
+    signal_order = manager.ledger.add(
+        InternalOrder(
+            order_id=uuid4(),
+            client_order_id="sigplan-11111111-smoke-open-abc123",
+            account_id=ACCOUNT_ID,
+            origin=OrderOrigin.SIGNAL_PLAN,
+            deployment_id=uuid4(),
+            strategy_id=uuid4(),
+            strategy_version_id=uuid4(),
+            signal_plan_id=lineage_id,
+            current_signal_plan_id=lineage_id,
+            position_lineage_id=lineage_id,
+            account_evaluation_id=uuid4(),
+            governor_decision_id=uuid4(),
+            symbol="TQQQ",
+            side=CandidateSide.LONG,
+            quantity=1,
+            filled_quantity=1,
+            order_type=OrderType.MARKET,
+            time_in_force=TimeInForce.DAY,
+            intent=InternalOrderIntent.OPEN,
+            status=InternalOrderStatus.FILLED,
+            created_at=now,
+            updated_at=now,
+            reason="red candle smoke",
+        )
+    )
+
+    listing = list_manual_orders(
+        ACCOUNT_ID,
+        service=service,
+        registry=manual_trade_registry(),
+    )
+
+    listed = next(order for order in listing.orders if order.order_id == signal_order.order_id)
+    assert listed.origin == "signal_plan"
+    assert listed.source == "signal_plan"
 
 
 def test_duplicate_submit_after_restart_replays_without_second_broker_submit() -> None:
@@ -599,7 +648,7 @@ def test_duplicate_submit_after_restart_replays_without_second_broker_submit() -
     assert manager.ledger.get(first.order_id).client_order_id == first.client_order_id
 
 
-def test_manual_order_origin_has_nullable_program_lineage() -> None:
+def test_manual_order_origin_has_no_deployment_lineage() -> None:
     manager, _, _, _ = _build_stack()
     service = _FakeBrokerAccountService(_make_paper_account())
 
@@ -613,7 +662,6 @@ def test_manual_order_origin_has_nullable_program_lineage() -> None:
 
     assert order.origin.value == "manual_operator"
     assert order.deployment_id is None
-    assert order.program_id is None
 
 
 def test_structured_error_requires_operator_session() -> None:

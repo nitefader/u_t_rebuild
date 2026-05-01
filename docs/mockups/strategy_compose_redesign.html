@@ -1,0 +1,1120 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Compose Redesign — Mockup</title>
+<style>
+  :root {
+    --bg: #0b0d10;
+    --panel: #12161b;
+    --panel-2: #161b22;
+    --line: #232a33;
+    --line-2: #2c3540;
+    --text: #e6edf3;
+    --muted: #8a96a3;
+    --muted-2: #6e7a87;
+    --accent: #4f8cff;
+    --accent-2: #6aa2ff;
+    --good: #4ec9b0;
+    --warn: #e3b341;
+    --bad: #f85149;
+    --chip: #1d2530;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: var(--bg); color: var(--text);
+    font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, system-ui, sans-serif; }
+  a { color: var(--accent-2); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  button { font: inherit; cursor: pointer; }
+
+  /* App shell */
+  .app { display: grid; grid-template-columns: 220px 1fr; min-height: 100vh; }
+  .sidenav { background: #0a0c10; border-right: 1px solid var(--line); padding: 16px 0; }
+  .brand { padding: 0 16px 14px; border-bottom: 1px solid var(--line); margin-bottom: 8px; }
+  .brand .logo { font-weight: 700; font-size: 14px; letter-spacing: .3px; }
+  .brand .sub { color: var(--muted); font-size: 11px; }
+  .nav { display: flex; flex-direction: column; }
+  .nav .group { color: var(--muted-2); font-size: 11px; text-transform: uppercase;
+    letter-spacing: .8px; padding: 12px 16px 4px; }
+  .nav a { padding: 7px 16px; color: var(--text); display: flex; align-items: center; gap: 8px;
+    border-left: 2px solid transparent; }
+  .nav a:hover { background: #11151b; text-decoration: none; }
+  .nav a.active { background: #11151b; border-left-color: var(--accent); color: var(--text); }
+  .nav .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--muted-2); }
+  .nav a.active .dot { background: var(--accent); }
+
+  .main { padding: 22px 28px 60px; max-width: 1280px; }
+  .crumbs { color: var(--muted); font-size: 12px; margin-bottom: 6px; }
+  .h1 { font-size: 22px; margin: 0 0 4px; font-weight: 600; }
+  .lead { color: var(--muted); margin: 0 0 22px; }
+
+  /* Top page switcher (mockup nav between screens) */
+  .mock-switcher { background: #1a2030; border: 1px solid #2a3550; border-radius: 8px;
+    padding: 10px 14px; margin-bottom: 22px; display: flex; gap: 10px; align-items: center;
+    flex-wrap: wrap; }
+  .mock-switcher .label { color: #9ab0d8; font-size: 12px; text-transform: uppercase;
+    letter-spacing: .8px; margin-right: 6px; }
+  .mock-switcher button { background: #232c44; color: var(--text); border: 1px solid #34405e;
+    padding: 6px 12px; border-radius: 6px; font-size: 12px; }
+  .mock-switcher button.active { background: var(--accent); border-color: var(--accent); }
+
+  /* Buttons & inputs */
+  .btn { background: var(--panel-2); color: var(--text); border: 1px solid var(--line-2);
+    padding: 8px 14px; border-radius: 6px; font-size: 13px; }
+  .btn:hover { background: #1c232c; }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: white; }
+  .btn.primary:hover { background: var(--accent-2); }
+  .btn.ghost { background: transparent; }
+  .btn.danger { color: var(--bad); border-color: #4a2126; background: #1a1213; }
+  .btn-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .input, .select, .textarea {
+    background: #0e1217; color: var(--text); border: 1px solid var(--line-2);
+    border-radius: 6px; padding: 7px 10px; font: inherit; width: 100%;
+  }
+  .textarea { min-height: 80px; resize: vertical; }
+  .input:focus, .select:focus, .textarea:focus { outline: none; border-color: var(--accent); }
+  label { color: var(--muted); font-size: 12px; display: block; margin-bottom: 4px; }
+  .field { margin-bottom: 14px; }
+  .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  .row3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 14px; }
+  .row4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; }
+
+  /* Cards / panels */
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+    padding: 16px 18px; margin-bottom: 14px; }
+  .card h3 { margin: 0 0 4px; font-size: 14px; font-weight: 600; }
+  .card .desc { color: var(--muted); font-size: 12px; margin-bottom: 14px; }
+  .section-title { font-size: 12px; color: var(--muted); text-transform: uppercase;
+    letter-spacing: .8px; margin: 18px 0 8px; }
+
+  /* Library list */
+  .list { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  .list .card { margin: 0; cursor: pointer; }
+  .list .card:hover { border-color: var(--line-2); }
+  .list .card .top { display: flex; justify-content: space-between; align-items: start; gap: 8px; }
+  .list .card .name { font-weight: 600; }
+  .list .card .summary { color: var(--muted); font-size: 12px; margin-top: 6px; }
+  .pill { display: inline-block; background: var(--chip); color: var(--text);
+    border: 1px solid var(--line-2); border-radius: 999px; padding: 2px 8px;
+    font-size: 11px; margin: 0 4px 4px 0; }
+  .pill.good { color: var(--good); border-color: #1f3a35; background: #0e1c1a; }
+  .pill.warn { color: var(--warn); border-color: #3a3320; background: #1c1808; }
+  .pill.bad { color: var(--bad); border-color: #3a2024; background: #1c0e10; }
+  .pill.muted { color: var(--muted); }
+
+  /* Compose page 2 layout (collapsed) */
+  .compose { display: grid; grid-template-columns: 1fr 360px; gap: 22px; }
+  .tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--line); margin-bottom: 18px; }
+  .tab { padding: 10px 16px; color: var(--muted); border-bottom: 2px solid transparent;
+    cursor: pointer; font-size: 13px; }
+  .tab.active { color: var(--text); border-bottom-color: var(--accent); }
+
+  /* Picker block (Bindings tab) */
+  .picker {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+    padding: 14px 16px; margin-bottom: 14px;
+  }
+  .picker .head { display: flex; justify-content: space-between; align-items: center; gap: 8px;
+    margin-bottom: 8px; }
+  .picker .label { color: var(--muted); font-size: 11px; text-transform: uppercase;
+    letter-spacing: .8px; }
+  .picker .selected {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 12px 14px; background: #0e1217; border: 1px solid var(--line-2);
+    border-radius: 8px;
+  }
+  .picker .selected .name { font-weight: 600; }
+  .picker .selected .meta { color: var(--muted); font-size: 12px; margin-top: 4px; }
+  .picker .preview { color: var(--muted); font-size: 12px; margin-top: 10px; line-height: 1.6; }
+  .picker .preview b { color: var(--text); font-weight: 500; }
+
+  /* Inspector (right column) */
+  .inspector { position: sticky; top: 22px; align-self: start; }
+  .inspector .card { padding: 14px 16px; }
+  .blueprint-row { display: flex; justify-content: space-between; padding: 6px 0;
+    border-bottom: 1px dashed var(--line); font-size: 12px; }
+  .blueprint-row:last-child { border-bottom: none; }
+  .blueprint-row .k { color: var(--muted); }
+  .blueprint-row .v { color: var(--text); }
+
+  /* Deployment binder */
+  .binder-step { display: grid; grid-template-columns: 32px 1fr; gap: 14px; margin-bottom: 14px; }
+  .binder-step .num { width: 28px; height: 28px; border-radius: 50%; background: var(--panel-2);
+    border: 1px solid var(--line-2); color: var(--muted); display: flex; align-items: center;
+    justify-content: center; font-size: 12px; font-weight: 600; }
+  .binder-step.done .num { background: #0e1c1a; border-color: #1f3a35; color: var(--good); }
+  .binder-step .body { background: var(--panel); border: 1px solid var(--line);
+    border-radius: 10px; padding: 14px 16px; }
+
+  /* Misc */
+  .hint { color: var(--muted); font-size: 12px; margin-top: 6px; }
+  .hr { height: 1px; background: var(--line); margin: 20px 0; }
+  .right { text-align: right; }
+  .screen { display: none; }
+  .screen.active { display: block; }
+  .footer-bar { position: sticky; bottom: 0; background: linear-gradient(to top, var(--bg) 60%, transparent);
+    padding: 14px 0 4px; margin-top: 18px; display: flex; justify-content: space-between;
+    border-top: 1px solid var(--line); }
+  .grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 14px; }
+  .kv { display: grid; grid-template-columns: 140px 1fr; gap: 8px; padding: 4px 0; font-size: 13px; }
+  .kv .k { color: var(--muted); }
+
+  /* Legs table */
+  .legs-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  .legs-table th { text-align: left; color: var(--muted); font-weight: 500; font-size: 11px;
+    text-transform: uppercase; letter-spacing: .6px; padding: 6px 8px; border-bottom: 1px solid var(--line); }
+  .legs-table td { padding: 8px; vertical-align: top; border-bottom: 1px solid var(--line); }
+  .legs-table tr:last-child td { border-bottom: none; }
+  .legs-table .num-cell { color: var(--muted); font-weight: 600; padding-top: 14px; }
+  .legs-table .runner-row { background: #11151b; }
+  .leg-cell { display: flex; gap: 4px; align-items: center; }
+  .input.compact, .select.compact { padding: 5px 7px; font-size: 12px; }
+  .input.compact { max-width: 90px; }
+  .select.compact { max-width: 130px; }
+  .btn.icon { padding: 4px 8px; font-size: 14px; line-height: 1; }
+  .hint.compact { font-size: 10px; margin-top: 2px; line-height: 1.4; }
+</style>
+</head>
+<body>
+<div class="app">
+
+  <aside class="sidenav">
+    <div class="brand">
+      <div class="logo">Ultimate Trading OS</div>
+      <div class="sub">Operator: potiji</div>
+    </div>
+    <nav class="nav">
+      <div class="group">Build</div>
+      <a href="#" data-screen="strategies"><span class="dot"></span> Strategies</a>
+      <a href="#" data-screen="controls" class="active"><span class="dot"></span> Strategy Controls</a>
+      <a href="#" data-screen="profiles"><span class="dot"></span> Execution Profiles</a>
+      <a href="#" data-screen="watchlists"><span class="dot"></span> Watchlists</a>
+      <div class="group">Verify</div>
+      <a href="#"><span class="dot"></span> Backtest</a>
+      <a href="#"><span class="dot"></span> Sim Lab</a>
+      <a href="#"><span class="dot"></span> Walk-Forward</a>
+      <div class="group">Run</div>
+      <a href="#" data-screen="deploy"><span class="dot"></span> Deployments</a>
+      <a href="#"><span class="dot"></span> Accounts</a>
+      <a href="#"><span class="dot"></span> Operations</a>
+    </nav>
+  </aside>
+
+  <main class="main">
+
+    <div class="mock-switcher">
+      <span class="label">Mockup pages</span>
+      <button data-go="controls" class="active">1. Strategy Controls Library</button>
+      <button data-go="controls-edit">2. Controls — Edit</button>
+      <button data-go="profiles">3. Execution Profiles Library</button>
+      <button data-go="profiles-edit">4. Profile — Edit</button>
+      <button data-go="compose">5. Compose Page 2 (collapsed)</button>
+      <button data-go="deploy">6. Deployment Binder</button>
+      <button data-go="hotswap">7. Live Hot-Swap</button>
+    </div>
+
+    <!-- ============================================ -->
+    <!-- 1. STRATEGY CONTROLS LIBRARY -->
+    <!-- ============================================ -->
+    <section class="screen active" id="screen-controls">
+      <div class="crumbs">Build / Strategy Controls</div>
+      <h1 class="h1">Strategy Controls</h1>
+      <p class="lead">Reusable operator-level defaults: when to trade, when to skip, how aggressive to be on caps and cooldowns. Strategies link to one of these — they don't redefine sessions per strategy.</p>
+
+      <div class="btn-row" style="margin-bottom: 14px;">
+        <button class="btn primary">+ New Controls</button>
+        <button class="btn ghost">Import</button>
+        <span style="flex:1"></span>
+        <input class="input" placeholder="Search controls..." style="max-width: 240px;" />
+      </div>
+
+      <div class="list">
+        <div class="card">
+          <div class="top">
+            <div>
+              <div class="name">Day Trader Default <span class="pill good">Default</span></div>
+              <div class="summary">RTH 09:45–15:30, skip power hour, 3 concurrent, 5/day cap</div>
+            </div>
+            <div class="pill">v3</div>
+          </div>
+          <div style="margin-top: 10px;">
+            <span class="pill">Session 09:45–15:30 ET</span>
+            <span class="pill">Skip 15:30–16:00</span>
+            <span class="pill">Earnings blackout: ±1d</span>
+            <span class="pill">Max 3 concurrent</span>
+            <span class="pill">5 trades/day</span>
+            <span class="pill">PDT-aware</span>
+          </div>
+          <div class="hint" style="margin-top: 10px;">Used by 7 strategies · Edited 2d ago</div>
+        </div>
+
+        <div class="card">
+          <div class="top">
+            <div>
+              <div class="name">Swing Default</div>
+              <div class="summary">RTH only, no power hour skip, 8 concurrent, no daily cap</div>
+            </div>
+            <div class="pill">v2</div>
+          </div>
+          <div style="margin-top: 10px;">
+            <span class="pill">Session 09:30–16:00 ET</span>
+            <span class="pill">Earnings blackout: ±2d</span>
+            <span class="pill">Max 8 concurrent</span>
+            <span class="pill">Gap > 5% skip</span>
+          </div>
+          <div class="hint" style="margin-top: 10px;">Used by 3 strategies · Edited 2w ago</div>
+        </div>
+
+        <div class="card">
+          <div class="top">
+            <div>
+              <div class="name">Aggressive Scalper</div>
+              <div class="summary">First hour only, 2 concurrent, 10/day cap, no overnight</div>
+            </div>
+            <div class="pill">v1</div>
+          </div>
+          <div style="margin-top: 10px;">
+            <span class="pill">Session 09:30–10:30 ET</span>
+            <span class="pill">Max 2 concurrent</span>
+            <span class="pill">10 trades/day</span>
+            <span class="pill bad">No overnight</span>
+          </div>
+          <div class="hint" style="margin-top: 10px;">Used by 2 strategies · Edited 5d ago</div>
+        </div>
+
+        <div class="card" style="border-style: dashed; align-items: center; justify-content: center; display: flex; min-height: 140px; cursor: pointer;">
+          <div style="text-align: center; color: var(--muted);">
+            <div style="font-size: 28px; line-height: 1;">+</div>
+            <div style="margin-top: 6px;">New Controls</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================================ -->
+    <!-- 2. CONTROLS - EDIT -->
+    <!-- ============================================ -->
+    <section class="screen" id="screen-controls-edit">
+      <div class="crumbs"><a href="#" data-go="controls">Strategy Controls</a> / Day Trader Default</div>
+      <h1 class="h1">Day Trader Default</h1>
+      <p class="lead">Edits create v4. v3 stays linked on existing deployments until you re-bind.</p>
+
+      <div class="grid-3">
+        <div style="grid-column: span 2;">
+
+          <div class="card">
+            <h3>Session window</h3>
+            <div class="desc">When the strategy is allowed to enter new positions.</div>
+            <div class="row2">
+              <div class="field"><label>Start time (ET)</label><input class="input" value="09:45" /></div>
+              <div class="field"><label>End time (ET)</label><input class="input" value="15:30" /></div>
+            </div>
+            <div class="field">
+              <label><input type="checkbox" checked /> Skip power hour (15:30–16:00)</label>
+            </div>
+            <div class="field">
+              <label>Session preference</label>
+              <select class="select">
+                <option>RTH only</option>
+                <option>Pre-market + RTH</option>
+                <option>RTH + after-hours</option>
+                <option>Extended hours</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="card">
+            <h3>Earnings & news blackout</h3>
+            <div class="desc">Pause entries around scheduled events.</div>
+            <div class="row3">
+              <div class="field"><label>Days before earnings</label><input class="input" value="1" /></div>
+              <div class="field"><label>Days after earnings</label><input class="input" value="1" /></div>
+              <div class="field"><label>FOMC blackout</label>
+                <select class="select"><option>None</option><option>Day-of</option><option>±1 day</option></select>
+              </div>
+            </div>
+          </div>
+
+          <div class="card">
+            <h3>Concurrency & caps</h3>
+            <div class="row3">
+              <div class="field"><label>Max concurrent positions</label><input class="input" value="3" /></div>
+              <div class="field"><label>Max trades / day</label><input class="input" value="5" /></div>
+              <div class="field"><label>Max losses before halt</label><input class="input" value="3" /></div>
+            </div>
+            <div class="field">
+              <label>Cooldown after loss</label>
+              <select class="select"><option>None</option><option selected>15 minutes</option><option>30 minutes</option><option>End of day</option></select>
+            </div>
+          </div>
+
+          <div class="card">
+            <h3>PDT & gap risk</h3>
+            <div class="field">
+              <label><input type="checkbox" checked /> Respect PDT rule (skip new entries if 3+ day-trades in 5d on flagged accounts)</label>
+            </div>
+            <div class="row2">
+              <div class="field"><label>Max gap %</label><input class="input" value="5" /></div>
+              <div class="field"><label>If gap exceeds</label>
+                <select class="select"><option>Skip entry</option><option>Wait for re-cross</option></select>
+              </div>
+            </div>
+          </div>
+
+          <div class="card">
+            <h3>Regime filter</h3>
+            <div class="field">
+              <label>Trade only when SPY is</label>
+              <select class="select"><option>Any regime</option><option>Above 200d MA</option><option>Above 50d MA</option><option>Custom</option></select>
+            </div>
+            <div class="field">
+              <label>VIX cap</label>
+              <input class="input" placeholder="e.g. 30 (skip when VIX > 30)" />
+            </div>
+          </div>
+        </div>
+
+        <div class="inspector">
+          <div class="card">
+            <h3>Where this is used</h3>
+            <div class="hint" style="margin-top: 6px;">7 strategies link to this Controls record:</div>
+            <ul style="padding-left: 18px; color: var(--muted); font-size: 12px;">
+              <li>ORB 5min — Long</li>
+              <li>VWAP Reclaim</li>
+              <li>RSI-2 Mean Rev</li>
+              <li>Gap-and-Go</li>
+              <li>+ 3 more</li>
+            </ul>
+          </div>
+
+          <div class="card">
+            <h3>Versions</h3>
+            <div class="kv"><div class="k">Current</div><div>v3 — 2d ago</div></div>
+            <div class="kv"><div class="k">v2</div><div>3w ago</div></div>
+            <div class="kv"><div class="k">v1</div><div>2mo ago</div></div>
+            <div class="hint">Existing deployments stay on their bound version until re-bound.</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="footer-bar">
+        <span class="hint">Saving creates v4 · 7 strategies will keep v3 unless rebound</span>
+        <div class="btn-row">
+          <button class="btn ghost">Cancel</button>
+          <button class="btn primary">Save as v4</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================================ -->
+    <!-- 3. EXECUTION PROFILES LIBRARY -->
+    <!-- ============================================ -->
+    <section class="screen" id="screen-profiles">
+      <div class="crumbs">Build / Execution Profiles</div>
+      <h1 class="h1">Execution Profiles</h1>
+      <p class="lead">How orders are expressed: entry style, bracket shape, slippage tolerance. Reusable across strategies — most strategies pick from these instead of redefining order logic.</p>
+
+      <div class="btn-row" style="margin-bottom: 14px;">
+        <button class="btn primary">+ New Profile</button>
+        <span style="flex:1"></span>
+        <input class="input" placeholder="Search profiles..." style="max-width: 240px;" />
+      </div>
+
+      <div class="list">
+        <div class="card">
+          <div class="top">
+            <div>
+              <div class="name">Aggressive Market In/Out <span class="pill good">Default</span></div>
+              <div class="summary">Market entry · Native bracket · Tight slippage</div>
+            </div>
+            <div class="pill">v2</div>
+          </div>
+          <div style="margin-top: 10px;">
+            <span class="pill">Entry: market</span>
+            <span class="pill">Exit: market</span>
+            <span class="pill">Native bracket</span>
+            <span class="pill">Slippage cap: 0.15%</span>
+          </div>
+          <div class="hint" style="margin-top: 10px;">Used by 6 strategies</div>
+        </div>
+
+        <div class="card">
+          <div class="top">
+            <div>
+              <div class="name">Conservative Stop-Entry Bracket</div>
+              <div class="summary">Stop entry above signal · Native bracket · Loose slippage</div>
+            </div>
+            <div class="pill">v1</div>
+          </div>
+          <div style="margin-top: 10px;">
+            <span class="pill">Entry: stop above signal</span>
+            <span class="pill">Exit: market</span>
+            <span class="pill">Native bracket</span>
+            <span class="pill">Slippage cap: 0.5%</span>
+          </div>
+          <div class="hint" style="margin-top: 10px;">Used by 4 strategies</div>
+        </div>
+
+        <div class="card">
+          <div class="top">
+            <div>
+              <div class="name">Multi-Tier Scale-Out</div>
+              <div class="summary">Market entry · 4 child legs · Trail on final tier</div>
+            </div>
+            <div class="pill">v3</div>
+          </div>
+          <div style="margin-top: 10px;">
+            <span class="pill">Entry: market</span>
+            <span class="pill">4 target legs</span>
+            <span class="pill">Trail final tier</span>
+            <span class="pill">Slippage cap: 0.2%</span>
+          </div>
+          <div class="hint" style="margin-top: 10px;">Used by 2 strategies</div>
+        </div>
+
+        <div class="card">
+          <div class="top">
+            <div>
+              <div class="name">Sim-Only Paper</div>
+              <div class="summary">Simulated fills · No bracket · For backtest parity work</div>
+            </div>
+            <div class="pill">v1</div>
+          </div>
+          <div style="margin-top: 10px;">
+            <span class="pill muted">Sim only</span>
+            <span class="pill">No bracket</span>
+          </div>
+          <div class="hint" style="margin-top: 10px;">Used by 1 strategy</div>
+        </div>
+
+        <div class="card" style="border-style: dashed; align-items: center; justify-content: center; display: flex; min-height: 140px;">
+          <div style="text-align: center; color: var(--muted);">
+            <div style="font-size: 28px; line-height: 1;">+</div>
+            <div style="margin-top: 6px;">New Profile</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================================ -->
+    <!-- 4. PROFILE - EDIT -->
+    <!-- ============================================ -->
+    <section class="screen" id="screen-profiles-edit">
+      <div class="crumbs"><a href="#" data-go="profiles">Execution Profiles</a> / Aggressive Market In/Out</div>
+      <h1 class="h1">Aggressive Market In/Out</h1>
+      <p class="lead">How orders are sent and managed at the broker. The profile knows nothing about legs, stops, or targets — those all live on the strategy. The profile only owns entry expression, bracket placement, and runner mechanics.</p>
+
+      <div class="grid-3">
+        <div style="grid-column: span 2;">
+          <div class="card">
+            <h3>Entry expression</h3>
+            <div class="row2">
+              <div class="field"><label>Entry order type</label>
+                <select class="select"><option>Market</option><option>Stop above signal</option><option>Limit at signal</option></select>
+              </div>
+              <div class="field"><label>Time in force</label>
+                <select class="select"><option>DAY</option><option>IOC</option><option>GTC</option></select>
+              </div>
+            </div>
+          </div>
+
+          <div class="card">
+            <h3>Bracket placement</h3>
+            <div class="desc">Where the bracket lives. The strategy defines the legs themselves; this just decides who manages them.</div>
+            <div class="field"><label>Mode</label>
+              <select class="select">
+                <option selected>Native (broker-side bracket)</option>
+                <option>Synthetic (engine-managed)</option>
+              </select>
+              <div class="hint">Native: send the full bracket to the broker (Alpaca OTOCO etc.). Synthetic: engine watches price and places exits as triggers hit.</div>
+            </div>
+          </div>
+
+          <div class="card">
+            <h3>Runner mechanic</h3>
+            <div class="desc">If a strategy has a runner leg, this is how the trail is implemented. The strategy specifies the trail amount; this decides who moves the order.</div>
+            <div class="field"><label>Trail engine</label>
+              <select class="select">
+                <option selected>Alpaca native trailing-stop</option>
+                <option>Engine-managed (we re-place stop on each bar)</option>
+                <option>Engine-managed (we re-place stop on each tick)</option>
+              </select>
+              <div class="hint">Native trailing is more reliable but only supports a single offset. Engine-managed lets you trail by ATR or other features.</div>
+            </div>
+          </div>
+
+          <div class="card">
+            <h3>Slippage & guards</h3>
+            <div class="row3">
+              <div class="field"><label>Max slippage %</label><input class="input" value="0.15" /></div>
+              <div class="field"><label>Reject if spread &gt;</label><input class="input" value="0.2%" /></div>
+              <div class="field"><label>Min liquidity</label><input class="input" value="$5M ADV" /></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="inspector">
+          <div class="card">
+            <h3>What this profile owns</h3>
+            <ul style="padding-left: 18px; font-size: 12px; color: var(--muted); line-height: 1.7;">
+              <li>Entry order type · TIF</li>
+              <li>Native vs synthetic bracket</li>
+              <li>Runner trail engine (broker-native vs engine-managed)</li>
+              <li>Slippage / spread / liquidity guards</li>
+            </ul>
+            <div class="hr"></div>
+            <h3 style="margin-top:0;">What it does <span style="color:var(--bad)">not</span> own</h3>
+            <ul style="padding-left: 18px; font-size: 12px; color: var(--muted); line-height: 1.7;">
+              <li>Number of legs</li>
+              <li>Stop / target levels (per leg)</li>
+              <li>Trail amount</li>
+              <li>Stop-handling on fill</li>
+            </ul>
+            <div class="hint">All of that lives on the strategy.</div>
+          </div>
+
+          <div class="card">
+            <h3>Where this is used</h3>
+            <div class="hint">6 strategies link to this profile.</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="footer-bar">
+        <span class="hint">Saving creates v3 · 6 strategies stay on v2 unless rebound</span>
+        <div class="btn-row">
+          <button class="btn ghost">Cancel</button>
+          <button class="btn primary">Save as v3</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================================ -->
+    <!-- 5. COMPOSE PAGE 2 - COLLAPSED -->
+    <!-- ============================================ -->
+    <section class="screen" id="screen-compose">
+      <div class="crumbs">Strategies / Compose / <span style="color:var(--text)">ORB 5min Long (draft)</span></div>
+      <h1 class="h1">ORB 5min Long</h1>
+      <p class="lead">Define the trade idea. Pick reusable Controls and Execution Profile from the libraries. Override only what's strategy-specific.</p>
+
+      <div class="tabs">
+        <div class="tab active">Trade Idea</div>
+        <div class="tab">Bindings</div>
+        <div class="tab" style="margin-left:auto; color:var(--muted-2)">⚡ Compose with IDE (alt)</div>
+      </div>
+
+      <div class="compose">
+        <div>
+          <!-- Trade Idea tab -->
+          <div class="card">
+            <h3>Identity</h3>
+            <div class="row2">
+              <div class="field"><label>Name</label><input class="input" value="ORB 5min Long" /></div>
+              <div class="field"><label>Direction</label>
+                <select class="select"><option>Long only</option><option>Short only</option><option>Long & short</option></select>
+              </div>
+            </div>
+            <div class="field"><label>Description</label>
+              <textarea class="textarea">First 5min range breakout, long side, with HTF trend filter.</textarea>
+            </div>
+          </div>
+
+          <div class="card">
+            <h3>Entry signal</h3>
+            <div class="desc">When to take the trade. Conditions on indicators and bar features.</div>
+            <div style="background:#0e1217; padding:10px; border-radius:6px; font-family: ui-monospace, Menlo, monospace; font-size:12px; color:var(--text);">
+              close <span style="color:var(--accent-2)">crosses_above</span> ORB_5min_high
+              <span style="color:var(--muted)"> AND </span>
+              ema(20) <span style="color:var(--accent-2)">&gt;</span> ema(50)
+              <span style="color:var(--muted)"> AND </span>
+              volume <span style="color:var(--accent-2)">&gt;</span> 1.5 * avg_volume(20)
+            </div>
+            <div class="btn-row" style="margin-top: 10px;">
+              <button class="btn">+ Add condition</button>
+              <button class="btn ghost">Edit as form</button>
+            </div>
+          </div>
+
+          <div class="card">
+            <h3>Legs</h3>
+            <div class="desc">The trade structure. Add as many legs as you want. Each leg has its own target, its own stop, and its own stop-handling on fill (what happens to remaining legs' stops when this one hits).</div>
+
+            <table class="legs-table">
+              <thead>
+                <tr>
+                  <th style="width:40px;">#</th>
+                  <th style="width:80px;">Size</th>
+                  <th>Target</th>
+                  <th>Stop</th>
+                  <th>On fill: move remaining stops</th>
+                  <th style="width:34px;"></th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td class="num-cell">1</td>
+                  <td>
+                    <input class="input compact" value="25%" />
+                  </td>
+                  <td>
+                    <div class="leg-cell">
+                      <select class="select compact"><option>%</option><option>ATR</option><option>$</option><option>R</option><option>feature</option></select>
+                      <input class="input compact" value="1.0" />
+                    </div>
+                  </td>
+                  <td>
+                    <div class="leg-cell">
+                      <select class="select compact"><option>%</option><option>ATR</option><option>$</option><option>R</option></select>
+                      <input class="input compact" value="0.5" />
+                    </div>
+                  </td>
+                  <td>
+                    <div class="leg-cell">
+                      <select class="select compact">
+                        <option>BE + offset</option>
+                        <option>BE exact</option>
+                        <option>BE − offset</option>
+                        <option>Tighten by ATR</option>
+                        <option>Tighten by %</option>
+                        <option>Leave alone</option>
+                      </select>
+                      <input class="input compact" value="$0.10" title="offset" />
+                    </div>
+                    <div class="hint compact">+$0.10 above entry — locks small win, avoids tight stop-hunts</div>
+                  </td>
+                  <td class="right"><button class="btn ghost icon">×</button></td>
+                </tr>
+
+                <tr>
+                  <td class="num-cell">2</td>
+                  <td><input class="input compact" value="25%" /></td>
+                  <td>
+                    <div class="leg-cell">
+                      <select class="select compact"><option>%</option><option selected>ATR</option><option>$</option><option>R</option></select>
+                      <input class="input compact" value="2.0" />
+                    </div>
+                  </td>
+                  <td>
+                    <div class="leg-cell">
+                      <select class="select compact"><option selected>%</option><option>ATR</option><option>$</option></select>
+                      <input class="input compact" value="0.4" title="this leg's stop" />
+                    </div>
+                    <div class="hint compact">independently configurable per leg</div>
+                  </td>
+                  <td>
+                    <div class="leg-cell">
+                      <select class="select compact">
+                        <option>BE + offset</option>
+                        <option>BE exact</option>
+                        <option>BE − offset</option>
+                        <option selected>Tighten by ATR</option>
+                        <option>Leave alone</option>
+                      </select>
+                      <input class="input compact" value="0.5" />
+                    </div>
+                  </td>
+                  <td class="right"><button class="btn ghost icon">×</button></td>
+                </tr>
+
+                <tr>
+                  <td class="num-cell">3</td>
+                  <td><input class="input compact" value="25%" /></td>
+                  <td>
+                    <div class="leg-cell">
+                      <select class="select compact"><option>%</option><option selected>ATR</option></select>
+                      <input class="input compact" value="3.0" />
+                    </div>
+                  </td>
+                  <td>
+                    <div class="leg-cell">
+                      <select class="select compact"><option selected>%</option></select>
+                      <input class="input compact" value="0.4" />
+                    </div>
+                  </td>
+                  <td>
+                    <div class="leg-cell">
+                      <select class="select compact"><option selected>Tighten by ATR</option></select>
+                      <input class="input compact" value="1.0" />
+                    </div>
+                  </td>
+                  <td class="right"><button class="btn ghost icon">×</button></td>
+                </tr>
+
+                <tr class="runner-row">
+                  <td class="num-cell">4 <span class="pill" style="font-size:9px; padding:1px 5px; margin-left:2px;">runner</span></td>
+                  <td><input class="input compact" value="25%" /></td>
+                  <td>
+                    <div class="leg-cell">
+                      <select class="select compact"><option selected>Trail ATR</option><option>Trail %</option><option>Trail $</option></select>
+                      <input class="input compact" value="1.5" />
+                    </div>
+                    <div class="hint compact">runner — trails until stopped</div>
+                  </td>
+                  <td>
+                    <div class="leg-cell">
+                      <select class="select compact"><option>%</option></select>
+                      <input class="input compact" value="0.4" />
+                    </div>
+                    <div class="hint compact">starting stop before trail engages</div>
+                  </td>
+                  <td><span class="hint">n/a (runner)</span></td>
+                  <td class="right"><button class="btn ghost icon">×</button></td>
+                </tr>
+              </tbody>
+            </table>
+
+            <div class="btn-row" style="margin-top: 10px;">
+              <button class="btn">+ Add leg</button>
+              <button class="btn ghost">+ Add runner</button>
+              <span style="flex:1"></span>
+              <span class="hint">4 legs · sizes total 100% ✓</span>
+            </div>
+          </div>
+
+          <div class="card">
+            <h3>Logical exit</h3>
+            <div class="desc">Time / bar / feature-based exits beyond the bracket. All map to <code>SignalPlan.intent=logical_exit</code>.</div>
+            <div class="field">
+              <label><input type="checkbox" checked /> Exit if no progress after 30 minutes</label>
+            </div>
+            <div class="field">
+              <label><input type="checkbox" /> Exit on opposite EMA cross</label>
+            </div>
+            <div class="field">
+              <label><input type="checkbox" checked /> Force flat at session end (from bound Controls)</label>
+            </div>
+          </div>
+        </div>
+
+        <div class="inspector">
+          <div class="card">
+            <h3>Default bindings</h3>
+            <div class="hint" style="margin-top:0; margin-bottom:10px;">The Controls + Profile this strategy ships with. Backtests, Sim, and Deployments can override these.</div>
+            <div class="picker" style="margin-bottom: 10px; padding: 10px 12px;">
+              <div class="label">Strategy Controls</div>
+              <div class="selected" style="padding: 8px 10px; margin-top: 4px;">
+                <div>
+                  <div class="name" style="font-size: 13px;">Day Trader Default</div>
+                  <div class="meta">v3 · 09:45–15:30 · skip power hour</div>
+                </div>
+                <button class="btn" style="padding: 4px 8px; font-size: 11px;">Change</button>
+              </div>
+            </div>
+            <div class="picker" style="padding: 10px 12px;">
+              <div class="label">Execution Profile</div>
+              <div class="selected" style="padding: 8px 10px; margin-top: 4px;">
+                <div>
+                  <div class="name" style="font-size: 13px;">Aggressive Market In/Out</div>
+                  <div class="meta">v2 · native bracket · Alpaca trail</div>
+                </div>
+                <button class="btn" style="padding: 4px 8px; font-size: 11px;">Change</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="card">
+            <h3>Blueprint</h3>
+            <div class="blueprint-row"><div class="k">Direction</div><div class="v">Long</div></div>
+            <div class="blueprint-row"><div class="k">Entry</div><div class="v">3 conditions ✓</div></div>
+            <div class="blueprint-row"><div class="k">Legs</div><div class="v">4 (incl. runner)</div></div>
+            <div class="blueprint-row"><div class="k">Sizes</div><div class="v">25 / 25 / 25 / 25 ✓</div></div>
+            <div class="blueprint-row"><div class="k">Stops</div><div class="v">per-leg: 0.5 / 0.4 / 0.4 / 0.4%</div></div>
+            <div class="blueprint-row"><div class="k">On-fill rules</div><div class="v">3 configured</div></div>
+            <div class="blueprint-row"><div class="k">Runner</div><div class="v">Trail 1.5×ATR</div></div>
+            <div class="blueprint-row"><div class="k">Logical exit</div><div class="v">2 rules</div></div>
+            <div class="blueprint-row"><div class="k">Coherence</div><div class="v"><span class="pill good">All green</span></div></div>
+          </div>
+
+          <div class="card">
+            <h3>Verify with…</h3>
+            <div class="hint" style="margin-top:0; margin-bottom:10px;">Backtest with different bindings without editing the strategy.</div>
+            <label>Controls</label>
+            <select class="select" style="margin-bottom: 8px;">
+              <option>Day Trader Default · v3 (default)</option>
+              <option>Swing Default</option>
+              <option>Aggressive Scalper</option>
+            </select>
+            <label>Execution Profile</label>
+            <select class="select" style="margin-bottom: 12px;">
+              <option>Aggressive Market In/Out · v2 (default)</option>
+              <option>Conservative Stop-Entry Bracket</option>
+              <option>Multi-Tier Scale-Out</option>
+              <option>Sim-Only Paper</option>
+            </select>
+            <div class="btn-row" style="flex-direction: column; align-items: stretch;">
+              <button class="btn">Run Backtest with these bindings</button>
+              <button class="btn">Open in Sim Lab</button>
+              <button class="btn">Open Chart Lab</button>
+            </div>
+            <div class="hint">Save first to enable.</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="footer-bar">
+        <span class="hint">Bindings: Day Trader Default v3 + Aggressive Market In/Out v2 — both will be linked at deployment</span>
+        <div class="btn-row">
+          <button class="btn ghost">Discard</button>
+          <button class="btn">Save draft</button>
+          <button class="btn primary">Save Strategy v1</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================================ -->
+    <!-- 6. DEPLOYMENT BINDER -->
+    <!-- ============================================ -->
+    <section class="screen" id="screen-deploy">
+      <div class="crumbs">Run / Deployments / New</div>
+      <h1 class="h1">New Deployment</h1>
+      <p class="lead">A deployment binds Strategy + Strategy Controls + Execution Profile + Watchlist + Account. Each is a separate version pointer — that's why edits to a Controls record don't auto-mutate live deployments.</p>
+
+      <div class="binder-step done">
+        <div class="num">1</div>
+        <div class="body">
+          <div style="display:flex; justify-content:space-between; align-items:center;">
+            <div>
+              <div style="font-weight:600;">Strategy</div>
+              <div class="hint">ORB 5min Long · v1</div>
+            </div>
+            <button class="btn">Change</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="binder-step done">
+        <div class="num">2</div>
+        <div class="body">
+          <div style="display:flex; justify-content:space-between; align-items:center;">
+            <div>
+              <div style="font-weight:600;">Strategy Controls</div>
+              <div class="hint">Day Trader Default · v3 (default from strategy)</div>
+            </div>
+            <div class="btn-row">
+              <button class="btn">Change</button>
+              <a href="#" data-go="controls">Browse library</a>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="binder-step done">
+        <div class="num">3</div>
+        <div class="body">
+          <div style="display:flex; justify-content:space-between; align-items:center;">
+            <div>
+              <div style="font-weight:600;">Execution Profile</div>
+              <div class="hint">Aggressive Market In/Out · v2 (default from strategy)</div>
+            </div>
+            <div class="btn-row">
+              <button class="btn">Change</button>
+              <a href="#" data-go="profiles">Browse library</a>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="binder-step done">
+        <div class="num">4</div>
+        <div class="body">
+          <div style="display:flex; justify-content:space-between; align-items:center;">
+            <div>
+              <div style="font-weight:600;">Watchlist</div>
+              <div class="hint">SP500 Liquid · 47 symbols</div>
+            </div>
+            <button class="btn">Change</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="binder-step">
+        <div class="num">5</div>
+        <div class="body">
+          <div style="display:flex; justify-content:space-between; align-items:center;">
+            <div>
+              <div style="font-weight:600;">Account</div>
+              <div class="hint">Pick a broker account to run this on.</div>
+            </div>
+            <select class="select" style="max-width: 280px;">
+              <option>— Select account —</option>
+              <option>Alpaca Paper · Acct-0001</option>
+              <option>Alpaca Live · Acct-0002</option>
+              <option>IBKR · Acct-0003</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
+      <div class="binder-step">
+        <div class="num">6</div>
+        <div class="body">
+          <div style="font-weight:600; margin-bottom: 8px;">Sizing override (optional)</div>
+          <div class="row3">
+            <div class="field"><label>Risk per trade</label><input class="input" placeholder="e.g. 0.25% equity" /></div>
+            <div class="field"><label>Max position $</label><input class="input" placeholder="e.g. $5,000" /></div>
+            <div class="field"><label>Mode</label>
+              <select class="select"><option>Live</option><option selected>Paper</option><option>Sim</option></select>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="footer-bar">
+        <span class="hint">All four version pointers are stored on the deployment row — none of the libraries are mutated at deploy time.</span>
+        <div class="btn-row">
+          <button class="btn ghost">Cancel</button>
+          <button class="btn">Save as draft</button>
+          <button class="btn primary">Deploy</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================================ -->
+    <!-- 7. LIVE HOT-SWAP -->
+    <!-- ============================================ -->
+    <section class="screen" id="screen-hotswap">
+      <div class="crumbs"><a href="#">Run / Deployments</a> / ORB 5min Long · Acct-0002</div>
+      <h1 class="h1">ORB 5min Long <span class="pill good" style="font-size: 11px; vertical-align: middle;">● Live</span></h1>
+      <p class="lead">Deployment is running. Swap bindings without stopping it. Rebinding writes a new pointer on the deployment row — open positions stay on the old binding until they close.</p>
+
+      <div class="grid-3">
+        <div style="grid-column: span 2;">
+
+          <div class="card">
+            <h3>Today's tape</h3>
+            <div class="row4">
+              <div class="kv" style="grid-template-columns: 1fr;"><div class="k">Trades</div><div style="font-size: 18px; font-weight: 600;">3</div></div>
+              <div class="kv" style="grid-template-columns: 1fr;"><div class="k">Stopped out</div><div style="font-size: 18px; font-weight: 600; color: var(--bad);">3</div></div>
+              <div class="kv" style="grid-template-columns: 1fr;"><div class="k">P&amp;L</div><div style="font-size: 18px; font-weight: 600; color: var(--bad);">−$420</div></div>
+              <div class="kv" style="grid-template-columns: 1fr;"><div class="k">Open</div><div style="font-size: 18px; font-weight: 600;">0</div></div>
+            </div>
+            <div class="hint" style="margin-top: 10px; color: var(--warn);">⚠ Stop-hunt pattern detected — 3 stops within 0.1% of low before reversal. Consider widening stops or switching profile.</div>
+          </div>
+
+          <div class="card">
+            <h3>Hot-swap bindings</h3>
+            <div class="desc">Pick new Controls or a new Execution Profile. Choose when it takes effect. Open positions are unaffected.</div>
+
+            <div class="picker">
+              <div class="head">
+                <div class="label">Strategy Controls — currently bound</div>
+                <span class="pill">v3</span>
+              </div>
+              <div class="selected">
+                <div>
+                  <div class="name">Day Trader Default · v3</div>
+                  <div class="meta">09:45–15:30 · 3 concurrent · 5/day</div>
+                </div>
+                <select class="select" style="max-width: 240px;">
+                  <option>— Keep current —</option>
+                  <option>→ Swing Default</option>
+                  <option>→ Aggressive Scalper</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="picker" style="margin-top: 14px;">
+              <div class="head">
+                <div class="label">Execution Profile — currently bound</div>
+                <span class="pill">v2</span>
+              </div>
+              <div class="selected">
+                <div>
+                  <div class="name">Aggressive Market In/Out · v2</div>
+                  <div class="meta">native bracket · Alpaca trail · 0.15% slippage</div>
+                </div>
+                <select class="select" style="max-width: 240px;">
+                  <option>— Keep current —</option>
+                  <option selected>→ Conservative Stop-Entry Bracket</option>
+                  <option>→ Multi-Tier Scale-Out</option>
+                </select>
+              </div>
+              <div class="preview">
+                <b>Switching to:</b> Conservative Stop-Entry Bracket · v1<br/>
+                Wider slippage tolerance (0.5%), stop-entry above signal instead of market — should reduce stop-hunts on choppy days.
+              </div>
+            </div>
+
+            <div class="hr"></div>
+
+            <div class="field">
+              <label>Effective</label>
+              <div class="btn-row">
+                <label style="display:inline-flex; align-items:center; gap:6px; margin-right:14px;">
+                  <input type="radio" name="effective" checked /> Now (next entry signal)
+                </label>
+                <label style="display:inline-flex; align-items:center; gap:6px; margin-right:14px;">
+                  <input type="radio" name="effective" /> Tomorrow's open
+                </label>
+                <label style="display:inline-flex; align-items:center; gap:6px;">
+                  <input type="radio" name="effective" /> Schedule…
+                </label>
+              </div>
+              <div class="hint" style="margin-top: 8px;">Open positions stay on the v2 profile until they close. New entries use the new binding.</div>
+            </div>
+          </div>
+
+          <div class="card">
+            <h3>Recent binding history</h3>
+            <div class="kv"><div class="k">2026-04-30 11:42</div><div>Profile: Aggressive Market In/Out v2 (current)</div></div>
+            <div class="kv"><div class="k">2026-04-22 09:30</div><div>Controls: Day Trader Default v2 → v3</div></div>
+            <div class="kv"><div class="k">2026-04-15 09:30</div><div>Profile: Sim-Only Paper → Aggressive Market In/Out v2 (went live)</div></div>
+            <div class="kv"><div class="k">2026-04-15 09:30</div><div>Deployment created · Acct-0002 · paper → live</div></div>
+          </div>
+        </div>
+
+        <div class="inspector">
+          <div class="card">
+            <h3>Deployment</h3>
+            <div class="kv"><div class="k">Strategy</div><div>ORB 5min Long · v1</div></div>
+            <div class="kv"><div class="k">Account</div><div>Acct-0002 (Alpaca Live)</div></div>
+            <div class="kv"><div class="k">Watchlist</div><div>SP500 Liquid · 47 symbols</div></div>
+            <div class="kv"><div class="k">Mode</div><div>Live</div></div>
+            <div class="kv"><div class="k">Started</div><div>2026-04-15 09:30</div></div>
+            <div class="kv"><div class="k">Uptime</div><div>15 days</div></div>
+          </div>
+
+          <div class="card">
+            <h3>Why this is safe</h3>
+            <ul style="padding-left: 18px; color: var(--muted); font-size: 12px; line-height: 1.7;">
+              <li>Bindings are version pointers on the deployment row — not edits to the libraries themselves.</li>
+              <li>Open positions stay on the old binding until exit (they were placed under those rules).</li>
+              <li>"Effective tomorrow" delays the swap to the next session boundary so today's tape is consistent.</li>
+              <li>Every swap is logged with timestamp + actor.</li>
+            </ul>
+          </div>
+
+          <div class="card">
+            <h3>Danger zone</h3>
+            <button class="btn" style="width: 100%; margin-bottom: 8px;">Pause new entries (keep open positions)</button>
+            <button class="btn danger" style="width: 100%;">Stop deployment</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="footer-bar">
+        <span class="hint">Swap will write deployment.execution_plan_version_id → Conservative Stop-Entry Bracket v1, effective on next entry signal.</span>
+        <div class="btn-row">
+          <button class="btn ghost">Cancel</button>
+          <button class="btn primary">Apply swap</button>
+        </div>
+      </div>
+    </section>
+
+  </main>
+</div>
+
+<script>
+  const screens = document.querySelectorAll('.screen');
+  const switchBtns = document.querySelectorAll('.mock-switcher button');
+  function go(name) {
+    screens.forEach(s => s.classList.toggle('active', s.id === 'screen-' + name));
+    switchBtns.forEach(b => b.classList.toggle('active', b.dataset.go === name));
+    window.scrollTo(0, 0);
+  }
+  document.querySelectorAll('[data-go]').forEach(el => {
+    el.addEventListener('click', e => { e.preventDefault(); go(el.dataset.go); });
+  });
+</script>
+</body>
+</html>

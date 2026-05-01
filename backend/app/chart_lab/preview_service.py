@@ -25,6 +25,25 @@ from backend.app.features import (
 )
 
 
+class ChartLabTimeframeMismatchError(ValueError):
+    """Raised when the requested preview timeframe has no feature frame.
+
+    ``required_timeframes`` lists the timeframes the feature engine
+    produced for the given strategy (derived from the strategy's feature
+    expressions). ``requested_timeframe`` is the bar resolution the
+    caller supplied. The caller must retry with one of the required
+    timeframes.
+    """
+
+    def __init__(self, *, required_timeframes: tuple[str, ...], requested_timeframe: str) -> None:
+        self.required_timeframes = required_timeframes
+        self.requested_timeframe = requested_timeframe
+        super().__init__(
+            f"no feature frame for {requested_timeframe!r}; "
+            f"strategy requires timeframes: {sorted(required_timeframes)}"
+        )
+
+
 class ChartLabFeatureValue(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -190,6 +209,17 @@ class ChartLabPreviewService:
         symbol: str,
         base_timeframe: str,
     ) -> list[ChartLabBarPreview]:
+        available_timeframes = tuple(
+            sorted({frame.timeframe for frame in frame_set.frames if frame.symbol == symbol.upper()})
+        )
+        if not any(
+            frame.symbol == symbol.upper() and frame.timeframe == base_timeframe
+            for frame in frame_set.frames
+        ):
+            raise ChartLabTimeframeMismatchError(
+                required_timeframes=available_timeframes,
+                requested_timeframe=base_timeframe,
+            )
         base_frame = frame_set.frame_for(symbol, base_timeframe)
         frames_by_timeframe = {
             frame.timeframe: frame

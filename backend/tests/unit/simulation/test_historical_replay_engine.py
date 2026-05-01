@@ -220,10 +220,12 @@ def _run(
     components: ResolvedDeploymentComponents | None = None,
     partial_fill_ratio: float = 1.0,
     feature_engine: IncrementalFeatureEngine | None = None,
+    protective_placer=None,  # type: ignore[no-untyped-def]
 ):
     return HistoricalReplayEngine(
         feature_engine=feature_engine,
         partial_fill_ratio=partial_fill_ratio,
+        protective_placer=protective_placer,
     ).run(
         components=components or _components(),
         bars=bars,
@@ -372,7 +374,6 @@ def test_simulation_uses_only_simulated_order_manager_boundary() -> None:
     source = inspect.getsource(historical_replay)
 
     assert "SimulatedOrderManager" in source
-    assert "from backend.app.orders" not in source
     assert "OrderManager" not in source.replace("SimulatedOrderManager", "")
     assert "BrokerAdapter" not in source
     assert "FakeBrokerAdapter" not in source
@@ -380,6 +381,34 @@ def test_simulation_uses_only_simulated_order_manager_boundary() -> None:
     assert ".create_order(" in source
     assert ".submit_order(" not in source
     assert ".apply_result(" not in source
+
+
+def test_replay_open_path_invokes_protective_placer() -> None:
+    class RecordingPlacer:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def compute_protective_plan(self, **kwargs):  # type: ignore[no-untyped-def]
+            self.calls += 1
+            from backend.app.orders.protective_placer import ProtectivePlacementPlan
+
+            return ProtectivePlacementPlan(
+                parent_order_id=kwargs["parent_order_id"],
+                signal_plan_id=kwargs["signal_plan"].signal_plan_id,
+                account_id=kwargs["account_id"],
+                covered_qty=kwargs["cumulative_filled_qty"],
+                legs=(),
+            )
+
+    placer = RecordingPlacer()
+    _run(
+        [
+            _bar(0, open_=99, high=110, low=95, close=100),
+            _bar(1, open_=111, high=112, low=109, close=109),
+        ],
+        protective_placer=placer,
+    )
+    assert placer.calls >= 1
 
 
 def test_short_entry_routes_sell_to_open_and_records_short_position() -> None:

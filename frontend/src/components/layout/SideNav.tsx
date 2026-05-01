@@ -12,6 +12,9 @@ import {
   Layers,
   LineChart,
   List,
+  Code2,
+  Sliders,
+  Send,
   Monitor,
   Server,
   Settings as SettingsIcon,
@@ -22,6 +25,7 @@ import {
   Zap,
   type LucideIcon,
 } from "lucide-react";
+import { ROUTE_STRATEGIES, ROUTE_STRATEGIES_COMPOSE } from "@/strategy_ide_v4/routes";
 import * as TooltipPrimitive from "@radix-ui/react-tooltip";
 import { cn } from "@/lib/cn";
 import { AppShellActions, useAppShell } from "@/store/useAppShell";
@@ -50,7 +54,10 @@ const GROUPS: NavGroup[] = [
   {
     label: "Author",
     items: [
-      { to: "/strategies", label: "Strategies", Icon: Layers },
+      { to: ROUTE_STRATEGIES, label: "Strategies", Icon: Layers },
+      { to: ROUTE_STRATEGIES_COMPOSE, label: "Compose", Icon: Code2 },
+      { to: "/controls", label: "Strategy Controls", Icon: Sliders },
+      { to: "/execution-plans", label: "Execution Plans", Icon: Send },
       { to: "/components", label: "Components", Icon: Brain },
       { to: "/risk-plans", label: "Risk Plans", Icon: Shield },
       { to: "/watchlists", label: "Watchlists", Icon: List },

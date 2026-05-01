@@ -18,7 +18,6 @@ class OrderLedger:
         self._orders_by_id: dict[UUID, InternalOrder] = {}
         self._order_ids_by_account: dict[UUID, list[UUID]] = {}
         self._order_ids_by_deployment: dict[UUID, list[UUID]] = {}
-        self._order_ids_by_program: dict[UUID, list[UUID]] = {}
 
     def add(self, order: InternalOrder) -> InternalOrder:
         if order.order_id in self._orders_by_id:
@@ -27,8 +26,6 @@ class OrderLedger:
         self._order_ids_by_account.setdefault(order.account_id, []).append(order.order_id)
         if order.deployment_id is not None:
             self._order_ids_by_deployment.setdefault(order.deployment_id, []).append(order.order_id)
-        if order.program_id is not None:
-            self._order_ids_by_program.setdefault(order.program_id, []).append(order.order_id)
         return order
 
     def get(self, order_id: UUID) -> InternalOrder:
@@ -65,9 +62,6 @@ class OrderLedger:
 
     def by_deployment(self, deployment_id: UUID) -> tuple[InternalOrder, ...]:
         return self._orders_for(self._order_ids_by_deployment.get(deployment_id, []))
-
-    def by_program(self, program_id: UUID) -> tuple[InternalOrder, ...]:
-        return self._orders_for(self._order_ids_by_program.get(program_id, []))
 
     def by_client_order_id(self, client_order_id: str) -> InternalOrder | None:
         for order in self._orders_by_id.values():

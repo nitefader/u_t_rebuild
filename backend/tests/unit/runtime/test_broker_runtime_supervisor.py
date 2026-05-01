@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from uuid import UUID, uuid4
 
 import pytest
@@ -346,3 +347,43 @@ def test_supervisor_with_no_deployments_skips_hub_registration(tmp_path) -> None
         assert hub.subscribed_symbols == ()
     finally:
         supervisor.stop()
+
+
+def test_reload_deactivated_deployment_stops_runtime_and_unregisters_hub(tmp_path) -> None:
+    components = _components(symbol="SPY")
+    deployment = BrokerRuntimeDeployment(
+        deployment=_deployment(DEPLOYMENT_ID_A, components),
+        components=components,
+        account_id=ACCOUNT_ID,
+    )
+
+    class FakeAccountTrading:
+        def __init__(self) -> None:
+            self.stopped: list[UUID] = []
+
+        def start_deployment_runtime(self, deployment_id: UUID):
+            assert deployment_id == DEPLOYMENT_ID_A
+            return SimpleNamespace(running=True, last_error=None, state=RuntimeStatus.RUNNING)
+
+        def evict_deployment_caches(self, deployment_id: UUID):
+            assert deployment_id == DEPLOYMENT_ID_A
+            return None
+
+        def stop_deployment_runtime(self, deployment_id: UUID):
+            self.stopped.append(deployment_id)
+            return SimpleNamespace(running=False, last_error=None, state=RuntimeStatus.STOPPED)
+
+        def process_completed_bar(self, deployment_id: UUID, bar: NormalizedBar) -> None:
+            raise AssertionError("deactivated deployment should not receive bars")
+
+    account_trading = FakeAccountTrading()
+    hub = _make_hub()
+    supervisor = BrokerRuntimeSupervisor(account_trading=account_trading, market_data_hub=hub)  # type: ignore[arg-type]
+    supervisor.start((deployment,))
+
+    reloaded = supervisor.reload_deployment(DEPLOYMENT_ID_A)
+
+    assert reloaded is False
+    assert supervisor.active_deployment_ids == ()
+    assert supervisor.consumer_id not in hub.consumer_ids
+    assert account_trading.stopped == [DEPLOYMENT_ID_A]

@@ -4,9 +4,8 @@ RUNTIME_SCHEMA = """
 CREATE TABLE IF NOT EXISTS internal_orders (
     order_id TEXT PRIMARY KEY,
     account_id TEXT NOT NULL,
-    origin TEXT NOT NULL DEFAULT 'program',
+    origin TEXT NOT NULL,
     deployment_id TEXT,
-    program_id TEXT,
     strategy_id TEXT,
     strategy_version_id TEXT,
     signal_plan_id TEXT,
@@ -24,7 +23,6 @@ CREATE TABLE IF NOT EXISTS internal_orders (
 CREATE INDEX IF NOT EXISTS ix_internal_orders_account_id ON internal_orders(account_id);
 CREATE INDEX IF NOT EXISTS ix_internal_orders_origin ON internal_orders(origin);
 CREATE INDEX IF NOT EXISTS ix_internal_orders_deployment_id ON internal_orders(deployment_id);
-CREATE INDEX IF NOT EXISTS ix_internal_orders_program_id ON internal_orders(program_id);
 
 CREATE TABLE IF NOT EXISTS trades (
     trade_id TEXT PRIMARY KEY,
@@ -252,6 +250,30 @@ CREATE INDEX IF NOT EXISTS ix_risk_decision_cards_risk_plan_version_id
     ON risk_decision_cards(risk_plan_version_id);
 CREATE INDEX IF NOT EXISTS ix_risk_decision_cards_created_at
     ON risk_decision_cards(created_at);
+
+-- Durable Deployment-owned SignalPlan read model. SignalPlans are emitted by
+-- Deployment, stay account-neutral, and are fanned out to Accounts only after
+-- this point in the runtime spine.
+CREATE TABLE IF NOT EXISTS signal_plans (
+    signal_plan_id TEXT PRIMARY KEY,
+    deployment_id TEXT NOT NULL,
+    strategy_id TEXT NOT NULL,
+    strategy_version_id TEXT NOT NULL,
+    symbol TEXT NOT NULL,
+    side TEXT NOT NULL,
+    intent TEXT NOT NULL,
+    status TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    published_at TEXT,
+    persisted_at TEXT NOT NULL,
+    payload TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ix_signal_plans_deployment_created
+    ON signal_plans(deployment_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS ix_signal_plans_symbol_created
+    ON signal_plans(symbol, created_at DESC);
+CREATE INDEX IF NOT EXISTS ix_signal_plans_created
+    ON signal_plans(created_at DESC);
 
 CREATE TABLE IF NOT EXISTS historical_datasets (
     dataset_id TEXT PRIMARY KEY,

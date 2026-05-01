@@ -37,6 +37,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from backend.app.api.system_settings_store import setting
 from backend.app.chart_lab import ChartLabPreviewResponse, ChartLabPreviewService
+from backend.app.chart_lab.preview_service import ChartLabTimeframeMismatchError
 from backend.app.config.runtime_paths import get_runtime_db_path
 from backend.app.data_center.historical_catalog import configure_persistence
 from backend.app.data_center.ingest_service import (
@@ -360,6 +361,14 @@ def chart_lab_preview(
             start=request.start,
             end=request.end,
         )
+    except ChartLabTimeframeMismatchError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "required_timeframes": list(exc.required_timeframes),
+                "requested_timeframe": exc.requested_timeframe,
+            },
+        ) from exc
     except FeaturePlanError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 

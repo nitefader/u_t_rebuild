@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from datetime import datetime
+from decimal import Decimal, ROUND_HALF_UP
 from typing import Any
 from uuid import UUID
 
@@ -295,6 +296,8 @@ class AlpacaBrokerAdapter:
         return request
 
     def to_alpaca_order_request(self, order: InternalOrder) -> Any:
+        if order.order_class == "oco":
+            self._validate_native_oco_preflight(order)
         request = self.translate_order_request(order)
         request_class = self._request_class_for_order_type(order.order_type)
         kwargs: dict[str, Any] = {
@@ -307,9 +310,20 @@ class AlpacaBrokerAdapter:
         if order.extended_hours:
             kwargs["extended_hours"] = True
         if order.limit_price is not None:
-            kwargs["limit_price"] = order.limit_price
+            kwargs["limit_price"] = self._alpaca_price(order.limit_price)
         if order.stop_price is not None:
-            kwargs["stop_price"] = order.stop_price
+            kwargs["stop_price"] = self._alpaca_price(order.stop_price)
+        if order.order_class == "oco":
+            self._require_sdk_class(AlpacaOrderClass, "OrderClass")
+            self._require_sdk_class(TakeProfitRequest, "TakeProfitRequest")
+            self._require_sdk_class(StopLossRequest, "StopLossRequest")
+            kwargs["order_class"] = self._enum_value(AlpacaOrderClass, "OCO")
+            kwargs["take_profit"] = TakeProfitRequest(  # type: ignore[misc]
+                limit_price=self._alpaca_price(order.limit_price),
+            )
+            kwargs["stop_loss"] = StopLossRequest(  # type: ignore[misc]
+                stop_price=self._alpaca_price(order.bracket_stop_loss_stop_price),
+            )
         if order.order_class == "bracket":
             self._validate_native_bracket_preflight(order)
             self._require_sdk_class(AlpacaOrderClass, "OrderClass")
@@ -317,12 +331,19 @@ class AlpacaBrokerAdapter:
             self._require_sdk_class(StopLossRequest, "StopLossRequest")
             kwargs["order_class"] = self._enum_value(AlpacaOrderClass, "BRACKET")
             kwargs["take_profit"] = TakeProfitRequest(  # type: ignore[misc]
-                limit_price=order.bracket_take_profit_limit_price,
+                limit_price=self._alpaca_price(order.bracket_take_profit_limit_price),
             )
             kwargs["stop_loss"] = StopLossRequest(  # type: ignore[misc]
-                stop_price=order.bracket_stop_loss_stop_price,
+                stop_price=self._alpaca_price(order.bracket_stop_loss_stop_price),
             )
         return request_class(**kwargs)  # type: ignore[misc,operator]
+
+    @staticmethod
+    def _alpaca_price(price: float | None) -> float | None:
+        if price is None:
+            return None
+        quantum = Decimal("0.01") if price >= 1 else Decimal("0.0001")
+        return float(Decimal(str(price)).quantize(quantum, rounding=ROUND_HALF_UP))
 
     def _validate_native_bracket_preflight(self, order: InternalOrder) -> None:
         """Refuse to submit a native Alpaca bracket that violates the constraint matrix.
@@ -369,6 +390,35 @@ class AlpacaBrokerAdapter:
                 context={"quantity": order.quantity},
             )
 
+    def _validate_native_oco_preflight(self, order: InternalOrder) -> None:
+        if order.limit_price is None or order.bracket_stop_loss_stop_price is None:
+            raise AlpacaBrokerError(
+                "native_oco_missing_prices",
+                "Native Alpaca OCO requires primary limit_price and stop_loss stop_price",
+                context={
+                    "limit_price": order.limit_price,
+                    "stop_loss": order.bracket_stop_loss_stop_price,
+                },
+            )
+        tif_value = order.time_in_force.value if hasattr(order.time_in_force, "value") else str(order.time_in_force)
+        if tif_value not in {"day", "gtc"}:
+            raise AlpacaBrokerError(
+                "native_oco_unsupported_tif",
+                f"Native Alpaca OCO requires time_in_force=day|gtc; got {tif_value}",
+                context={"time_in_force": tif_value},
+            )
+        if order.extended_hours:
+            raise AlpacaBrokerError(
+                "native_oco_unsupported_extended_hours",
+                "Native Alpaca OCO does not support extended hours",
+            )
+        if order.quantity != int(order.quantity):
+            raise AlpacaBrokerError(
+                "native_oco_unsupported_fractional",
+                f"Native Alpaca OCO requires whole-share quantity; got {order.quantity}",
+                context={"quantity": order.quantity},
+            )
+
     def normalize_status(self, status: object) -> BrokerOrderStatus:
         normalized = self._status_token(status)
         mapping = {
@@ -376,6 +426,8 @@ class AlpacaBrokerAdapter:
             "accepted": BrokerOrderStatus.ACCEPTED,
             "pending_new": BrokerOrderStatus.ACCEPTED,
             "accepted_for_bidding": BrokerOrderStatus.ACCEPTED,
+            "held": BrokerOrderStatus.ACCEPTED,
+            "stopped": BrokerOrderStatus.ACCEPTED,
             "partial_fill": BrokerOrderStatus.PARTIAL_FILL,
             "partially_filled": BrokerOrderStatus.PARTIAL_FILL,
             "filled": BrokerOrderStatus.FILLED,
@@ -387,7 +439,8 @@ class AlpacaBrokerAdapter:
             "replaced": BrokerOrderStatus.REPLACED,
             "rejected": BrokerOrderStatus.REJECTED,
             "suspended": BrokerOrderStatus.SUSPENDED,
-            "done_for_day": BrokerOrderStatus.ACCEPTED,
+            "done_for_day": BrokerOrderStatus.DONE_FOR_DAY,
+            "calculated": BrokerOrderStatus.DONE_FOR_DAY,
         }
         try:
             return mapping[normalized]

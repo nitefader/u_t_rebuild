@@ -202,6 +202,10 @@ def test_entry_evaluation_is_persisted(tmp_path) -> None:  # type: ignore[no-unt
     assert persisted[0].evaluation_id == in_memory.evaluation_id
     assert persisted[0].participation_decision == AccountParticipationDecision.PARTICIPATE
 
+    signal_plans = store.list_signal_plans(deployment_id=DEPLOYMENT_ID)
+    assert len(signal_plans) == 1
+    assert signal_plans[0].signal_plan_id == result.signal_plans[0].signal_plan_id
+
 
 def test_governor_rejected_evaluation_is_persisted(tmp_path) -> None:  # type: ignore[no-untyped-def]
     """Audit's headline gap: REJECT outcomes without orders must be visible.
@@ -326,6 +330,31 @@ def test_persist_failure_emits_event_and_keeps_in_memory_result(tmp_path) -> Non
     assert persist_failed[0].details["account_id"] == str(ACCOUNT_ID)
     assert persist_failed[0].details["error_type"] == "RuntimeError"
     assert "simulated SQLite IntegrityError" in persist_failed[0].details["error"]
+
+
+def test_signal_plan_persist_failure_emits_event_and_keeps_in_memory_result(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    from backend.app.pipeline import PipelineEventType
+    from backend.app.persistence import SQLiteRuntimeStore
+
+    class FailingSignalPlanStore(SQLiteRuntimeStore):
+        def save_signal_plan(self, signal_plan):  # type: ignore[no-untyped-def]
+            raise RuntimeError("simulated SignalPlan persist failure")
+
+    store = FailingSignalPlanStore(tmp_path / "evals.sqlite")
+    pipeline = _orchestrator_with_store(runtime_store=store)
+
+    result = pipeline.process_bar(_bar(open_=99, close=100))
+
+    assert len(result.signal_plans) == 1
+    persist_failed = [
+        event
+        for event in result.events
+        if event.event_type == PipelineEventType.SIGNAL_PLAN_PERSIST_FAILED
+    ]
+    assert len(persist_failed) == 1
+    assert persist_failed[0].details["deployment_id"] == str(DEPLOYMENT_ID)
+    assert persist_failed[0].details["error_type"] == "RuntimeError"
+    assert "simulated SignalPlan persist failure" in persist_failed[0].details["error"]
 
 
 def test_persist_failure_in_one_account_does_not_block_other_accounts(tmp_path) -> None:  # type: ignore[no-untyped-def]

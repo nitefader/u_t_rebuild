@@ -158,6 +158,13 @@ def tokenize(src: str) -> list[Token]:
             continue
 
         # ---- Unknown character ----
+        # Single `=` is the most common beginner mistake; give a targeted message.
+        if ch == "=":
+            raise ParseError(
+                "Unexpected character '=' (did you mean '=='?)",
+                line=tok_line,
+                col=tok_col,
+            )
         raise ParseError(
             f"Unexpected character {ch!r}",
             line=tok_line,

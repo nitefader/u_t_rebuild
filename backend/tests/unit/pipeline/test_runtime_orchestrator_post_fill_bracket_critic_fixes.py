@@ -8,6 +8,8 @@ as missing or wrong in the baseline implementation.
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import threading
+import time
 from uuid import UUID, uuid4
 
 import pytest
@@ -37,8 +39,10 @@ from backend.app.domain.risk_profile import PositionSizingMethod
 from backend.app.domain.strategy import SignalRule
 from backend.app.features import NormalizedBar, ResolvedDeploymentComponents
 from backend.app.orders import InternalOrderIntent
+from backend.app.orders.models import InternalOrderStatus
 from backend.app.pipeline import PipelineEventType, RuntimeOrchestrator
 from backend.app.runtime import DeploymentContext
+from backend.app.domain._base import utc_now
 
 
 ACCOUNT_ID = UUID("11111111-2222-3333-4444-555555555555")
@@ -136,7 +140,7 @@ def _bar() -> NormalizedBar:
     return NormalizedBar(
         symbol="SPY",
         timeframe="5m",
-        timestamp=datetime(2026, 1, 2, 14, 30, tzinfo=timezone.utc),
+        timestamp=utc_now(),
         open=99,
         high=102,
         low=97,
@@ -153,10 +157,8 @@ def test_critic_fix_1_protection_placed_does_not_fire_when_all_children_rejected
     """
 
     components = _components()
-    # Entry FILLED, both children REJECTED.
-    broker = FakeBrokerAdapter(
-        [BrokerOrderStatus.FILLED, BrokerOrderStatus.REJECTED, BrokerOrderStatus.REJECTED]
-    )
+    # Entry FILLED, native OCO child REJECTED.
+    broker = FakeBrokerAdapter([BrokerOrderStatus.FILLED, BrokerOrderStatus.REJECTED])
     pipeline = RuntimeOrchestrator(
         account_id=ACCOUNT_ID,
         deployment=_deployment(components),
@@ -176,18 +178,11 @@ def test_critic_fix_1_protection_placed_does_not_fire_when_all_children_rejected
     assert parent_naked[0].details.get("rule_id") == "protection_failed_after_fill"
 
 
-def test_critic_fix_2_stop_leg_rejection_aborts_target_submit() -> None:
-    """When the stop child is rejected, the orchestrator must NOT submit the
-    target child alone. A target-only "protection" is worse than naked:
-    it consumes margin without downside protection. The loop must abort
-    immediately on stop-leg rejection.
-    """
+def test_critic_fix_2_single_native_oco_child_submission() -> None:
+    """FOLLOWUP-A: post-fill protection submits one native OCO child order."""
 
     components = _components()
-    # Entry FILLED, stop REJECTED, target ACCEPTED (would-be naked-with-target).
-    broker = FakeBrokerAdapter(
-        [BrokerOrderStatus.FILLED, BrokerOrderStatus.REJECTED, BrokerOrderStatus.ACCEPTED]
-    )
+    broker = FakeBrokerAdapter([BrokerOrderStatus.FILLED, BrokerOrderStatus.ACCEPTED])
     pipeline = RuntimeOrchestrator(
         account_id=ACCOUNT_ID,
         deployment=_deployment(components),
@@ -196,14 +191,13 @@ def test_critic_fix_2_stop_leg_rejection_aborts_target_submit() -> None:
         portfolio_snapshot=PortfolioSnapshot(equity=100_000),
     )
 
-    result = pipeline.process_bar(_bar())
+    pipeline.process_bar(_bar())
 
-    # Only entry + stop (rejected) reached the broker. Target was never submitted.
+    # Only entry + one protective OCO child are submitted.
     assert len(broker.submitted_orders) == 2
     intents = {o.intent for o in broker.submitted_orders}
     assert InternalOrderIntent.OPEN in intents
-    assert InternalOrderIntent.STOP_LOSS in intents
-    assert InternalOrderIntent.TAKE_PROFIT not in intents
+    assert InternalOrderIntent.TAKE_PROFIT in intents
 
 
 def test_critic_fix_5_attach_native_bracket_idempotent_on_same_prices_rejects_different() -> None:
@@ -362,3 +356,135 @@ def test_critic_fix_3_cumulative_covered_qty_excludes_terminal_status_children()
     )
     # Only the ACCEPTED stop counts.
     assert covered == pytest.approx(5.0)
+
+
+def test_p0_6_concurrent_partial_fill_handlers_do_not_double_protect() -> None:
+    """P0-6 regression: two concurrent post-fill handlers for the same parent
+    must not create overlapping protective slices.
+
+    We call _handle_post_fill_protective_placement concurrently with identical
+    cumulative fill state. The per-parent lock in RuntimeOrchestrator should
+    serialize read->compute->create->submit, so only one stop leg exists for
+    the first slice breakpoint.
+    """
+    components = _components()
+    # First run submits entry + first protective OCO; subsequent submissions
+    # should be accepted if they occur.
+    broker = FakeBrokerAdapter(
+        [BrokerOrderStatus.FILLED, BrokerOrderStatus.ACCEPTED]
+        + [BrokerOrderStatus.ACCEPTED] * 8
+    )
+    pipeline = RuntimeOrchestrator(
+        account_id=ACCOUNT_ID,
+        deployment=_deployment(components),
+        components=components,
+        broker_adapter=broker,
+        portfolio_snapshot=PortfolioSnapshot(equity=100_000),
+    )
+
+    # Seed a filled parent + signal plan lineage via one normal process_bar call.
+    result = pipeline.process_bar(_bar())
+    parent = next(order for order in result.ledger_updates if order.intent == InternalOrderIntent.OPEN)
+    signal_plan = result.signal_plans[0]
+    broker_result = BrokerOrderResult(
+        order_id=parent.order_id,
+        client_order_id=parent.client_order_id,
+        status=BrokerOrderStatus.FILLED,
+        broker_order_id=f"broker-{parent.client_order_id}",
+        broker_status="filled",
+        filled_quantity=parent.filled_quantity,
+        filled_avg_price=100.0,
+        remaining_quantity=0,
+        raw_status="filled",
+    )
+
+    original_cumulative = pipeline.order_manager.cumulative_covered_qty_for_signal_plan
+
+    def slow_cumulative(*, signal_plan_id, parent_order_id):  # type: ignore[no-untyped-def]
+        time.sleep(0.03)
+        return original_cumulative(signal_plan_id=signal_plan_id, parent_order_id=parent_order_id)
+
+    pipeline.order_manager.cumulative_covered_qty_for_signal_plan = slow_cumulative  # type: ignore[method-assign]
+
+    start = threading.Barrier(2)
+
+    def run_handler() -> None:
+        start.wait()
+        pipeline._handle_post_fill_protective_placement(
+            parent_order=parent,
+            signal_plan=signal_plan,
+            broker_result=broker_result,
+        )
+
+    t1 = threading.Thread(target=run_handler)
+    t2 = threading.Thread(target=run_handler)
+    t1.start()
+    t2.start()
+    t1.join()
+    t2.join()
+
+    oco_children = [
+        order
+        for order in pipeline.order_manager.ledger.all()
+        if order.parent_order_id == parent.order_id
+        and order.order_class == "oco"
+        and order.leg_label == "oco@10"
+    ]
+    # The first slice breakpoint (10 shares) must be represented once.
+    assert len(oco_children) == 1
+
+
+def test_s2_operator_canceled_stop_child_not_replaced_on_next_fill() -> None:
+    components = _components()
+    broker = FakeBrokerAdapter([BrokerOrderStatus.FILLED, BrokerOrderStatus.ACCEPTED])
+    pipeline = RuntimeOrchestrator(
+        account_id=ACCOUNT_ID,
+        deployment=_deployment(components),
+        components=components,
+        broker_adapter=broker,
+        portfolio_snapshot=PortfolioSnapshot(equity=100_000),
+    )
+    result = pipeline.process_bar(_bar())
+    parent = next(order for order in result.ledger_updates if order.intent == InternalOrderIntent.OPEN)
+    signal_plan = result.signal_plans[0]
+    original_child = next(
+        order for order in pipeline.order_manager.ledger.all() if order.parent_order_id == parent.order_id
+    )
+    canceled_child = original_child.model_copy(
+        update={
+            "status": InternalOrderStatus.CANCELED,
+            "cancel_requested_at": utc_now(),
+            "updated_at": utc_now(),
+        }
+    )
+    pipeline.order_manager.ledger.replace(canceled_child)
+    broker_result = BrokerOrderResult(
+        order_id=parent.order_id,
+        client_order_id=parent.client_order_id,
+        status=BrokerOrderStatus.FILLED,
+        broker_order_id=f"broker-{parent.client_order_id}",
+        broker_status="filled",
+        filled_quantity=parent.filled_quantity,
+        filled_avg_price=100.0,
+        remaining_quantity=0,
+        raw_status="filled",
+    )
+
+    pipeline._handle_post_fill_protective_placement(
+        parent_order=parent,
+        signal_plan=signal_plan,
+        broker_result=broker_result,
+    )
+
+    children = [
+        order
+        for order in pipeline.order_manager.ledger.all()
+        if order.parent_order_id == parent.order_id and order.order_class == "oco"
+    ]
+    assert len(children) == 1
+    assert children[0].status == InternalOrderStatus.CANCELED
+    assert any(
+        event.event_type == PipelineEventType.PROTECTION_NAKED
+        and event.details.get("reason") == "operator_canceled_protection"
+        for event in pipeline._event_log.snapshot()
+    )

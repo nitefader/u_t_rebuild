@@ -487,7 +487,7 @@ async function clickCheckboxByLabel(session, label) {
 async function setLastCriterionRow(session, metric, operator, value) {
   return evalPage(
     session,
-    ({ metric, operator, value }) => {
+    ({ metric: requestedMetric, operator, value }) => {
       const isVisible = (node) => {
         const rect = node.getBoundingClientRect();
         const style = window.getComputedStyle(node);
@@ -512,18 +512,27 @@ async function setLastCriterionRow(session, metric, operator, value) {
       const input = row.querySelector("input");
       const setSelect = (select, nextValue) => {
         if (!Array.from(select.options).some((option) => option.value === nextValue)) {
-          throw new Error(`Select option not found: ${nextValue}`);
+          const available = Array.from(select.options).map((o) => o.value).join(", ");
+          throw new Error(`Select option not found: ${nextValue}; available: ${available}`);
         }
         Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value").set.call(select, nextValue);
         select.dispatchEvent(new Event("input", { bubbles: true }));
         select.dispatchEvent(new Event("change", { bubbles: true }));
       };
-      setSelect(metricSelect, metric);
+      // Resolve metric: use first available option when caller passes null.
+      // This avoids hardcoding option values that may change when the backend
+      // adds or renames metrics.
+      const resolvedMetric =
+        requestedMetric !== null
+          ? requestedMetric
+          : (Array.from(metricSelect.options)[0]?.value ?? null);
+      if (resolvedMetric === null) throw new Error("Metric select has no options");
+      setSelect(metricSelect, resolvedMetric);
       setSelect(operatorSelect, operator);
       Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set.call(input, String(value));
       input.dispatchEvent(new Event("input", { bubbles: true }));
       input.dispatchEvent(new Event("change", { bubbles: true }));
-      return true;
+      return resolvedMetric;
     },
     { metric, operator, value },
     "set criterion row",
@@ -603,7 +612,7 @@ async function runUiOperatorPass(session) {
   await setControlByLabel(session, "Display name", screenerName);
   await setControlByLabel(session, "Description (optional)", "UI-driven typed criteria walkthrough");
   await clickButtonByText(session, "Add criterion");
-  await setLastCriterionRow(session, "price", "lte", 50);
+  await setLastCriterionRow(session, null, "lte", 50);
   pass("UI typed criteria drawer exposes editable metric/operator/value controls", screenerName);
   journeyPass("day_trader", "typed_criteria", "Typed metric/operator/value controls work");
   await clickButtonByText(session, "Cancel");

@@ -274,6 +274,18 @@ def test_eval_variable():
     assert result is True
 
 
+def test_eval_timeframe_variable_resolves_to_literal_keys():
+    ast = parse("sig_tf.close > sig_tf.open", timeframe_variable_names=frozenset({"sig_tf"}))
+    vast = validate(ast, default_catalog(), (), timeframe_variable_names=["sig_tf"])
+    cexpr = compile(vast)
+    snap = make_snapshot(
+        values={"5m.close": 10.0, "5m.open": 9.0},
+        history={"5m.close": (10.0, 9.0), "5m.open": (9.0, 8.0)},
+        variables={"sig_tf": "5m"},
+    )
+    assert evaluate(cexpr, snap) is True
+
+
 def test_eval_variable_missing():
     ast = parse("short_ema crosses_above long_ema")
     vast = validate(ast, default_catalog(), variable_names=["short_ema", "long_ema"])

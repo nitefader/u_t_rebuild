@@ -39,6 +39,7 @@ from backend.app.risk_resolver import (
     RiskDecisionCardSink,
     RiskResolver,
 )
+from backend.app.orders.protective_placer import ProtectiveOrderPlacer
 
 from .models import (
     EquityPoint,
@@ -746,6 +747,7 @@ class HistoricalReplayEngine:
         signal_engine: SignalEngine | None = None,
         signal_plan_builder: SignalPlanBuilder | None = None,
         risk_resolver: RiskResolver | None = None,
+        protective_placer: ProtectiveOrderPlacer | None = None,
         risk_decision_sink: RiskDecisionCardSink | None = None,
         mode: RiskDecisionMode | str = RiskDecisionMode.SIM_LAB,
         partial_fill_ratio: float = 1.0,
@@ -755,6 +757,7 @@ class HistoricalReplayEngine:
         self._signal_engine = signal_engine or SignalEngine()
         self._signal_plan_builder = signal_plan_builder or SignalPlanBuilder()
         self._risk_resolver = risk_resolver or RiskResolver()
+        self._protective_placer = protective_placer or ProtectiveOrderPlacer()
         self._risk_decision_sink = risk_decision_sink
         self._mode = RiskDecisionMode(mode) if isinstance(mode, str) else mode
         self._partial_fill_ratio = partial_fill_ratio
@@ -1050,6 +1053,7 @@ class HistoricalReplayEngine:
                 deployment_id=self._deterministic_deployment_id,
                 strategy_id=components.strategy.strategy_id,
                 strategy_version_id=components.strategy.id,
+                execution_plan=components.execution_style,
             )
             signal_plan = raw_signal_plan.model_copy(update={"signal_plan_id": deterministic_signal_plan_id})
             realized = sum(t.realized_pnl for t in trade_ledger.snapshot())
@@ -1100,14 +1104,21 @@ class HistoricalReplayEngine:
                 )
                 continue
 
+            stop_price, target_price = self._protective_prices(
+                signal_plan=signal_plan,
+                fill_price=bar.close,
+                qty=card.final_quantity,
+                fallback_stop=intent.stop_candidate,
+                fallback_target=intent.target_candidate,
+            )
             broker.submit_open_order(
                 symbol=intent.symbol,
                 qty=card.final_quantity,
                 timestamp=bar.timestamp,
                 price=bar.close,
                 signal_name=intent.signal_name,
-                stop=intent.stop_candidate,
-                target=intent.target_candidate,
+                stop=stop_price,
+                target=target_price,
                 side=(
                     SimulatedOrderSide.SELL
                     if intent.side == CandidateSide.SHORT
@@ -1271,6 +1282,33 @@ class HistoricalReplayEngine:
         # If the position fully closed, the ledger has already cleared lineage
         # in apply_close_fill; otherwise (partial reduce) lineage stays so
         # subsequent exit rules continue to reference the same opener.
+
+    def _protective_prices(
+        self,
+        *,
+        signal_plan,
+        fill_price: float,
+        qty: float,
+        fallback_stop: float | None,
+        fallback_target: float | None,
+    ) -> tuple[float | None, float | None]:
+        # P1-6: replay should run through the same post-fill protective
+        # planner as the broker runtime when SignalPlan uses post_fill_pct intent.
+        # Legacy candidate-based stop/target remains as fallback so historical
+        # tests that still emit concrete candidates keep behaving deterministically.
+        plan = self._protective_placer.compute_protective_plan(
+            signal_plan=signal_plan,
+            parent_order_id=uuid5(NAMESPACE_URL, f"sim-parent:{signal_plan.signal_plan_id}"),
+            account_id=self._deterministic_simulated_account_id,
+            fill_price=fill_price,
+            cumulative_filled_qty=qty,
+            already_covered_qty=0.0,
+        )
+        stop_leg = next((leg for leg in plan.legs if leg.stop_price is not None), None)
+        target_leg = next((leg for leg in plan.legs if leg.limit_price is not None), None)
+        stop = stop_leg.stop_price if stop_leg is not None else fallback_stop
+        target = target_leg.limit_price if target_leg is not None else fallback_target
+        return stop, target
 
     def _aligned_snapshot(
         self,

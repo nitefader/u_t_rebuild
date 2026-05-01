@@ -13,8 +13,10 @@ from backend.app.operations.models import (
     DailyRiskStateResponse,
     DeploymentOperations,
     FlattenRequestResponse,
+    GovernorDecisionListResponse,
     OrderDetail,
     RuntimeOverview,
+    SignalPlanListResponse,
 )
 from backend.app.domain import (
     BacktestRun,
@@ -142,6 +144,27 @@ def get_order_detail_by_broker_order_id(broker_order_id: str, service: Operation
         raise _operator_error(f"Unable to load order detail for broker order {broker_order_id}", exc) from exc
 
 
+@router.get("/signal-plans", response_model=SignalPlanListResponse)
+def list_signal_plans(
+    service: OperationsServiceDependency,
+    account_id: UUID | None = None,
+    deployment_id: UUID | None = None,
+    symbol: str | None = None,
+    limit: int = 100,
+) -> SignalPlanListResponse:
+    try:
+        return SignalPlanListResponse(
+            signal_plans=service.list_signal_plans(
+                account_id=account_id,
+                deployment_id=deployment_id,
+                symbol=symbol,
+                limit=limit,
+            )
+        )
+    except Exception as exc:  # noqa: BLE001
+        raise _operator_error("Unable to load SignalPlans", exc) from exc
+
+
 @router.get("/evaluations", response_model=AccountSignalPlanEvaluationListResponse)
 def list_account_signal_plan_evaluations(
     service: OperationsServiceDependency,
@@ -161,6 +184,27 @@ def list_account_signal_plan_evaluations(
         )
     except Exception as exc:  # noqa: BLE001
         raise _operator_error("Unable to load account SignalPlan evaluations", exc) from exc
+
+
+@router.get("/governor-decisions", response_model=GovernorDecisionListResponse)
+def list_governor_decisions(
+    service: OperationsServiceDependency,
+    account_id: UUID | None = None,
+    deployment_id: UUID | None = None,
+    signal_plan_id: UUID | None = None,
+    limit: int = 100,
+) -> GovernorDecisionListResponse:
+    try:
+        return GovernorDecisionListResponse(
+            governor_decisions=service.list_governor_decision_traces(
+                account_id=account_id,
+                deployment_id=deployment_id,
+                signal_plan_id=signal_plan_id,
+                limit=limit,
+            )
+        )
+    except Exception as exc:  # noqa: BLE001
+        raise _operator_error("Unable to load Governor decisions", exc) from exc
 
 
 @router.get("/research-evidence", response_model=ResearchEvidenceListResponse)

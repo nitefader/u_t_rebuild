@@ -19,6 +19,7 @@ except ImportError:  # pragma: no cover
         return False
 
 from backend.app.brokers import AlpacaBrokerAdapter, BrokerSync
+from backend.app.brokers._paper_credentials import resolve_paper_credentials
 from backend.app.domain import (
     CandidateSide,
     ConditionNode,
@@ -31,6 +32,7 @@ from backend.app.domain import (
     StrategyControlsVersion,
     StrategyVersion,
     TimeInForce,
+    TradingMode,
     UniverseSnapshot,
     UniverseSymbol,
 )
@@ -66,7 +68,12 @@ def main(argv: list[str] | None = None) -> int:
     symbol = args.symbol.upper()
     account_id = _account_id()
     _print_step("Creating AlpacaBrokerAdapter")
-    adapter = AlpacaBrokerAdapter()
+    api_key, secret_key = resolve_paper_credentials()
+    adapter = AlpacaBrokerAdapter(
+        mode=TradingMode.BROKER_PAPER,
+        api_key=api_key,
+        secret_key=secret_key,
+    )
     _print_step("Checking Alpaca market clock")
     if not _market_is_open(adapter):
         print("Market closed. No runtime executed.", flush=True)
@@ -136,8 +143,9 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _validate_environment(*, bars: int, qty: int) -> str | None:
-    if os.getenv("ALPACA_BASE_URL") != PAPER_BASE_URL:
-        return "ALPACA_BASE_URL must equal https://paper-api.alpaca.markets"
+    base_url = (os.getenv("ALPACA_BASE_URL") or "").rstrip("/")
+    if not base_url.startswith(PAPER_BASE_URL):
+        return f"ALPACA_BASE_URL must start with {PAPER_BASE_URL} (got: {base_url!r})"
     if os.getenv("CONFIRM_PAPER_RUNTIME") != "yes":
         return "CONFIRM_PAPER_RUNTIME=yes is required"
     if bars <= 0:

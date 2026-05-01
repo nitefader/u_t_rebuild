@@ -4,7 +4,7 @@ from datetime import datetime, time
 from enum import StrEnum
 from uuid import UUID
 
-from pydantic import Field, model_validator
+from pydantic import Field, field_validator, model_validator
 
 from ._base import DomainSchema, utc_now
 
@@ -13,6 +13,23 @@ class SessionName(StrEnum):
     PREMARKET = "premarket"
     REGULAR = "regular"
     AFTER_HOURS = "after_hours"
+
+
+class Weekday(StrEnum):
+    MON = "MON"
+    TUE = "TUE"
+    WED = "WED"
+    THU = "THU"
+    FRI = "FRI"
+
+
+_WEEKDAY_ORDER: dict[Weekday, int] = {
+    Weekday.MON: 0,
+    Weekday.TUE: 1,
+    Weekday.WED: 2,
+    Weekday.THU: 3,
+    Weekday.FRI: 4,
+}
 
 
 class SessionWindow(DomainSchema):
@@ -27,6 +44,9 @@ class SessionWindow(DomainSchema):
         return self
 
 
+# TradingHorizon lives here for historical reasons; the actual operator-facing
+# horizon field lives on Deployment (backend/app/deployments/models.py).
+# Deployment imports TradingHorizon from this module.
 class TradingHorizon(StrEnum):
     SCALPING = "scalping"
     INTRADAY = "intraday"
@@ -52,7 +72,6 @@ class StrategyControlsVersion(DomainSchema):
     version: int = Field(ge=1)
     name: str
     timeframe: str
-    trading_horizon: TradingHorizon = TradingHorizon.INTRADAY
     allowed_directions: AllowedDirections = AllowedDirections.LONG
     higher_timeframe_confirmation_required: bool = False
     session_preference: SessionPreference = SessionPreference.REGULAR_ONLY
@@ -68,9 +87,22 @@ class StrategyControlsVersion(DomainSchema):
     max_trades_per_session: int | None = Field(default=None, ge=1)
     max_trades_per_day: int | None = Field(default=None, ge=1)
     earnings_news_blackout_enabled: bool = False
+    max_consecutive_losses_halt: int | None = Field(default=None, ge=1)
+    skip_power_hour: bool = False
+    day_of_week_restrictions: tuple[Weekday, ...] = Field(default_factory=tuple)
     feature_refs: list[str] = Field(default_factory=list)
     regime_filter_refs: list[str] = Field(default_factory=list)
     created_at: datetime = Field(default_factory=utc_now)
+
+    @field_validator("day_of_week_restrictions", mode="before")
+    @classmethod
+    def normalize_day_restrictions(cls, v: object) -> tuple[Weekday, ...]:
+        if v is None:
+            return ()
+        if isinstance(v, (list, tuple)):
+            unique = list(dict.fromkeys(Weekday(d) for d in v))
+            return tuple(sorted(unique, key=lambda d: _WEEKDAY_ORDER[d]))
+        return v  # type: ignore[return-value]
 
     @model_validator(mode="after")
     def validate_cooldown(self) -> "StrategyControlsVersion":

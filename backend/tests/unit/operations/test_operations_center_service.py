@@ -17,7 +17,22 @@ from backend.app.brokers import (
 from backend.app.broker_accounts import BrokerAccount, BrokerAccountValidationStatus
 from backend.app.control_plane import ControlPlane
 from backend.app.deployments import Deployment
-from backend.app.domain import BacktestRun, CandidateSide, IntentType, OrderType, ProgramVersion, TimeInForce, TradingMode
+from backend.app.domain import (
+    AccountEvaluationStatus,
+    AccountParticipationDecision,
+    AccountSignalPlanEvaluation,
+    BacktestRun,
+    CandidateSide,
+    GovernorDecisionStatus,
+    GovernorDecisionTrace,
+    OrderType,
+    ProgramVersion,
+    SignalPlan,
+    SignalPlanIntent,
+    SignalPlanSide,
+    TimeInForce,
+    TradingMode,
+)
 from backend.app.governor import GovernorDecision, GovernorPolicy
 from backend.app.operations import OperationsCenterService
 import backend.app.operations.service as operations_service_module
@@ -25,7 +40,7 @@ from backend.app.orders import InternalOrder, InternalOrderIntent, InternalOrder
 from backend.app.persistence import SQLiteRuntimeStore
 from backend.app.pipeline import PipelineEvent, PipelineEventType
 from backend.app.runtime import DeploymentContext, RuntimeState, RuntimeStatus
-from backend.tests.fixtures.legacy_intent import LegacyExecutionIntent as ExecutionIntent
+from backend.tests.fixtures.modern_order import make_signal_plan_order
 
 
 ACCOUNT_ID = UUID("11111111-2222-3333-4444-555555555555")
@@ -126,27 +141,9 @@ def _backtest_evidence() -> BacktestRun:
     )
 
 
-def _intent(deployment_id: UUID = DEPLOYMENT_ID) -> ExecutionIntent:
-    return ExecutionIntent(
-        deployment_id=deployment_id,
-        program_version_id=PROGRAM_ID,
-        symbol="SPY",
-        side=CandidateSide.LONG,
-        intent_type=IntentType.ENTRY,
-        qty=10,
-        order_type=OrderType.MARKET,
-        time_in_force=TimeInForce.DAY,
-        timestamp=NOW,
-        signal_name="entry",
-        reason="signal_condition_true",
-        governor_approved=True,
-        governor_reason="approved",
-    )
-
-
 def _order(status: InternalOrderStatus = InternalOrderStatus.ACCEPTED, deployment_id: UUID = DEPLOYMENT_ID) -> InternalOrder:
     manager = OrderManager()
-    order = manager.create_order(account_id=ACCOUNT_ID, execution_intent=_intent(deployment_id))
+    order = make_signal_plan_order(manager, account_id=ACCOUNT_ID, deployment_id=deployment_id)
     if status == InternalOrderStatus.CREATED:
         return order
     return manager.ledger.update_status(order_id=order.order_id, status=status)
@@ -238,6 +235,62 @@ def _signal_plan_order(
         updated_at=created_at,
         signal_name="entry",
         reason="signal_condition_true",
+    )
+
+
+def _signal_plan(
+    *,
+    signal_plan_id: UUID | None = None,
+    deployment_id: UUID = DEPLOYMENT_ID,
+    symbol: str = "SPY",
+    created_at: datetime = NOW,
+) -> SignalPlan:
+    return SignalPlan(
+        signal_plan_id=signal_plan_id or uuid4(),
+        deployment_id=deployment_id,
+        strategy_id=PROGRAM_ID,
+        strategy_version_id=STRATEGY_VERSION_ID,
+        symbol=symbol,
+        side=SignalPlanSide.LONG,
+        intent=SignalPlanIntent.OPEN,
+        created_at=created_at,
+    )
+
+
+def _account_evaluation(
+    *,
+    account_id: UUID = ACCOUNT_ID,
+    signal_plan: SignalPlan,
+    governor_decision: GovernorDecisionTrace | None = None,
+    evaluated_at: datetime = NOW,
+) -> AccountSignalPlanEvaluation:
+    return AccountSignalPlanEvaluation(
+        evaluation_id=uuid4(),
+        account_id=account_id,
+        signal_plan_id=signal_plan.signal_plan_id,
+        deployment_id=signal_plan.deployment_id,
+        strategy_id=signal_plan.strategy_id,
+        status=AccountEvaluationStatus.ACCEPTED,
+        participation_decision=AccountParticipationDecision.PARTICIPATE,
+        governor_decision=governor_decision,
+        evaluated_at=evaluated_at,
+    )
+
+
+def _governor_trace(
+    *,
+    account_id: UUID = ACCOUNT_ID,
+    signal_plan_id: UUID,
+    approved: bool = True,
+) -> GovernorDecisionTrace:
+    return GovernorDecisionTrace(
+        governor_decision_id=uuid4(),
+        account_id=account_id,
+        signal_plan_id=signal_plan_id,
+        status=GovernorDecisionStatus.APPROVED if approved else GovernorDecisionStatus.REJECTED,
+        approved=approved,
+        reasons=("approved",) if approved else ("max_open_positions_exceeded",),
+        evaluated_at=NOW,
     )
 
 
@@ -530,7 +583,7 @@ def test_runtime_overview_counts_real_deployment_records_without_order_lineage()
 
 
 def test_account_signal_plan_evaluations_project_from_signal_plan_orders(tmp_path) -> None:
-    store, _ = _store(tmp_path)
+    store = SQLiteRuntimeStore(tmp_path / "utos.db")
     older_order = _signal_plan_order(created_at=NOW - timedelta(minutes=2))
     newer_order = _signal_plan_order(created_at=NOW)
     store.save_order(older_order)
@@ -566,6 +619,42 @@ def test_account_signal_plan_evaluations_filter_by_deployment_and_signal_plan(tm
     )
 
     assert [evaluation.evaluation_id for evaluation in evaluations] == [target_order.account_evaluation_id]
+
+
+def test_signal_plans_read_from_persisted_runtime_store_with_filters(tmp_path) -> None:
+    store, _ = _store(tmp_path)
+    target = _signal_plan(symbol="SPY", created_at=NOW)
+    other_symbol = _signal_plan(symbol="QQQ", created_at=NOW - timedelta(minutes=1))
+    other_deployment = _signal_plan(deployment_id=RECOVERED_DEPLOYMENT_ID, symbol="SPY")
+    for plan in (target, other_symbol, other_deployment):
+        store.save_signal_plan(plan)
+    store.save_account_signal_plan_evaluation(_account_evaluation(signal_plan=target))
+    service = OperationsCenterService(control_plane=ControlPlane(state_store=store), runtime_store=store)
+
+    rows = service.list_signal_plans(
+        account_id=ACCOUNT_ID,
+        deployment_id=DEPLOYMENT_ID,
+        symbol="spy",
+    )
+
+    assert rows == (target,)
+
+
+def test_governor_decision_traces_project_from_persisted_evaluations_and_overview(tmp_path) -> None:
+    store, _ = _store(tmp_path)
+    plan = _signal_plan()
+    trace = _governor_trace(signal_plan_id=plan.signal_plan_id, approved=False)
+    store.save_signal_plan(plan)
+    store.save_account_signal_plan_evaluation(_account_evaluation(signal_plan=plan, governor_decision=trace))
+    service = OperationsCenterService(control_plane=ControlPlane(state_store=store), runtime_store=store)
+
+    traces = service.list_governor_decision_traces(account_id=ACCOUNT_ID, deployment_id=DEPLOYMENT_ID)
+    overview = service.get_runtime_overview()
+
+    assert traces == (trace,)
+    assert len(overview.latest_governor_decisions) == 1
+    assert overview.latest_governor_decisions[0].approved is False
+    assert overview.latest_governor_decisions[0].reason == "max_open_positions_exceeded"
 
 
 def test_runtime_overview_counts_persisted_broker_positions_without_live_reader(tmp_path) -> None:
@@ -819,7 +908,7 @@ def test_evaluations_read_from_persisted_store_when_present(tmp_path) -> None:
 def test_evaluations_falls_back_to_order_projection_when_store_empty(tmp_path) -> None:
     """Backwards-compat: pre-W2-A databases have orders but no evaluation
     rows. The legacy order-projection path must still render those."""
-    store, _ = _store(tmp_path)
+    store = SQLiteRuntimeStore(tmp_path / "utos.db")
     legacy_order = _signal_plan_order(created_at=NOW)
     store.save_order(legacy_order)
     # NO save_account_signal_plan_evaluation call — simulates legacy data.

@@ -28,6 +28,7 @@ from .ast_nodes import (
     FunctionCall,
     NumberLit,
     TimeframedFeature,
+    TimeframeVarFeature,
     UnaryOp,
     ValidatedAst,
     VariableRef,
@@ -38,6 +39,7 @@ from .evaluator import evaluate as _evaluate
 from .features import FeatureCatalog, FeatureSpec, default_catalog
 from .mirror import mirror_long_to_short
 from .parser import parse as _parse
+from .timeframes import CANONICAL_TIMEFRAMES, CANONICAL_TIMEFRAMES_ORDER
 from .validator import validate as _validate
 
 
@@ -45,25 +47,29 @@ from .validator import validate as _validate
 # Public API functions (matching signatures in CONTRACTS.md)
 # ---------------------------------------------------------------------------
 
-def parse(src: str) -> AstNode:
+def parse(src: str, timeframe_variable_names: frozenset[str] | None = None) -> AstNode:
     """Parse *src* and return the root AST node.
 
     Raises :class:`ParseError` with line/col on syntax errors.
     """
-    return _parse(src)
+    return _parse(src, timeframe_variable_names=timeframe_variable_names)
 
 
 def validate(
     ast: AstNode,
     catalog: FeatureCatalog,
     variable_names: Iterable[str] = (),
+    *,
+    timeframe_variable_names: Iterable[str] = (),
 ) -> ValidatedAst:
     """Validate *ast* against *catalog*.
 
     Returns :class:`ValidatedAst` on success.
     Raises :class:`ValidationError` on unknown features/variables or arity mismatches.
     """
-    return _validate(ast, catalog, variable_names)
+    return _validate(
+        ast, catalog, variable_names, timeframe_variable_names=timeframe_variable_names
+    )
 
 
 def compile(validated: ValidatedAst) -> CompiledExpr:
@@ -108,10 +114,13 @@ __all__ = [
     "FunctionCall",
     "NumberLit",
     "TimeframedFeature",
+    "TimeframeVarFeature",
     "UnaryOp",
     "ValidatedAst",
     "VariableRef",
-    # Catalog
+    # Catalog / timeframes
+    "CANONICAL_TIMEFRAMES",
+    "CANONICAL_TIMEFRAMES_ORDER",
     "default_catalog",
     "FeatureCatalog",
     "FeatureSpec",

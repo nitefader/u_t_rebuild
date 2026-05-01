@@ -3,13 +3,10 @@ import { z } from "zod";
 /**
  * Mirror of `backend/app/domain/signal_plan.py` cross-cutting types.
  *
- * Routes are pending in Operation Turtle Shell's queue:
+ * Operations timeline routes:
  *   GET /api/v1/operations/signal-plans
- *   GET /api/v1/operations/signal-plans/{id}
  *   GET /api/v1/operations/evaluations
- *   GET /api/v1/operations/evaluations/{id}
  *   GET /api/v1/operations/governor-decisions
- *   GET /api/v1/operations/governor-decisions/{id}
  *
  * Schemas use `passthrough` so additive backend fields don't break the UI.
  */

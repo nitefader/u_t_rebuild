@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { fireEvent, screen, waitFor } from "@testing-library/react";
 import { Operations } from "./Operations";
+import { OperationsLedger } from "./OperationsLedger";
 import { installFetchMock, renderRoute } from "@/test/renderRoute";
 
 const STREAMS_EMPTY = {
@@ -52,9 +53,9 @@ describe("<Operations />", () => {
       { url: "/api/v1/operations/overview", body: OVERVIEW_EMPTY },
       { url: "/api/v1/system/streams", body: STREAMS_EMPTY },
       { url: "/api/v1/system/status", body: STATUS_OK },
-      { url: "/api/v1/operations/signal-plans", body: { detail: "not found" }, status: 404 },
-      { url: "/api/v1/operations/evaluations", body: { detail: "not found" }, status: 404 },
-      { url: "/api/v1/operations/governor-decisions", body: { detail: "not found" }, status: 404 },
+      { url: "/api/v1/operations/signal-plans", body: { signal_plans: [] } },
+      { url: "/api/v1/operations/evaluations", body: { evaluations: [] } },
+      { url: "/api/v1/operations/governor-decisions", body: { governor_decisions: [] } },
     ]);
     renderRoute(<Operations />);
     await waitFor(() => {
@@ -72,9 +73,9 @@ describe("<Operations />", () => {
       },
       { url: "/api/v1/system/streams", body: STREAMS_EMPTY },
       { url: "/api/v1/system/status", body: STATUS_OK },
-      { url: "/api/v1/operations/signal-plans", body: { detail: "not found" }, status: 404 },
-      { url: "/api/v1/operations/evaluations", body: { detail: "not found" }, status: 404 },
-      { url: "/api/v1/operations/governor-decisions", body: { detail: "not found" }, status: 404 },
+      { url: "/api/v1/operations/signal-plans", body: { signal_plans: [] } },
+      { url: "/api/v1/operations/evaluations", body: { evaluations: [] } },
+      { url: "/api/v1/operations/governor-decisions", body: { governor_decisions: [] } },
     ]);
     renderRoute(<Operations />);
     await waitFor(() => {
@@ -115,9 +116,9 @@ describe("<Operations />", () => {
       { url: "/api/v1/operations/overview", body: OVERVIEW_EMPTY },
       { url: "/api/v1/system/streams", body: STREAMS_EMPTY },
       { url: "/api/v1/system/status", body: STATUS_OK },
-      { url: "/api/v1/operations/signal-plans", body: { detail: "not found" }, status: 404 },
-      { url: "/api/v1/operations/evaluations", body: { detail: "not found" }, status: 404 },
-      { url: "/api/v1/operations/governor-decisions", body: { detail: "not found" }, status: 404 },
+      { url: "/api/v1/operations/signal-plans", body: { signal_plans: [] } },
+      { url: "/api/v1/operations/evaluations", body: { evaluations: [] } },
+      { url: "/api/v1/operations/governor-decisions", body: { governor_decisions: [] } },
     ]);
     renderRoute(<Operations />);
     await waitFor(() => {
@@ -138,14 +139,84 @@ describe("<Operations />", () => {
       { url: "/api/v1/operations/overview", body: { detail: "kaboom" }, status: 500 },
       { url: "/api/v1/system/streams", body: STREAMS_EMPTY },
       { url: "/api/v1/system/status", body: STATUS_OK },
-      { url: "/api/v1/operations/signal-plans", body: { detail: "not found" }, status: 404 },
-      { url: "/api/v1/operations/evaluations", body: { detail: "not found" }, status: 404 },
-      { url: "/api/v1/operations/governor-decisions", body: { detail: "not found" }, status: 404 },
+      { url: "/api/v1/operations/signal-plans", body: { signal_plans: [] } },
+      { url: "/api/v1/operations/evaluations", body: { evaluations: [] } },
+      { url: "/api/v1/operations/governor-decisions", body: { governor_decisions: [] } },
     ]);
     renderRoute(<Operations />);
     await waitFor(() => {
       expect(screen.getByText(/Could not load runtime state/i)).toBeInTheDocument();
     });
+  });
+
+  it("renders SignalPlan orders with their real source instead of manual", async () => {
+    const ACCOUNT_ID = "11111111-1111-1111-1111-111111111111";
+    restore = installFetchMock([
+      {
+        url: `/api/v1/broker-accounts/${ACCOUNT_ID}/orders`,
+        body: {
+          orders: [
+            {
+              order_id: "22222222-2222-2222-2222-222222222222",
+              client_order_id: "sigplan-11111111-smoke-open-abc123",
+              account_id: ACCOUNT_ID,
+              symbol: "TQQQ",
+              side: "long",
+              quantity: 1,
+              filled_quantity: 1,
+              status: "filled",
+              intent: "open",
+              submitted_at: "2026-05-01T17:04:00Z",
+              origin: "signal_plan",
+              source: "signal_plan",
+              duplicate: false,
+            },
+          ],
+        },
+      },
+      {
+        url: `/api/v1/operations/accounts/${ACCOUNT_ID}`,
+        body: {
+          account_id: ACCOUNT_ID,
+          broker_account_snapshot: null,
+          broker_sync_freshness: null,
+          open_broker_orders: [],
+          internal_order_ledger_summary: { total_count: 1, open_count: 0, terminal_count: 1, by_status: {}, by_intent: {} },
+          positions: [],
+          position_views: [],
+          deployments: [],
+          is_paused: false,
+          is_killed: false,
+        },
+      },
+      {
+        url: "/api/v1/broker-accounts",
+        body: {
+          accounts: [
+            {
+              id: ACCOUNT_ID,
+              display_name: "OtijiTrader - Paper2",
+              provider: "alpaca",
+              mode: "BROKER_PAPER",
+              external_account_id: "PA11111111",
+              credentials_ref: "alpaca-paper:abc:def",
+              needs_credentials: false,
+              validation_status: "valid",
+              created_at: "2026-05-01T16:00:00Z",
+              is_archived: false,
+            },
+          ],
+        },
+      },
+    ]);
+
+    renderRoute(<OperationsLedger />);
+
+    await waitFor(() => {
+      expect(screen.getByText("TQQQ")).toBeInTheDocument();
+    });
+    expect(screen.getByText("SignalPlan")).toBeInTheDocument();
+    expect(screen.queryByText(/^Manual$/)).not.toBeInTheDocument();
   });
 
   // Slice B fix F-RISK-3: prove the new account_missing_risk_plan_for_horizon
@@ -168,9 +239,9 @@ describe("<Operations />", () => {
       { url: "/api/v1/operations/overview", body: overviewWithRejection },
       { url: "/api/v1/system/streams", body: STREAMS_EMPTY },
       { url: "/api/v1/system/status", body: STATUS_OK },
-      { url: "/api/v1/operations/signal-plans", body: { detail: "not found" }, status: 404 },
-      { url: "/api/v1/operations/evaluations", body: { detail: "not found" }, status: 404 },
-      { url: "/api/v1/operations/governor-decisions", body: { detail: "not found" }, status: 404 },
+      { url: "/api/v1/operations/signal-plans", body: { signal_plans: [] } },
+      { url: "/api/v1/operations/evaluations", body: { evaluations: [] } },
+      { url: "/api/v1/operations/governor-decisions", body: { governor_decisions: [] } },
     ]);
     renderRoute(<Operations />);
     // The helper renders "No RiskPlan mapped for the deployment's Swing horizon".

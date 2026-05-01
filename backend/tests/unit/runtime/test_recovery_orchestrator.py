@@ -15,18 +15,17 @@ from backend.app.brokers import (
     BrokerSync,
 )
 from backend.app.control_plane import ControlPlane
-from backend.app.domain import CandidateSide, IntentType, OrderType, TimeInForce, TradingMode
+from backend.app.domain import TradingMode
 from backend.app.governor import GovernorPolicy, PortfolioGovernor
 from backend.app.orders import InternalOrder, InternalOrderStatus, OrderManager, OrderManagerError
 from backend.app.persistence import SQLiteOrderLedger, SQLiteRuntimeStore
 from backend.app.runtime import RuntimeRecoveryOrchestrator, RuntimeState, RuntimeStatus
-from backend.tests.fixtures.legacy_intent import LegacyExecutionIntent as ExecutionIntent
+from backend.tests.fixtures.modern_order import make_signal_plan_order
 import backend.app.runtime.recovery_orchestrator as recovery_module
 
 
 ACCOUNT_ID = UUID("11111111-2222-3333-4444-555555555555")
 DEPLOYMENT_ID = UUID("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
-PROGRAM_ID = UUID("99999999-8888-7777-6666-555555555555")
 
 
 class RecoveryAdapter:
@@ -79,24 +78,6 @@ def _snapshot(*, stale: bool = False) -> BrokerAccountSnapshot:
     )
 
 
-def _intent() -> ExecutionIntent:
-    return ExecutionIntent(
-        deployment_id=DEPLOYMENT_ID,
-        program_version_id=PROGRAM_ID,
-        symbol="SPY",
-        side=CandidateSide.LONG,
-        intent_type=IntentType.ENTRY,
-        qty=10,
-        order_type=OrderType.MARKET,
-        time_in_force=TimeInForce.DAY,
-        timestamp=datetime(2026, 1, 2, 14, 30, tzinfo=timezone.utc),
-        signal_name="entry",
-        reason="signal_condition_true",
-        governor_approved=True,
-        governor_reason="approved",
-    )
-
-
 def _runtime(db_path, *, adapter: RecoveryAdapter) -> tuple[SQLiteRuntimeStore, RuntimeRecoveryOrchestrator]:
     store = SQLiteRuntimeStore(db_path)
     control_plane = ControlPlane(state_store=store)
@@ -118,7 +99,8 @@ def _order(db_path) -> InternalOrder:
     store = SQLiteRuntimeStore(db_path)
     store.save_deployment_runtime_state(RuntimeState(deployment_id=DEPLOYMENT_ID, status=RuntimeStatus.RUNNING))
     store.save_broker_account_snapshot(_snapshot())
-    return OrderManager(ledger=SQLiteOrderLedger(db_path)).create_order(account_id=ACCOUNT_ID, execution_intent=_intent())
+    manager = OrderManager(ledger=SQLiteOrderLedger(db_path))
+    return make_signal_plan_order(manager, account_id=ACCOUNT_ID, deployment_id=DEPLOYMENT_ID)
 
 
 def _open_snapshot(order: InternalOrder, *, broker_order_id: str = "broker-1") -> BrokerOpenOrderSnapshot:
@@ -257,7 +239,7 @@ def test_recovery_mode_blocks_new_order_creation() -> None:
     manager = OrderManager(control_plane=control_plane)
 
     with pytest.raises(OrderManagerError, match="system recovery"):
-        manager.create_order(account_id=ACCOUNT_ID, execution_intent=_intent())
+        make_signal_plan_order(manager, account_id=ACCOUNT_ID, deployment_id=DEPLOYMENT_ID)
 
 
 def test_recovery_does_not_create_new_orders(tmp_path) -> None:

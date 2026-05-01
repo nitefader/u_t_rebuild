@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import pytest
 
+from backend.app.strategies.expression_engine import CANONICAL_TIMEFRAMES_ORDER
 from backend.app.strategies.expression_engine.ast_nodes import (
     FeatureRef,
     NumberLit,
@@ -189,3 +190,29 @@ def test_feature_requirements_types():
     vast = validate(ast, default_catalog())
     for req in vast.feature_requirements:
         assert isinstance(req, (TimeframedFeature, FeatureRef))
+
+
+def test_validator_rejects_overlapping_expression_and_timeframe_variable_names():
+    ast = parse("5m.ema(9) > 0")
+    with pytest.raises(ValidationError, match="both an expression variable"):
+        validate(ast, default_catalog(), ["dup"], timeframe_variable_names=["dup"])
+
+
+def test_validator_rejects_bare_timeframe_variable_reference():
+    ast = parse(
+        "sig_tf > 5m.close",
+        timeframe_variable_names=frozenset({"sig_tf"}),
+    )
+    with pytest.raises(ValidationError):
+        validate(ast, default_catalog(), [], timeframe_variable_names=["sig_tf"])
+
+
+def test_validator_expands_timeframe_variable_to_every_literal_timeframe():
+    ast = parse("sig_tf.ema(9) > 0", timeframe_variable_names=frozenset({"sig_tf"}))
+    vast = validate(ast, default_catalog(), (), timeframe_variable_names=["sig_tf"])
+    tfs = {
+        req.timeframe
+        for req in vast.feature_requirements
+        if isinstance(req, TimeframedFeature) and req.name == "ema"
+    }
+    assert tfs == set(CANONICAL_TIMEFRAMES_ORDER)

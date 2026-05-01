@@ -66,6 +66,13 @@ export const BACKTESTS_ROADMAP: RoadmapItem[] = [
       "Visual builder is now a dedicated route (/strategies/:strategyId/builder/new and /strategies/:strategyId/builder/:versionId) instead of a cramped drawer. Three-column layout: section nav · BuilderPane · live Validation + Feature Plan Preview. The new FeaturePicker replaces the bare text field with a Radix popover that surfaces the live FeatureRegistry catalog grouped by namespace (Price / Technical / Session / Portfolio); selecting a kind opens a per-feature parameter form (timeframe, length, source, session, lookback) and emits canonical `5m.kind:params[lookback]` syntax. The unified feature engine computes every supported kind for both research and live runtime, so the picker no longer needs to flag a batch-vs-stream taxonomy. Add Version + Edit Draft both link into the builder; creating a Strategy now lands the operator directly on the builder for the first version.",
   },
   {
+    title: "Strategy IDE v4 — expression engine, IDE shell, starter strategies, full cutover",
+    status: "shipped",
+    category: "Strategy + Risk Plan authoring",
+    description:
+      "The v4 IDE is now the canonical strategy authoring surface at /strategies/compose. Slices 1–8.6: Python-style expression engine (IncrementalFeatureEngine), Monaco editor, feature palette, variables strip, long/short tabs, stops/legs/exits/execution preview, 12 starter strategy templates, full library list at /strategies (edit, duplicate, delete). Legacy composer routes and component tree removed; backend legacy CRUD stays alive for runtime/research until Slice 11.",
+  },
+  {
     title: "AI Strategy Composer (wizard → prefilled editor, 12 templates, coherence validator)",
     status: "shipped",
     category: "Strategy + Risk Plan authoring",

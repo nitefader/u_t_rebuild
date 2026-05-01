@@ -17,6 +17,8 @@ except ImportError:  # pragma: no cover
         return False
 
 from backend.app.brokers import AlpacaBrokerAdapter, BrokerSync
+from backend.app.brokers._paper_credentials import resolve_paper_credentials
+from backend.app.domain import TradingMode
 from backend.app.orders import OrderManager
 
 
@@ -33,7 +35,12 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     account_id = _account_id()
-    adapter = AlpacaBrokerAdapter()
+    api_key, secret_key = resolve_paper_credentials()
+    adapter = AlpacaBrokerAdapter(
+        mode=TradingMode.BROKER_PAPER,
+        api_key=api_key,
+        secret_key=secret_key,
+    )
     broker_sync = BrokerSync(ledger=OrderManager().ledger, adapter=adapter)
     account = broker_sync.sync_account(account_id)
     positions = broker_sync.sync_positions(account_id)
@@ -80,8 +87,9 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _validate_environment() -> str | None:
-    if os.getenv("ALPACA_BASE_URL") != PAPER_BASE_URL:
-        return "ALPACA_BASE_URL must equal https://paper-api.alpaca.markets"
+    base_url = (os.getenv("ALPACA_BASE_URL") or "").rstrip("/")
+    if not base_url.startswith(PAPER_BASE_URL):
+        return f"ALPACA_BASE_URL must start with {PAPER_BASE_URL} (got: {base_url!r})"
     if not os.getenv("ALPACA_API_KEY") or not os.getenv("ALPACA_SECRET_KEY"):
         return "ALPACA_API_KEY and ALPACA_SECRET_KEY are required"
     return None

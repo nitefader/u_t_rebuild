@@ -85,61 +85,19 @@ export const EXPLAINERS: Record<string, ExplainerEntry> = {
     pageSlug: "strategies",
     pageTitle: "Strategies",
     oneLiner:
-      "Reusable trading logic + execution-plan config. Versions are frozen before they can power a Deployment.",
+      "v4 strategy library. Browse saved strategies, open them in the IDE, duplicate or delete.",
     sections: [
       {
         heading: "Authoring flow",
-        body: "Create a Strategy shell — you land directly in the full-page Strategy Builder for the first version. Author entry / exit rules visually: pick features from the catalog-driven dropdown, compose AND/OR condition trees, and assemble logical_exit rules (time / bars / session / feature / hybrid). Freeze the version before pointing a Deployment at it. Frozen versions are immutable.",
+        body: "Click New strategy to open the IDE on a blank canvas, or click Edit on any card to open the head version. The IDE supports Python-style entry expressions, stops, legs, and logical exits. Save posts a new version linked to the same strategy.",
       },
       {
-        heading: "Lifecycle",
-        body: "Draft → Active (once a frozen version exists) → Deprecated. Strategies with frozen versions cannot be deleted; deprecate instead.",
+        heading: "Versions",
+        body: "Each save appends a new version. The list page shows the head (latest) version for each strategy. Open the IDE with ?id=<version_id> to load any specific version.",
       },
       {
         heading: "Doctrine",
-        body: "Strategy owns logic only. Account risk, broker credentials, and final size do NOT live on the Strategy.",
-      },
-    ],
-  },
-
-  "strategy-builder": {
-    pageSlug: "strategy-builder",
-    pageTitle: "Strategy Builder",
-    oneLiner:
-      "Full-page visual editor for one Strategy version. Pick features, compose conditions, attach logical_exit rules.",
-    sections: [
-      {
-        heading: "Feature plan",
-        body: "Click the picker to browse the live FeatureRegistry catalog grouped by namespace (Price / Technical / Session / Portfolio). Each feature surfaces a parameter form (length, source, session, lookback…) and emits the canonical expression `5m.kind:params[lookback]` so you never type syntax. The unified feature engine computes every supported feature for both research (Backtest / Walk-Forward / Optimization / Sim Lab) and live runtime — there is no batch-vs-stream taxonomy.",
-      },
-      {
-        heading: "Entry & Exit rules",
-        body: "Entry rules require a feature condition tree (AND / OR groups of comparisons). Exit rules accept a feature condition AND/OR a logical_exit_rule (the only exit intent — time / bars / session / feature / hybrid all live under it). Stop and target candidate features are pickable from the same catalog.",
-      },
-      {
-        heading: "Save vs Save & Freeze",
-        body: "Save draft keeps the version editable. Save & Freeze publishes — frozen versions are immutable and Deployments can only point at frozen versions. Saving never deploys, attaches an Account, or submits a broker order.",
-      },
-    ],
-  },
-
-  "strategy-detail": {
-    pageSlug: "strategy-detail",
-    pageTitle: "Strategy detail",
-    oneLiner:
-      "One Strategy: versions, lineage, latest published, and the deployments using each version.",
-    sections: [
-      {
-        heading: "Versions and lineage",
-        body: "Each version is either draft or frozen. Edits land on the current draft only. Freeze a draft to publish — frozen versions are immutable lineage and feed Deployments. Past frozen versions can never be edited.",
-      },
-      {
-        heading: "Publish (freeze)",
-        body: "Publish records a frozen-at timestamp and (once Operation Turtle Shell ships X-Operator-Session-Id capture) a publisher identifier. Until then the publisher column reads `system`.",
-      },
-      {
-        heading: "Deployments using version",
-        body: "Reads /api/v1/deployments and groups by strategy_version_id. A version with active Deployments cannot be deleted; deprecate the Strategy instead.",
+        body: "Strategy owns logic only. Account risk, broker credentials, and final position size do NOT live on the Strategy.",
       },
     ],
   },

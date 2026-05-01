@@ -3,6 +3,8 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
+import pytest
+
 from backend.app.chart_lab import ChartLabPreviewService
 from backend.app.domain import (
     ConditionNode,
@@ -273,3 +275,139 @@ def test_chart_lab_preview_saves_research_evidence() -> None:
     assert response.evidence.strategy_version_id == components.strategy.id
     assert response.evidence.signal_marker_count == 1
     assert store.saved == [response.evidence]
+
+
+# ---------------------------------------------------------------------------
+# Timeframe mismatch tests (regression for KeyError: 'no feature frame …')
+# ---------------------------------------------------------------------------
+
+def test_chart_lab_matching_timeframe_returns_200() -> None:
+    """When the requested timeframe matches a frame in the computed set, preview succeeds."""
+    components = _components()
+    bars = _bars(101)
+
+    response = ChartLabPreviewService().preview_program(
+        components=components,
+        bars=bars,
+        symbol="SPY",
+        timeframe="5m",
+        start=bars[0].timestamp,
+        end=bars[-1].timestamp + timedelta(minutes=5),
+    )
+
+    assert len(response.bars) == 1
+
+
+def _components_5m_only() -> ResolvedDeploymentComponents:
+    """Strategy that only references 5m features — used to test timeframe mismatch."""
+    strategy_id = uuid4()
+    controls_id = uuid4()
+    risk_id = uuid4()
+    execution_id = uuid4()
+    universe_id = uuid4()
+    strategy = StrategyVersion(
+        id=strategy_id,
+        strategy_id=uuid4(),
+        version=1,
+        name="5m Only",
+        entry_rules=[
+            SignalRule(
+                name="close_above_open",
+                side=CandidateSide.LONG,
+                intent_type=IntentType.ENTRY,
+                condition=ConditionNode(
+                    left_feature="5m.close[0]",
+                    operator=ConditionOperator.GREATER_THAN,
+                    right_feature="5m.open[0]",
+                ),
+            )
+        ],
+    )
+    controls = StrategyControlsVersion(
+        id=controls_id,
+        strategy_controls_id=uuid4(),
+        version=1,
+        name="5m RTH",
+        timeframe="5m",
+    )
+    risk = RiskProfileVersion(
+        id=risk_id,
+        risk_profile_id=uuid4(),
+        version=1,
+        name="Risk",
+        sizing_method=PositionSizingMethod.RISK_PERCENT_EQUITY,
+        risk_per_trade_pct=0.5,
+    )
+    execution = ExecutionStyleVersion(
+        id=execution_id,
+        execution_style_id=uuid4(),
+        version=1,
+        name="Market",
+        entry_order_type=OrderType.MARKET,
+    )
+    universe = UniverseSnapshot(
+        id=universe_id,
+        universe_id=uuid4(),
+        version=1,
+        name="One Symbol",
+        symbols=[UniverseSymbol(symbol="SPY")],
+    )
+    program = ProgramVersion(
+        id=uuid4(),
+        program_id=uuid4(),
+        name="Program",
+        version=1,
+        strategy_version_id=strategy_id,
+        strategy_controls_version_id=controls_id,
+        risk_profile_version_id=risk_id,
+        execution_style_version_id=execution_id,
+        universe_snapshot_id=universe_id,
+    )
+    return ResolvedDeploymentComponents(
+        program=program,
+        strategy=strategy,
+        strategy_controls=controls,
+        risk_profile=risk,
+        execution_style=execution,
+        universe=universe,
+    )
+
+
+def _bars_5m_only() -> list[NormalizedBar]:
+    ts = datetime(2026, 1, 3, 14, 30, tzinfo=timezone.utc)
+    return [
+        NormalizedBar(
+            symbol="SPY",
+            timeframe="5m",
+            timestamp=ts,
+            open=480.0,
+            high=482.0,
+            low=479.0,
+            close=481.0,
+            volume=500_000,
+        ),
+    ]
+
+
+def test_chart_lab_mismatched_timeframe_raises_mismatch_error() -> None:
+    """When the requested timeframe has no feature frame (strategy uses only 5m
+    features but caller requests 1d bars), ChartLabTimeframeMismatchError is
+    raised with structured context."""
+    from backend.app.chart_lab.preview_service import ChartLabTimeframeMismatchError
+
+    components = _components_5m_only()
+    bars = _bars_5m_only()
+
+    with pytest.raises(ChartLabTimeframeMismatchError) as exc_info:
+        ChartLabPreviewService().preview_program(
+            components=components,
+            bars=bars,
+            symbol="SPY",
+            timeframe="1d",
+            start=bars[0].timestamp,
+            end=bars[-1].timestamp + timedelta(minutes=5),
+        )
+
+    err = exc_info.value
+    assert err.requested_timeframe == "1d"
+    assert "5m" in err.required_timeframes

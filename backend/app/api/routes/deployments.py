@@ -12,7 +12,7 @@ from __future__ import annotations
 from typing import Annotated, Any
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 
 from backend.app.deployments import (
     Deployment,
@@ -23,17 +23,21 @@ from backend.app.deployments import (
     DeploymentWriteRequest,
 )
 from backend.app.deployments.models import (
+    DeploymentBindingHistoryListResponse,
     DeploymentLifecycleRequest,
+    DeploymentRebindRequest,
     DeploymentSubscribeRequest,
 )
 
 
-def get_deployment_service() -> DeploymentService:
+def get_deployment_service(request: Request) -> DeploymentService:
     from backend.app.deployments.runtime_service import (
         create_deployment_service_from_environment,
     )
 
-    return create_deployment_service_from_environment()
+    supervisor = getattr(request.app.state, "broker_runtime_supervisor", None)
+    runtime_reloader = supervisor.reload_deployment if supervisor is not None else None
+    return create_deployment_service_from_environment(runtime_reloader=runtime_reloader)
 
 
 def _dependency(default: object) -> object:
@@ -156,6 +160,36 @@ def unsubscribe_account(
     except DeploymentServiceError as exc:
         raise _err(str(exc)) from exc
     return DeploymentResponse(deployment=deployment)
+
+
+@router.post("/{deployment_id}/rebind", response_model=DeploymentResponse)
+def rebind_deployment(
+    deployment_id: UUID, request: DeploymentRebindRequest, service: ServiceDep
+) -> DeploymentResponse:
+    """Hot-swap Controls and/or ExecutionPlan on a running deployment.
+
+    Open positions are unaffected; the runtime reads the new bindings on
+    its next tick for candidate orders only.
+    """
+    try:
+        deployment = service.rebind(deployment_id, request)
+    except DeploymentServiceError as exc:
+        raise _err(str(exc)) from exc
+    return DeploymentResponse(deployment=deployment)
+
+
+@router.get(
+    "/{deployment_id}/binding-history",
+    response_model=DeploymentBindingHistoryListResponse,
+)
+def get_binding_history(
+    deployment_id: UUID, service: ServiceDep
+) -> DeploymentBindingHistoryListResponse:
+    """Return the binding change history for a deployment, newest-first."""
+    try:
+        return service.get_binding_history(deployment_id)
+    except DeploymentServiceError as exc:
+        raise _err(str(exc)) from exc
 
 
 def _annotate_route_methods() -> None:

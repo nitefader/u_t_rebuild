@@ -14,6 +14,7 @@ from backend.app.domain import (
     StrategyVersion,
     UniverseSnapshot,
 )
+from backend.app.domain.strategy_v4 import StrategyVersionV4
 
 from .key import make_feature_key
 from .parser import parse_feature_expression
@@ -87,11 +88,18 @@ class FeaturePlan(BaseModel):
 
 
 class ResolvedDeploymentComponents(BaseModel):
-    """Resolved reusable components selected by a Deployment."""
+    """Resolved reusable components selected by a Deployment.
+
+    Dual-track (Slices 5–11): exactly one of ``strategy`` (legacy) or
+    ``strategy_version_v4`` (v4) must be set. Both may be set simultaneously
+    during the transition window. ``strategy`` becomes optional in Slice 11 to
+    allow v4-only deployments; Slice 12 removes the field entirely.
+    """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    strategy: StrategyVersion
+    strategy: StrategyVersion | None = None
+    strategy_version_v4: StrategyVersionV4 | None = None
     strategy_controls: StrategyControlsVersion
     risk_profile: RiskProfileVersion
     execution_style: ExecutionStyleVersion
@@ -125,9 +133,17 @@ class ResolvedDeploymentComponents(BaseModel):
         return data
 
     @model_validator(mode="after")
+    def require_at_least_one_strategy(self) -> "ResolvedDeploymentComponents":
+        if self.strategy is None and self.strategy_version_v4 is None:
+            raise ValueError(
+                "at least one of strategy (legacy) or strategy_version_v4 must be set"
+            )
+        return self
+
+    @model_validator(mode="after")
     def validate_reusable_component_boundaries(self) -> "ResolvedDeploymentComponents":
         mismatches: list[str] = []
-        if hasattr(self.strategy, "risk_profile_version_id"):
+        if self.strategy is not None and hasattr(self.strategy, "risk_profile_version_id"):
             mismatches.append("strategy_version_risk_profile_version_id")
         if hasattr(self.universe, "risk_profile_version_id"):
             mismatches.append("universe_risk_profile_version_id")
@@ -177,14 +193,73 @@ def _strategy_feature_refs(strategy: StrategyVersion) -> Iterable[str]:
             yield rule.target_candidate_feature
 
 
+def _strategy_v4_feature_refs(strategy: StrategyVersionV4) -> Iterable[str]:
+    """Extract feature requirement keys from a v4 strategy's expressions.
+
+    Delegates to the feature_requirements tuples that the persistence layer
+    pre-computes at save time. These are already deduplicated canonical keys
+    (e.g. "5m.ema(9)", "session.is_open"). If the field is populated, yield
+    it; if empty (e.g. draft in memory), fall back to direct expression
+    validation so planning still works during tests without a full DB round-trip.
+    """
+    if strategy.feature_requirements:
+        yield from strategy.feature_requirements
+    else:
+        # Fallback: re-derive from expression texts. Needed for in-memory test
+        # objects that were not round-tripped through the repository.
+        from backend.app.strategies.expression_api import validate_expression as _validate
+
+        expr_vars = [v.name for v in strategy.variables if v.kind == "expression"]
+        tf_vars = frozenset(v.name for v in strategy.variables if v.kind == "timeframe")
+
+        def _keys_from_text(text: str) -> Iterable[str]:
+            result = _validate(text, expr_vars, timeframe_variable_names=tf_vars)
+            return (r.key for r in result.feature_requirements)
+
+        for var in strategy.variables:
+            if var.kind == "expression":
+                yield from _keys_from_text(var.expression_text)
+        if strategy.entries.long is not None:
+            yield from _keys_from_text(strategy.entries.long.expression_text)
+        if strategy.entries.short is not None:
+            yield from _keys_from_text(strategy.entries.short.expression_text)
+        for stop in strategy.stops:
+            if stop.mode == "expression" and stop.expression_text:
+                yield from _keys_from_text(stop.expression_text)
+
+    # Simple ATR stops/targets are not expression text, but they still need the
+    # deployment-time ATR feature so post-fill protection can price sell legs.
+    for stop in strategy.stops:
+        if stop.mode == "simple" and stop.simple_type == "ATR":
+            yield "atr:length=14[0]"
+    for leg in strategy.legs:
+        if leg.target_type in {"ATR", "trail-ATR"} or leg.on_fill_action.kind == "tighten_atr":
+            yield "atr:length=14[0]"
+
+
 def collect_feature_refs(components: ResolvedDeploymentComponents) -> list[str]:
     refs: list[str] = []
-    refs.extend(_strategy_feature_refs(components.strategy))
+    if components.strategy_version_v4 is not None:
+        refs.extend(_strategy_v4_feature_refs(components.strategy_version_v4))
+    elif components.strategy is not None:
+        refs.extend(_strategy_feature_refs(components.strategy))
     refs.extend(components.strategy_controls.feature_refs)
     refs.extend(components.strategy_controls.regime_filter_refs)
     refs.extend(components.risk_profile.feature_refs)
     refs.extend(components.execution_style.feature_refs)
     return refs
+
+
+def _strategy_version_id_for_plan(components: ResolvedDeploymentComponents) -> UUID:
+    """Return the version UUID to stamp on the FeaturePlan.
+
+    Priority: v4 id > legacy id. During the dual-track window both may be
+    set; v4 wins so the plan is keyed to the v4 version that will be evaluated.
+    """
+    if components.strategy_version_v4 is not None:
+        return components.strategy_version_v4.id
+    assert components.strategy is not None
+    return components.strategy.id
 
 
 def build_feature_plan(
@@ -194,7 +269,7 @@ def build_feature_plan(
     feature_registry: FeatureRegistry = registry,
 ) -> FeaturePlan:
     return _build_plan(
-        strategy_version_id=components.strategy.id,
+        strategy_version_id=_strategy_version_id_for_plan(components),
         feature_refs=collect_feature_refs(components),
         symbols=tuple(sorted({item.symbol.upper() for item in components.universe.symbols})),
         default_timeframe=components.strategy_controls.timeframe,

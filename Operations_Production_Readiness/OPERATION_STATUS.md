@@ -1,6 +1,14 @@
 # Operations Production Readiness Status
 
-Last updated: 2026-04-30 10:30:00 -04:00
+Last updated: 2026-05-01 22:42:00 -04:00
+
+## Micro-update · 2026-05-01 — Compose v4 save/hover/var chips
+
+Save path: Compose maps **422 `detail`** validation arrays into inline messages; Monaco shows **validator errors on hover** over squiggles; variable chips avoid **TF/value duplication**. LEDGER **2026-05-01 22:42**. Verification: **vitest** VariablesStrip + StrategyComposeV4.
+
+## Micro-update · 2026-05-01 — Strategy Compose v4 timeframe variables
+
+Shipped timeframe-typed strategy variables (`kind=timeframe` + canonical TF literal) for use as `sig_tf.<feature>` in entries/stops; SQLite `strategy_variables_v4.kind` with idempotent migration; validate endpoint `timeframe_variables`. Cross-boundary LEDGER 2026-05-01 12:35. Verification: pytest strategies/expression + strategies_v4 302; vitest VariablesStrip/Monaco/Stops/StrategyComposeV4 49.
 
 ## Active Slice — Bracket Execution Program (operator override end-to-end)
 

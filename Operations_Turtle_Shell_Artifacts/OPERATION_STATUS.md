@@ -1,6 +1,6 @@
 # Operation Turtle Shell Status
 
-Last updated: 2026-04-29 16:34:21 -04:00
+Last updated: 2026-05-01 17:24:15 -04:00
 
 ## Date And Time Syntax
 
@@ -26,17 +26,17 @@ drawer). It does not add trading, broker submit, or a second runtime root.
 
 ## Executive Briefing
 
-Work session status: handoff_ready
+Work session status: completed
 
-Agent role: Claude - Slice B Backend (Governor Wiring — AccountRiskPlanMap + horizon rejection rule)
+Agent role: Codex - smoke-test stabilization
 
-Started at: 2026-04-29 20:00:00 -04:00
+Started at: 2026-05-01 13:00:00 -04:00
 
-Last heartbeat: 2026-04-29 21:00:00 -04:00
+Last heartbeat: 2026-05-01 15:22:00 -04:00
 
-Ended at: 2026-04-29 21:00:00 -04:00
+Ended at: 2026-05-01 15:22:00 -04:00
 
-Completed: All 8 Slice B backend deliverables shipped and verified. Backend test suite: 1475 passed (+42 from 1433 baseline). No blockers.
+Completed: Green smoke stabilized for `Smoke 1m RedCandle TQQQ Paper 2`. Fixed the stale BrokerSync gate by reconciling once before rejecting OPEN orders, wired account-trading to a SQLite order ledger, routed Alpaca broker calls by target Account credentials, fixed supervisor deactivation so stopped deployments clear runtime state/hub subscriptions, fixed the rebind UI to submit saved version ids instead of parent ids, fixed v4 ATR stop/target protection for future ATR-protected entries, fixed Operations order-source labeling so SignalPlan-originated buys no longer render as manual, and added a startup recovery fallback for old v4 ATR SignalPlans that have the stop multiple in the Deployment component but not the persisted SignalPlan stop rule.
 
 Operator urgency:
 
@@ -54,15 +54,15 @@ briefing at start, heartbeat, and handoff.
 
 ## Current Phase
 
-Slice B backend (Governor Wiring) complete. All leases released. Handoff ready for Slice B frontend agent.
+Smoke-test stabilization complete; backend runtime remains in doctrine-aligned account-trading path.
 
 ## Current Task
 
-None — handoff_ready. Slice B backend closed 2026-04-29 21:00:00 -04:00.
+Modern core cleanup complete. Active order creation is now SignalPlan or manual operator only; legacy Program/ExecutionIntent order creation raises. Local API is restarted on `127.0.0.1:8001`. Paper2 Operations read is healthy; current read shows no TQQQ position to protect, only accepted TQQQ buy orders. No manual protective order was placed.
 
 ## Current Owner
 
-None (Slice B backend leases released)
+Codex
 
 ## Reviewers
 
@@ -72,6 +72,55 @@ None (Slice B backend leases released)
 - Codex doctrine reviewer
 
 ## Latest Completed Action
+
+Modern core Program-lineage cleanup:
+
+- Completed at: 2026-05-01 17:24:15 -04:00
+- Fix: removed Program lineage from the active order/control/governor/persistence core. SignalPlan and manual operator orders are the only supported order creation paths; legacy ExecutionIntent/Program order creation raises.
+- Fix: client-order parsing no longer creates/reads Program ids; `InternalOrder` no longer has a Program field/column; Governor projected state no longer emits Program lineage.
+- Fix: stale order JSON extras are ignored on load without mutating DB payloads, so old local rows do not crash BrokerSync after the modern model change.
+- Guardrail: `test_turtle_shell_architecture_guardrails.py` now blocks Program lineage from the modern core paths.
+- Live read: API restarted on `127.0.0.1:8001`; Paper2 Operations read is healthy. Current Paper2 read shows a SPY position with unknown lineage and accepted TQQQ buy orders, but no visible TQQQ position to protect tonight.
+- Verification: `python -m pytest backend/tests/unit -q` -> 2247 passed, 6 warnings; focused guardrail/stale-payload checks passed.
+
+Startup protection fallback:
+
+- Completed at: 2026-05-01 15:22:00 -04:00
+- Fix: when an old v4 SignalPlan persisted `stop.type="atr"` without a stop rule, startup recovery can recover the ATR multiple from the Deployment's current v4 component in memory before passing the SignalPlan to `ProtectiveOrderPlacer`.
+- Live result: existing Paper2 TQQQ position still has `protection_status=unknown`, `protective_order_count=0`; current old SignalPlans also lack ATR in `feature_snapshot`, so runtime emitted `protection_naked/no_legs_from_intent` instead of placing guessed prices.
+- Verification: `pytest backend/tests/unit/runtime -q` -> 104 passed; focused startup recovery regressions passed.
+
+Operations source-label fix:
+
+- Completed at: 2026-05-01 15:04:15 -04:00
+- Cause: `/api/v1/broker-accounts/{account_id}/orders` returns the account order ledger, but `OperationsLedger` hardcoded every row from that endpoint as `source: "manual"`.
+- Fix: backend `ManualOrderResponse` now exposes `origin` and normalized `source`; frontend renders source labels from the order itself (`SignalPlan`, `Manual`, `Broker`, etc.).
+- Live verification: Paper2 TQQQ rows now return `origin=signal_plan`, `source=signal_plan` from `127.0.0.1:8001`.
+- Verification: `pytest backend/tests/integration/test_manual_trade_loop_e2e.py -q` -> 19 passed; `npm.cmd exec vitest run src/routes/Operations.test.tsx -- --reporter verbose` -> 6 passed; `npm.cmd run typecheck` clean.
+
+Smoke-test stabilization:
+
+- Completed at: 2026-05-01 13:44:00 -04:00
+- Deployment binding verified: `Smoke 1m RedCandle TQQQ Paper 2`, active during smoke and stopped after evidence, StrategyControls version `6a5e4203-3c39-4bfd-871b-34883d6f7384`, ExecutionPlan version `d2b8395d-994a-4564-8daa-1c36a04117fb`, Strategy v4 version `6ed59c1c-5e51-4b7c-bc00-df1ceceeeb71`, subscribed Account `f584c3a9-92af-4a16-a545-9848949789f0`.
+- Fixed `OrderManager` stale-gate race: stale OPEN checks now call `BrokerSyncService.reconcile(account_id)` once and re-check freshness before rejecting; failures/still-stale states remain blocked.
+- Fixed account-trading composition: runtime `OrderManager` now uses `SQLiteOrderLedger`; runtime Alpaca adapter calls route by `order.account_id` / `account_id` so Paper2 orders submit with Paper2 credentials.
+- Fixed supervisor deactivation: reload for a now-inactive deployment stops the runtime state and unregisters the hub when no symbols remain. After smoke evidence, the live deployment was stopped and Operations shows `status=stopped`, `is_running=false`.
+- Fixed rebind UI parent-id bug: StrategyControls and ExecutionPlan list summaries now include `head_version_id`; `RebindDeploymentDrawer` posts those saved version ids, not `strategy_controls_id` / `execution_plan_id` parent ids.
+- Fixed ATR protection gap: simple v4 ATR stops/targets add `atr:length=14[0]` to deployment-time feature planning; SignalPlanBuilderV4 emits `atr:<multiple>` rules and waits until ATR is available; ProtectiveOrderPlacer converts ATR multiples into concrete post-fill stop/target child prices.
+- Live green evidence: latest SignalPlan `931fbb0d-c6ab-4679-8f72-4383ff6b1187`, evaluation `99d54f37-84b9-4de3-930a-c8906592fae1`, Governor decision `73b283a0-ad2a-4a13-90a4-5896c114ed89`, internal order `70625d6f-1ec7-4bd5-84c1-a46fc32d6ef6`, Alpaca broker order `c9ed2261-2a9c-4487-8751-f206af38ee62` filled at 65.64 on Paper2, BrokerSync position snapshot for TQQQ persisted at 2026-05-01T17:24:21Z.
+- Verification: `python -m pytest backend/tests/unit/orders backend/tests/unit/runtime backend/tests/unit/deployments backend/tests/unit/pipeline/test_runtime_orchestrator.py backend/tests/unit/api/test_server_startup.py -q` -> 261 passed, 6 warnings.
+- Additional rebind-form verification: `python -m pytest backend/tests/unit/strategy_controls backend/tests/unit/execution_plans backend/tests/unit/deployments/test_deployment_service.py -q` -> 105 passed, 1 warning; `npx.cmd vitest run src/routes/RebindDeploymentDrawer.test.tsx` -> 7 passed.
+- Additional ATR-protection verification: focused 27 passed; `python -m pytest backend/tests/unit/orders backend/tests/unit/runtime backend/tests/unit/deployments backend/tests/unit/pipeline/test_runtime_orchestrator.py backend/tests/unit/pipeline/test_runtime_orchestrator_post_fill_bracket.py backend/tests/unit/features/test_feature_planner.py backend/tests/unit/strategies_v4/test_strategy_v4_service.py backend/tests/unit/decision/test_signal_plan_builder_v4.py -q` -> 311 passed, 2 warnings.
+- Known cleanup note: a pre-fix smoke order submitted to Paper1 because the old process used first-account credentials. The account-scoped adapter prevents recurrence; no manual cleanup order was placed.
+
+Operations Decision timelines wiring:
+
+- Completed at: 2026-05-01 12:43:04 -04:00
+- Backend: added persisted `signal_plans` read model; RuntimeOrchestrator persists emitted SignalPlans best-effort and emits `signal_plan_persist_failed` on read-model write failure.
+- API: added `GET /api/v1/operations/signal-plans` and `GET /api/v1/operations/governor-decisions`; kept account evaluations on existing `GET /api/v1/operations/evaluations`.
+- Frontend: `OperationsTimelines` and `Recent Governor decisions` consume live timeline envelopes instead of 404-awaiting placeholders.
+- Verification: focused backend tests 64 passed; orchestrator persistence tests 8 passed; Operations frontend test 5 passed; `npm.cmd run build` passed with Vite chunk warning only; `npm.cmd run lint:names` clean.
+- Doctrine: SignalPlans remain Deployment-owned and account-neutral; Governor decisions are projected from AccountSignalPlanEvaluation rows; no BrokerAdapter, BrokerSync truth, order creation, or Account state mutation was added to Operations.
 
 Slice B backend — Governor Wiring (AccountRiskPlanMap + horizon rejection rule):
 

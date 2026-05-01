@@ -147,6 +147,13 @@ def test_bad_char_position():
     assert err.col == 5
 
 
+def test_single_equals_raises_with_hint():
+    with pytest.raises(ParseError) as exc_info:
+        tokenize("5m.ema(9) =")
+    err = exc_info.value
+    assert "did you mean '=='" in err.message
+
+
 # ---------------------------------------------------------------------------
 # EOF sentinel
 # ---------------------------------------------------------------------------

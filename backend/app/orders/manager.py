@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from collections import defaultdict
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 from uuid import UUID, uuid4
@@ -9,11 +8,10 @@ if TYPE_CHECKING:
     from .protective_placer import ProtectivePlacementPlan
 
 from backend.app.control_plane.service import CancellationScope, ControlPlane
-from backend.app.domain import CandidateSide, IntentType, OrderType, TimeInForce
+from backend.app.domain import CandidateSide, OrderType, TimeInForce
 from backend.app.domain._base import utc_now
 from backend.app.control_plane.client_order_id import (
     build_manual_client_order_id,
-    build_program_client_order_id,
     build_signal_plan_client_order_id,
 )
 from backend.app.domain import (
@@ -31,6 +29,8 @@ from .models import InternalOrder, InternalOrderIntent, InternalOrderStatus, Ord
 
 
 class OrderManager:
+    _NATIVE_BRACKET_PRICE_TOLERANCE = 1e-6
+
     _TERMINAL_STATUSES = {
         InternalOrderStatus.FILLED,
         InternalOrderStatus.CANCELED,
@@ -75,7 +75,6 @@ class OrderManager:
         control_plane: ControlPlane | None = None,
     ) -> None:
         self._ledger = ledger or OrderLedger()
-        self._sequence_by_attribution: dict[tuple[UUID, UUID, UUID, InternalOrderIntent], int] = defaultdict(int)
         self._broker_adapter = broker_adapter
         self._broker_sync = broker_sync
         self._broker_sync_service = broker_sync_service
@@ -109,43 +108,10 @@ class OrderManager:
         execution_intent,
         order_intent: InternalOrderIntent | str | None = None,
     ) -> InternalOrder:
-        if not execution_intent.governor_approved:
-            raise OrderManagerError("execution intent is not approved by Portfolio Governor")
-        if self._control_plane.system_recovery_active:
-            raise OrderManagerError("system recovery is active; new order creation is blocked")
-        intent = self._resolve_order_intent(execution_intent, order_intent)
-        self._enforce_broker_sync_freshness(account_id=account_id, intent=intent)
-        sequence = self._next_sequence(
-            account_id=account_id,
-            deployment_id=execution_intent.deployment_id,
-            program_id=execution_intent.program_version_id,
-            intent=intent,
+        raise OrderManagerError(
+            "legacy ExecutionIntent/Program order creation has been removed; "
+            "use create_signal_plan_order or create_manual_order"
         )
-        now = utc_now()
-        order = InternalOrder(
-            order_id=uuid4(),
-            client_order_id=build_program_client_order_id(
-                getattr(execution_intent, "program_name", "utos"),
-                execution_intent.deployment_id,
-                intent=intent,
-            ),
-            account_id=account_id,
-            origin=OrderOrigin.PROGRAM,
-            deployment_id=execution_intent.deployment_id,
-            program_id=execution_intent.program_version_id,
-            symbol=execution_intent.symbol.upper(),
-            side=self._side_for_execution_intent(execution_intent=execution_intent, intent=intent),
-            quantity=execution_intent.qty,
-            order_type=execution_intent.order_type,
-            time_in_force=execution_intent.time_in_force,
-            intent=intent,
-            status=InternalOrderStatus.CREATED,
-            created_at=now,
-            updated_at=now,
-            signal_name=execution_intent.signal_name,
-            reason=execution_intent.reason,
-        )
-        return self._ledger.add(order)
 
     def create_manual_order(
         self,
@@ -189,7 +155,6 @@ class OrderManager:
             account_id=account_id,
             origin=OrderOrigin.MANUAL_OPERATOR,
             deployment_id=None,
-            program_id=None,
             symbol=symbol.upper(),
             side=normalized_side,
             quantity=quantity,
@@ -264,7 +229,6 @@ class OrderManager:
             account_id=account_id,
             origin=OrderOrigin.SIGNAL_PLAN,
             deployment_id=signal_plan.deployment_id,
-            program_id=None,
             strategy_id=signal_plan.strategy_id,
             strategy_version_id=signal_plan.strategy_version_id,
             signal_plan_id=signal_plan.signal_plan_id,
@@ -458,7 +422,6 @@ class OrderManager:
                 account_id=parent_order.account_id,
                 origin=OrderOrigin.SIGNAL_PLAN,
                 deployment_id=parent_order.deployment_id,
-                program_id=None,
                 strategy_id=parent_order.strategy_id,
                 strategy_version_id=parent_order.strategy_version_id,
                 signal_plan_id=parent_order.signal_plan_id,
@@ -487,6 +450,159 @@ class OrderManager:
             )
             children.append(self._ledger.add(child))
         return tuple(children)
+
+    def create_protective_oco_order_post_fill(
+        self,
+        *,
+        plan: "ProtectivePlacementPlan",
+        parent_order: InternalOrder,
+    ) -> InternalOrder:
+        """Create one broker-native OCO child order for a two-leg protective slice.
+
+        FOLLOWUP-A (durable P0-3): instead of submitting two independent children
+        and racing sibling cancellation in BrokerSync, emit one native OCO order
+        (limit primary + attached stop_loss) so mutual exclusion is broker-atomic.
+        """
+        if parent_order.order_id != plan.parent_order_id:
+            raise OrderManagerError(
+                "ProtectivePlacementPlan parent_order_id does not match parent_order"
+            )
+        if parent_order.account_id != plan.account_id:
+            raise OrderManagerError(
+                "ProtectivePlacementPlan account_id does not match parent_order"
+            )
+        if parent_order.signal_plan_id != plan.signal_plan_id:
+            raise OrderManagerError(
+                "ProtectivePlacementPlan signal_plan_id does not match parent_order"
+            )
+        if parent_order.origin != OrderOrigin.SIGNAL_PLAN:
+            raise OrderManagerError(
+                "post-fill protective OCO requires a SignalPlan-origin parent"
+            )
+        if len(plan.legs) != 2:
+            raise OrderManagerError(
+                "native post-fill OCO requires exactly two legs (one stop + one target)"
+            )
+        stop_leg = next((leg for leg in plan.legs if leg.stop_price is not None), None)
+        target_leg = next((leg for leg in plan.legs if leg.limit_price is not None), None)
+        if stop_leg is None or target_leg is None:
+            raise OrderManagerError(
+                "native post-fill OCO requires one stop leg and one target leg"
+            )
+        if stop_leg.stop_price is None or target_leg.limit_price is None:
+            raise OrderManagerError(
+                "native post-fill OCO requires stop.stop_price and target.limit_price"
+            )
+        if (
+            parent_order.deployment_id is None
+            or parent_order.strategy_id is None
+            or parent_order.signal_plan_id is None
+            or parent_order.position_lineage_id is None
+            or parent_order.account_evaluation_id is None
+            or parent_order.governor_decision_id is None
+        ):
+            raise OrderManagerError(
+                "parent order is missing lineage required for protective OCO child"
+            )
+        if self._control_plane.system_recovery_active:
+            raise OrderManagerError(
+                "system recovery is active; new protective order creation is blocked"
+            )
+        cumulative_covered_qty = self.cumulative_covered_qty_for_signal_plan(
+            signal_plan_id=plan.signal_plan_id,
+            parent_order_id=parent_order.order_id,
+        )
+        slice_breakpoint = cumulative_covered_qty + plan.covered_qty
+        slice_suffix = f"@{slice_breakpoint:g}"
+        leg_label = f"oco{slice_suffix}"
+        client_order_id = build_signal_plan_client_order_id(
+            parent_order.account_id,
+            parent_order.deployment_id,
+            parent_order.signal_plan_id,
+            intent=InternalOrderIntent.TAKE_PROFIT,
+            position_lineage_id=parent_order.position_lineage_id,
+            leg_label=leg_label,
+        )
+        existing = self._ledger.by_client_order_id(client_order_id)
+        if existing is not None:
+            if existing.account_id != parent_order.account_id:
+                raise OrderManagerError(
+                    "idempotency key collision across accounts on protective OCO leg"
+                )
+            if existing.status not in {
+                InternalOrderStatus.CANCELED,
+                InternalOrderStatus.REJECTED,
+                InternalOrderStatus.FAILED,
+            }:
+                return existing
+            retry_index = self._next_terminal_protective_retry_index(
+                parent_order=parent_order,
+                base_leg_label=leg_label,
+            )
+            leg_label = f"{leg_label}:retry{retry_index}"
+            client_order_id = build_signal_plan_client_order_id(
+                parent_order.account_id,
+                parent_order.deployment_id,
+                parent_order.signal_plan_id,
+                intent=InternalOrderIntent.TAKE_PROFIT,
+                position_lineage_id=parent_order.position_lineage_id,
+                leg_label=leg_label,
+            )
+        now = utc_now()
+        child = InternalOrder(
+            order_id=uuid4(),
+            client_order_id=client_order_id,
+            account_id=parent_order.account_id,
+            origin=OrderOrigin.SIGNAL_PLAN,
+            deployment_id=parent_order.deployment_id,
+            strategy_id=parent_order.strategy_id,
+            strategy_version_id=parent_order.strategy_version_id,
+            signal_plan_id=parent_order.signal_plan_id,
+            opening_signal_plan_id=parent_order.opening_signal_plan_id or parent_order.signal_plan_id,
+            current_signal_plan_id=parent_order.signal_plan_id,
+            position_lineage_id=parent_order.position_lineage_id,
+            account_evaluation_id=parent_order.account_evaluation_id,
+            governor_decision_id=parent_order.governor_decision_id,
+            parent_order_id=parent_order.order_id,
+            order_class="oco",
+            leg_label=leg_label,
+            lifecycle_intent=InternalOrderIntent.TAKE_PROFIT.value,
+            symbol=parent_order.symbol,
+            side=self._exit_side_to_candidate(target_leg.side),
+            quantity=target_leg.quantity,
+            order_type=OrderType.LIMIT,
+            time_in_force=parent_order.time_in_force,
+            limit_price=target_leg.limit_price,
+            intent=InternalOrderIntent.TAKE_PROFIT,
+            bracket_stop_loss_stop_price=stop_leg.stop_price,
+            status=InternalOrderStatus.CREATED,
+            created_at=now,
+            updated_at=now,
+            signal_name=parent_order.signal_name,
+            reason="post_fill_bracket:oco",
+        )
+        return self._ledger.add(child)
+
+    def _next_terminal_protective_retry_index(
+        self,
+        *,
+        parent_order: InternalOrder,
+        base_leg_label: str,
+    ) -> int:
+        retry_existing = [
+            order
+            for order in self._ledger.all()
+            if order.parent_order_id == parent_order.order_id
+            and order.signal_plan_id == parent_order.signal_plan_id
+            and order.intent == InternalOrderIntent.TAKE_PROFIT
+            and (order.leg_label or "").startswith(f"{base_leg_label}:retry")
+            and order.status in {
+                InternalOrderStatus.CANCELED,
+                InternalOrderStatus.REJECTED,
+                InternalOrderStatus.FAILED,
+            }
+        ]
+        return len(retry_existing) + 1
 
     def attach_native_bracket_to_entry(
         self,
@@ -536,11 +652,13 @@ class OrderManager:
         if order.order_class == "bracket":
             same_take_profit = (
                 order.bracket_take_profit_limit_price is not None
-                and abs(order.bracket_take_profit_limit_price - take_profit_limit_price) < 1e-9
+                and abs(order.bracket_take_profit_limit_price - take_profit_limit_price)
+                <= self._NATIVE_BRACKET_PRICE_TOLERANCE
             )
             same_stop_loss = (
                 order.bracket_stop_loss_stop_price is not None
-                and abs(order.bracket_stop_loss_stop_price - stop_loss_stop_price) < 1e-9
+                and abs(order.bracket_stop_loss_stop_price - stop_loss_stop_price)
+                <= self._NATIVE_BRACKET_PRICE_TOLERANCE
             )
             if same_take_profit and same_stop_loss:
                 return order
@@ -596,6 +714,21 @@ class OrderManager:
                 InternalOrderStatus.REJECTED,
                 InternalOrderStatus.FAILED,
             }
+        )
+
+    def has_operator_canceled_protective_child(
+        self,
+        *,
+        signal_plan_id: UUID,
+        parent_order_id: UUID,
+    ) -> bool:
+        return any(
+            o.signal_plan_id == signal_plan_id
+            and o.parent_order_id == parent_order_id
+            and o.intent in self._PROTECTIVE_INTENTS
+            and o.status == InternalOrderStatus.CANCELED
+            and o.cancel_requested_at is not None
+            for o in self._ledger.all()
         )
 
     @staticmethod
@@ -846,56 +979,28 @@ class OrderManager:
         if intent != InternalOrderIntent.OPEN:
             return
         state = self._broker_sync_service.current_sync_state(account_id)
+        if state.is_stale:
+            refreshed_state = self._refresh_broker_sync_freshness(account_id)
+            if refreshed_state is not None:
+                state = refreshed_state
         if not state.is_stale:
             return
         reason = state.stale_reason or "broker_sync_stale"
         raise OrderManagerError(f"broker_sync_stale:{reason}")
 
-    def _resolve_order_intent(
-        self,
-        execution_intent,
-        order_intent: InternalOrderIntent | str | None,
-    ) -> InternalOrderIntent:
-        if order_intent is not None:
-            try:
-                return order_intent if isinstance(order_intent, InternalOrderIntent) else InternalOrderIntent(order_intent)
-            except ValueError as exc:
-                raise OrderManagerError(f"invalid order intent: {order_intent}") from exc
-        if execution_intent.intent_type == IntentType.ENTRY:
-            return InternalOrderIntent.OPEN
-        if execution_intent.intent_type == IntentType.EXIT:
-            return InternalOrderIntent.CLOSE
-        raise OrderManagerError(f"unsupported execution intent type: {execution_intent.intent_type}")
+    def _refresh_broker_sync_freshness(self, account_id: UUID):
+        reconcile = getattr(self._broker_sync_service, "reconcile", None)
+        current_sync_state = getattr(self._broker_sync_service, "current_sync_state", None)
+        if not callable(reconcile) or not callable(current_sync_state):
+            return None
+        try:
+            reconcile(account_id)
+            return current_sync_state(account_id)
+        except Exception:
+            return None
 
     def _position_management_priority(self, intent: InternalOrderIntent) -> int:
         return self._POSITION_MANAGEMENT_PRIORITY.get(intent, 0)
-
-    @staticmethod
-    def _side_for_execution_intent(
-        *,
-        execution_intent,
-        intent: InternalOrderIntent,
-    ) -> CandidateSide:
-        side = execution_intent.side
-        if intent == InternalOrderIntent.OPEN:
-            return side
-        if side == CandidateSide.LONG:
-            return CandidateSide.SHORT
-        if side == CandidateSide.SHORT:
-            return CandidateSide.LONG
-        raise OrderManagerError(f"unsupported execution side: {side}")
-
-    def _next_sequence(
-        self,
-        *,
-        account_id: UUID,
-        deployment_id: UUID,
-        program_id: UUID,
-        intent: InternalOrderIntent,
-    ) -> int:
-        key = (account_id, deployment_id, program_id, intent)
-        self._sequence_by_attribution[key] += 1
-        return self._sequence_by_attribution[key]
 
     def _short(self, value: UUID) -> str:
         return value.hex[:8]

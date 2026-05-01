@@ -20,9 +20,7 @@ import { relativeTime } from "@/lib/format";
  *   - Account evaluations (how each Account decided)
  *   - Governor decisions (final approval gate)
  *
- * All three routes are pending Operation Turtle Shell. Each timeline
- * gracefully reports its awaiting state and goes live the moment the
- * matching route is registered.
+ * All three routes are read-only Operations projections of the runtime spine.
  */
 export function OperationsTimelines(): JSX.Element {
   return (
@@ -81,7 +79,7 @@ function SignalPlanTimeline(): JSX.Element {
       <AwaitingApiOrError
         title="SignalPlan timeline"
         endpoint="GET /api/v1/operations/signal-plans"
-        awaitingMessage="The SignalPlan persistence + read-model is in Operation Turtle Shell's queue. The timeline lights up the moment the route is registered."
+        awaitingMessage="The SignalPlan timeline could not be loaded."
         error={q.error}
         onRetry={() => q.refetch()}
       />
@@ -165,7 +163,7 @@ function EvaluationTimeline(): JSX.Element {
       <AwaitingApiOrError
         title="Account evaluation timeline"
         endpoint="GET /api/v1/operations/evaluations"
-        awaitingMessage="The AccountSignalPlanEvaluation read-model is in Operation Turtle Shell's queue."
+        awaitingMessage="The Account evaluation timeline could not be loaded."
         error={q.error}
         onRetry={() => q.refetch()}
       />
@@ -270,7 +268,7 @@ function GovernorTimeline(): JSX.Element {
       <AwaitingApiOrError
         title="Governor decision timeline"
         endpoint="GET /api/v1/operations/governor-decisions"
-        awaitingMessage="GovernorDecisionTrace persistence + read-model is in Operation Turtle Shell's queue."
+        awaitingMessage="The Governor decision timeline could not be loaded."
         error={q.error}
         onRetry={() => q.refetch()}
       />

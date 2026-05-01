@@ -10,6 +10,7 @@ from backend.app.strategies.expression_engine.ast_nodes import (
     FunctionCall,
     NumberLit,
     TimeframedFeature,
+    TimeframeVarFeature,
     UnaryOp,
     VariableRef,
 )
@@ -400,3 +401,21 @@ def test_parse_error_empty_parens_in_function():
     # But a bare () expression should fail
     with pytest.raises(ParseError):
         parse("()")
+
+
+def test_parse_timeframe_variable_prefix():
+    node = parse("sig_tf.ema(9)", timeframe_variable_names=frozenset({"sig_tf"}))
+    assert isinstance(node, TimeframeVarFeature)
+    assert node.timeframe_variable == "sig_tf"
+    assert node.name == "ema"
+    assert len(node.args) == 1
+
+
+def test_parse_unknown_timeframe_variable_parsed_as_ident_chain():
+    node = parse("sig_tf.ema(9)")
+    assert isinstance(node, FeatureRef)
+
+
+def test_parse_timeframe_var_volume_zero_arg():
+    node = parse("sig_tf.volume", timeframe_variable_names=frozenset({"sig_tf"}))
+    assert isinstance(node, TimeframeVarFeature)

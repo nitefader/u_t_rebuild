@@ -10,14 +10,20 @@ import type { ReactNode } from "react";
  * variants.
  */
 export interface RenderRouteOptions {
-  /** The route to mount. Defaults to `/`. */
+  /** The route pattern for the primary route (e.g. `/deployments/:id`). Defaults to `/`. */
   path?: string;
+  /**
+   * The actual URL to navigate to in the MemoryRouter (e.g. `/deployments/abc-123`).
+   * When omitted, defaults to `path`. Use this when `path` contains dynamic segments.
+   */
+  initialPath?: string;
   /** Extra `<Route>` elements (e.g. accept dynamic segments). */
   extraRoutes?: ReactNode;
 }
 
 export function renderRoute(element: ReactNode, options: RenderRouteOptions = {}): RenderResult {
-  const { path = "/", extraRoutes } = options;
+  const { path = "/", initialPath, extraRoutes } = options;
+  const entry = initialPath ?? path;
   const queryClient = new QueryClient({
     defaultOptions: {
       queries: { retry: false, gcTime: 0 },
@@ -26,7 +32,7 @@ export function renderRoute(element: ReactNode, options: RenderRouteOptions = {}
   });
   return render(
     <QueryClientProvider client={queryClient}>
-      <MemoryRouter initialEntries={[path]}>
+      <MemoryRouter initialEntries={[entry]}>
         <Routes>
           <Route path={path} element={element} />
           {extraRoutes}
@@ -57,7 +63,20 @@ export function installFetchMock(routes: MockRoute[]): () => void {
           ? input.toString()
           : (input as Request).url;
     const method = (init?.method ?? (typeof input === "object" && "method" in input ? (input as Request).method : "GET")).toUpperCase();
-    const matched = routes.find((r) => {
+    // Sort by specificity so that more-specific patterns win over broader ones.
+    // Regex patterns always beat plain strings. Among strings, longer beats shorter.
+    // This ensures "/api/v1/strategies/v4/" is preferred over "/api/v1/strategies"
+    // and regex patterns like /\/api\/v1\/watchlists\/some-id$/ beat "/api/v1/watchlists".
+    const sorted = [...routes].sort((a, b) => {
+      const laIsRegex = typeof a.url !== "string";
+      const lbIsRegex = typeof b.url !== "string";
+      if (laIsRegex && !lbIsRegex) return -1; // regex before string
+      if (!laIsRegex && lbIsRegex) return 1;  // string after regex
+      const la = typeof a.url === "string" ? a.url.length : 0;
+      const lb = typeof b.url === "string" ? b.url.length : 0;
+      return lb - la; // longer string first
+    });
+    const matched = sorted.find((r) => {
       if (r.method && r.method.toUpperCase() !== method) return false;
       if (typeof r.url === "string") return url.includes(r.url);
       return r.url.test(url);

@@ -48,7 +48,6 @@ class PositionSummary(BaseModel):
 
     account_id: UUID
     deployment_id: UUID
-    program_id: UUID
     symbol: str
     quantity: float
     market_value: float = 0
@@ -60,7 +59,6 @@ class PendingOpenSummary(BaseModel):
 
     account_id: UUID
     deployment_id: UUID
-    program_id: UUID
     symbol: str
     quantity: float = Field(gt=0)
     market_value: float = Field(ge=0)
@@ -111,13 +109,16 @@ class GovernorRequest(BaseModel):
     broker_sync: BrokerSyncFreshness
     portfolio: PortfolioSnapshot
     execution_intent: object | None = None
-    program_id: UUID | None = None
     signal_plan_id: UUID | None = None
     position_lineage_id: UUID | None = None
     order_intent: InternalOrderIntent | None = None
     candidate_market_value: float = Field(default=0, ge=0)
     candidate_open_risk: float = Field(default=0, ge=0)
     daily_state: DailyAccountState | None = None
+    # Reference time for time-based gates (cooldown, etc). Live callers may
+    # omit; replay/backtest MUST pass the bar/signal timestamp so cooldown
+    # measures elapsed market time, not wall-clock.
+    evaluated_at: datetime | None = None
 
     @model_validator(mode="before")
     @classmethod
@@ -132,8 +133,6 @@ class GovernorRequest(BaseModel):
             derived["deployment_id"] = intent.deployment_id
         if "symbol" not in derived and hasattr(intent, "symbol"):
             derived["symbol"] = intent.symbol
-        if "program_id" not in derived and hasattr(intent, "program_version_id"):
-            derived["program_id"] = intent.program_version_id
         return derived
 
     @field_validator("symbol")

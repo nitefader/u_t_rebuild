@@ -13,15 +13,26 @@ export const DeploymentSchema = z.object({
   deployment_id: z.string(),
   name: z.string(),
   description: z.string().nullable().optional(),
-  strategy_version_id: z.string(),
+  /**
+   * Legacy FK — kept until Slice 11 cutover. Optional for v4-only rows.
+   */
+  strategy_version_id: z.string().nullable().optional(),
+  /**
+   * v4 FK — set by Slice 9+ deployments that bind a StrategyVersionV4.
+   */
+  strategy_version_v4_id: z.string().nullable().optional(),
+  strategy_controls_version_id: z.string().nullable().optional(),
+  execution_plan_version_id: z.string().nullable().optional(),
+  risk_plan_version_id: z.string().nullable().optional(),
   watchlist_ids: z.array(z.string()).default([]),
   subscribed_account_ids: z.array(z.string()).default([]),
   lifecycle_status: DeploymentLifecycleStatusSchema,
   runtime_overrides: z.record(z.unknown()).default({}),
   /**
-   * Risk horizon declared by this Deployment (Slice B).
-   * Null = fall back to StrategyControls.trading_horizon.
-   * Doctrine: Deployment chooses horizon; Account chooses RiskPlan; Governor enforces.
+   * Risk horizon declared by this Deployment (Slice 8.7).
+   * Deployment is the sole source of horizon; StrategyControls does not carry
+   * a trading_horizon field. Doctrine: Deployment chooses horizon; Account
+   * chooses RiskPlan; Governor enforces.
    */
   risk_horizon: TradingHorizonSchema.nullable().optional(),
   created_at: z.string(),
@@ -44,10 +55,43 @@ export type DeploymentListResponse = z.infer<typeof DeploymentListResponseSchema
 export const DeploymentWriteRequestSchema = z.object({
   name: z.string().min(1).max(120),
   description: z.string().nullable().optional(),
-  strategy_version_id: z.string(),
+  /** Legacy FK — optional for v4-only rows. */
+  strategy_version_id: z.string().nullable().optional(),
+  /** v4 FK — set when binding a StrategyVersionV4. */
+  strategy_version_v4_id: z.string().nullable().optional(),
+  strategy_controls_version_id: z.string().nullable().optional(),
+  execution_plan_version_id: z.string().nullable().optional(),
+  risk_plan_version_id: z.string().nullable().optional(),
   watchlist_ids: z.array(z.string()).default([]),
   subscribed_account_ids: z.array(z.string()).default([]),
   runtime_overrides: z.record(z.unknown()).default({}),
   risk_horizon: TradingHorizonSchema.nullable().optional(),
 });
 export type DeploymentWriteRequest = z.infer<typeof DeploymentWriteRequestSchema>;
+
+export const DeploymentRebindRequestSchema = z.object({
+  strategy_controls_version_id: z.string().nullable().optional(),
+  execution_plan_version_id: z.string().nullable().optional(),
+  effective: z.string().default("now"),
+});
+export type DeploymentRebindRequest = z.infer<typeof DeploymentRebindRequestSchema>;
+
+export const DeploymentBindingHistoryEntrySchema = z.object({
+  entry_id: z.string(),
+  deployment_id: z.string(),
+  timestamp: z.string(),
+  actor: z.string(),
+  before: z.record(z.string().nullable()),
+  after: z.record(z.string().nullable()),
+  effective: z.string(),
+});
+export type DeploymentBindingHistoryEntry = z.infer<
+  typeof DeploymentBindingHistoryEntrySchema
+>;
+
+export const DeploymentBindingHistoryListResponseSchema = z.object({
+  entries: z.array(DeploymentBindingHistoryEntrySchema).default([]),
+});
+export type DeploymentBindingHistoryListResponse = z.infer<
+  typeof DeploymentBindingHistoryListResponseSchema
+>;

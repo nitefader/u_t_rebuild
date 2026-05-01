@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import backend.app.brokers.alpaca as alpaca_module
 import backend.app.market_data.alpaca as market_data_alpaca_module
@@ -38,6 +39,61 @@ class _FakeTradingStream:
     def run(self) -> None: ...
 
     def stop(self) -> None: ...
+
+
+def test_account_scoped_alpaca_adapter_routes_submit_by_order_account(monkeypatch) -> None:
+    from uuid import UUID
+
+    from backend.app.broker_accounts.models import BrokerAccount, BrokerAccountValidationStatus
+    from backend.app.domain import TradingMode
+
+    account_1 = BrokerAccount(
+        id=UUID("11111111-2222-3333-4444-555555555555"),
+        display_name="Paper 1",
+        provider="alpaca",
+        mode=TradingMode.BROKER_PAPER,
+        credentials_ref="paper-1",
+        validation_status=BrokerAccountValidationStatus.VALID,
+    )
+    account_2 = BrokerAccount(
+        id=UUID("66666666-7777-8888-9999-aaaaaaaaaaaa"),
+        display_name="Paper 2",
+        provider="alpaca",
+        mode=TradingMode.BROKER_PAPER,
+        credentials_ref="paper-2",
+        validation_status=BrokerAccountValidationStatus.VALID,
+    )
+
+    class FakeAccountService:
+        def list_broker_accounts(self):  # type: ignore[no-untyped-def]
+            return (account_1, account_2)
+
+        def get_credentials(self, account_id):  # type: ignore[no-untyped-def]
+            return {
+                account_1.id: ("key-1", "secret-1"),
+                account_2.id: ("key-2", "secret-2"),
+            }[account_id]
+
+    class RecordingAlpacaAdapter:
+        constructed: list[tuple[TradingMode, str, str]] = []
+
+        def __init__(self, *, mode, api_key, secret_key):  # type: ignore[no-untyped-def]
+            self.mode = mode
+            self.api_key = api_key
+            self.secret_key = secret_key
+            self.constructed.append((mode, api_key, secret_key))
+
+        def submit_order(self, order):  # type: ignore[no-untyped-def]
+            return {"account_id": order.account_id, "api_key": self.api_key}
+
+    monkeypatch.setattr(account_trading_entrypoint, "AlpacaBrokerAdapter", RecordingAlpacaAdapter)
+
+    adapter = account_trading_entrypoint.AccountScopedAlpacaBrokerAdapter(FakeAccountService())
+    result = adapter.submit_order(SimpleNamespace(account_id=account_2.id))
+
+    assert result == {"account_id": account_2.id, "api_key": "key-2"}
+    assert RecordingAlpacaAdapter.constructed == [(TradingMode.BROKER_PAPER, "key-2", "secret-2")]
+    assert adapter.mode_for_account(account_2.id) == TradingMode.BROKER_PAPER
 
 
 def _fake_market_data_hub():
@@ -105,6 +161,7 @@ def test_run_account_trading_with_no_active_deployments_returns_idle_supervisor(
     tmp_path: Path, monkeypatch
 ) -> None:
     monkeypatch.setattr(alpaca_module, "TradingClient", _FakeTradingClient)
+    monkeypatch.setattr(alpaca_module, "TradingStream", _FakeTradingStream)
     monkeypatch.setattr(market_data_alpaca_module, "StockDataStream", _FakeStockDataStream)
 
     sqlite_path = tmp_path / "empty.sqlite"
@@ -118,6 +175,13 @@ def test_run_account_trading_with_no_active_deployments_returns_idle_supervisor(
         assert supervisor.is_running is True
         assert supervisor.active_deployment_ids == ()
         assert hub.subscribed_symbols == ()
+        from backend.app.persistence import SQLiteOrderLedger
+
+        assert isinstance(supervisor._account_trading._order_manager.ledger, SQLiteOrderLedger)
+        assert isinstance(
+            supervisor._account_trading._startup_warmup_bars_source,
+            account_trading_entrypoint.RuntimeHistoricalWarmupBarsSource,
+        )
     finally:
         supervisor.stop()
         hub.stop()
@@ -408,3 +472,83 @@ def test_factory_is_called_per_invocation_not_cached(tmp_path) -> None:  # type:
 
     second = factory(account_id)
     assert second.equity == 50_000.0
+
+
+def test_runtime_historical_warmup_source_fetches_alpaca_recent_window_and_returns_sorted_tail(
+    tmp_path, monkeypatch
+) -> None:
+    from datetime import datetime, timedelta, timezone
+
+    from backend.app.data_center import ingest_service as ingest_module
+    from backend.app.features import NormalizedBar
+    from backend.app.persistence import SQLiteRuntimeStore
+
+    fixed_now = datetime(2026, 5, 1, 15, 0, tzinfo=timezone.utc)
+    runtime_store = SQLiteRuntimeStore(tmp_path / "warmup.sqlite")
+    source_sentinel = object()
+    captured: dict[str, object] = {}
+
+    def _bar(symbol: str, timeframe: str, minutes_ago: int) -> NormalizedBar:
+        return NormalizedBar(
+            symbol=symbol,
+            timeframe=timeframe,
+            timestamp=fixed_now - timedelta(minutes=minutes_ago),
+            open=100.0,
+            high=101.0,
+            low=99.0,
+            close=100.5,
+            volume=1_000.0,
+        )
+
+    bars = (
+        _bar("TQQQ", "5m", 25),
+        _bar("SPY", "5m", 5),
+        _bar("TQQQ", "5m", 15),
+        _bar("TQQQ", "1m", 10),
+        _bar("TQQQ", "5m", 35),
+        _bar("TQQQ", "5m", 20),
+    )
+
+    def fake_source_from_runtime(store):
+        captured["source_store"] = store
+        return source_sentinel
+
+    class FakeHistoricalBarIngestService:
+        def __init__(self, *, store, sources):  # type: ignore[no-untyped-def]
+            captured["service_store"] = store
+            captured["sources"] = sources
+
+        def ensure_bars(self, request):  # type: ignore[no-untyped-def]
+            captured["request"] = request
+            return SimpleNamespace(bars=bars)
+
+    monkeypatch.setattr(account_trading_entrypoint, "utc_now", lambda: fixed_now)
+    monkeypatch.setattr(
+        ingest_module,
+        "alpaca_bars_source_from_runtime",
+        fake_source_from_runtime,
+    )
+    monkeypatch.setattr(
+        ingest_module,
+        "HistoricalBarIngestService",
+        FakeHistoricalBarIngestService,
+    )
+
+    warmup_source = account_trading_entrypoint.RuntimeHistoricalWarmupBarsSource(runtime_store)
+    result = warmup_source(SimpleNamespace(), "tqqq", "5m", 3)
+
+    request = captured["request"]
+    assert captured["source_store"] is runtime_store
+    assert captured["service_store"] is runtime_store
+    assert captured["sources"] == {"alpaca": source_sentinel}
+    assert request.provider == "alpaca"
+    assert request.symbol == "tqqq"
+    assert request.timeframe == "5m"
+    assert request.end == fixed_now
+    assert request.start == fixed_now - timedelta(days=7)
+    assert [bar.timestamp for bar in result] == [
+        fixed_now - timedelta(minutes=25),
+        fixed_now - timedelta(minutes=20),
+        fixed_now - timedelta(minutes=15),
+    ]
+    assert [bar.symbol for bar in result] == ["TQQQ", "TQQQ", "TQQQ"]

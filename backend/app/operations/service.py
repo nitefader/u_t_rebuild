@@ -12,6 +12,7 @@ from backend.app.domain import (
     AccountSignalPlanEvaluation,
     GovernorDecisionStatus,
     GovernorDecisionTrace,
+    SignalPlan,
 )
 from backend.app.governor.models import GovernorDecision, GovernorPolicy
 from backend.app.orders.ledger import OrderLedger
@@ -102,7 +103,7 @@ class OperationsCenterService:
             blocked_deployments=tuple(summary for summary in deployments if summary.status == RuntimeStatus.BLOCKED_RECOVERY),
             open_orders_count=sum(account.open_orders_count for account in broker_accounts),
             open_positions_count=sum(1 for position in positions if position.quantity != 0),
-            latest_governor_decisions=self._latest_governor_decisions,
+            latest_governor_decisions=self._latest_governor_decisions_for_overview(),
             latest_broker_sync_timestamp=self._latest_broker_sync_timestamp(sync_states),
             latest_runtime_event_timestamp=self._latest_event_timestamp(self._latest_pipeline_events),
             research_evidence_summary=self._research_evidence_summary(),
@@ -140,18 +141,17 @@ class OperationsCenterService:
         positions: tuple[BrokerPositionSnapshot, ...],
         orders: tuple[InternalOrder, ...],
     ) -> tuple[OperatorPositionView, ...]:
-        """Compute operator-visible protection_status per position.
+        """Compute operator-visible protection_status + coverage per position.
 
         T-5 of the Strategy-to-Broker Bracket Execution Program. Joins
         the position snapshot's ``opening_signal_plan_id`` against the
         InternalOrder ledger to count active protective stop children
         for that lineage:
 
-        - count > 0 of open STOP_LOSS / STOP / TRAIL children => ``protected``
-        - entry filled but zero open stop children                => ``naked``
+        - live protective qty / position qty == 1.0               => ``protected``
+        - live protective qty / position qty in (0, 1)            => ``pending_protection``
+        - entry filled but zero live protective children          => ``naked``
         - entry not filled / position has no signal plan lineage  => ``unknown``
-        - position has lineage and entry filled, protective child exists
-          but in CREATED / SUBMITTED state (not yet ACCEPTED)      => ``pending_protection``
         """
 
         from backend.app.orders.models import InternalOrderIntent, InternalOrderStatus
@@ -160,6 +160,10 @@ class OperationsCenterService:
             InternalOrderIntent.STOP_LOSS,
             InternalOrderIntent.STOP,
             InternalOrderIntent.TRAIL,
+            InternalOrderIntent.TAKE_PROFIT,
+            InternalOrderIntent.TARGET,
+            InternalOrderIntent.RUNNER,
+            InternalOrderIntent.SCALE,
         }
         active_statuses = {
             InternalOrderStatus.ACCEPTED,
@@ -178,6 +182,8 @@ class OperationsCenterService:
                         snapshot=position,
                         protection_status="unknown",
                         protective_order_count=0,
+                        protection_coverage_pct=0.0,
+                        warnings=(),
                     )
                 )
                 continue
@@ -188,6 +194,8 @@ class OperationsCenterService:
                         snapshot=position,
                         protection_status="unknown",
                         protective_order_count=0,
+                        protection_coverage_pct=0.0,
+                        warnings=(),
                     )
                 )
                 continue
@@ -197,20 +205,33 @@ class OperationsCenterService:
                 and order.status in {InternalOrderStatus.FILLED, InternalOrderStatus.PARTIALLY_FILLED}
                 for order in orders
             )
-            stop_children = [
+            protective_children = [
                 order
                 for order in orders
                 if order.opening_signal_plan_id == opening_id
                 and order.intent in protective_intents
                 and order.parent_order_id is not None
             ]
-            active_stops = [order for order in stop_children if order.status in active_statuses]
-            pending_stops = [order for order in stop_children if order.status in pending_statuses]
-            if active_stops:
+            active_children = [order for order in protective_children if order.status in active_statuses]
+            pending_children = [order for order in protective_children if order.status in pending_statuses]
+            has_native_bracket_parent = any(
+                order.opening_signal_plan_id == opening_id
+                and order.intent == InternalOrderIntent.OPEN
+                and order.order_class == "bracket"
+                for order in orders
+            )
+            warnings: tuple[str, ...] = ()
+            if has_native_bracket_parent and protective_children:
+                warnings = ("double_protected",)
+            protective_qty = sum(order.quantity for order in active_children)
+            coverage_pct = 0.0
+            if position.qty:
+                coverage_pct = max(0.0, min(protective_qty / abs(position.qty), 1.0))
+            if coverage_pct >= 1.0:
                 status = "protected"
             elif not entry_filled:
                 status = "unknown"
-            elif pending_stops:
+            elif coverage_pct > 0 or pending_children:
                 status = "pending_protection"
             else:
                 status = "naked"
@@ -218,7 +239,9 @@ class OperationsCenterService:
                 OperatorPositionView(
                     snapshot=position,
                     protection_status=status,
-                    protective_order_count=len(active_stops),
+                    protective_order_count=len(active_children),
+                    protection_coverage_pct=coverage_pct,
+                    warnings=warnings,
                 )
             )
         return tuple(views)
@@ -333,6 +356,61 @@ class OperationsCenterService:
             sorted(
                 evaluations_by_id.values(),
                 key=lambda evaluation: evaluation.evaluated_at or evaluation.created_at,
+                reverse=True,
+            )[:bounded_limit]
+        )
+
+    def list_signal_plans(
+        self,
+        *,
+        account_id: UUID | None = None,
+        deployment_id: UUID | None = None,
+        symbol: str | None = None,
+        limit: int = 100,
+    ) -> tuple[SignalPlan, ...]:
+        """List Deployment-emitted SignalPlans from the runtime read model."""
+
+        bounded_limit = max(1, min(limit, 500))
+        if self._runtime_store is None or not hasattr(self._runtime_store, "list_signal_plans"):
+            return ()
+        return tuple(
+            self._runtime_store.list_signal_plans(
+                account_id=account_id,
+                deployment_id=deployment_id,
+                symbol=symbol,
+                limit=bounded_limit,
+            )
+        )
+
+    def list_governor_decision_traces(
+        self,
+        *,
+        account_id: UUID | None = None,
+        deployment_id: UUID | None = None,
+        signal_plan_id: UUID | None = None,
+        limit: int = 100,
+    ) -> tuple[GovernorDecisionTrace, ...]:
+        """List GovernorDecisionTrace rows projected from persisted evaluations."""
+
+        bounded_limit = max(1, min(limit, 500))
+        scan_limit = 500
+        traces_by_id: dict[UUID, GovernorDecisionTrace] = {}
+        for evaluation in self.list_account_signal_plan_evaluations(
+            account_id=account_id,
+            deployment_id=deployment_id,
+            signal_plan_id=signal_plan_id,
+            limit=scan_limit,
+        ):
+            trace = evaluation.governor_decision
+            if trace is None:
+                continue
+            traces_by_id.setdefault(trace.governor_decision_id, trace)
+            if len(traces_by_id) >= bounded_limit:
+                break
+        return tuple(
+            sorted(
+                traces_by_id.values(),
+                key=lambda trace: trace.evaluated_at,
                 reverse=True,
             )[:bounded_limit]
         )
@@ -724,7 +802,20 @@ class OperationsCenterService:
     def _last_decision_timestamp(self, events: tuple[PipelineEvent | RuntimeEvent, ...]) -> datetime | None:
         return max((event.timestamp for event in events if "decision" in event.event_type.value), default=None)
 
+    def _latest_governor_decisions_for_overview(self) -> tuple[GovernorDecision, ...]:
+        if self._latest_governor_decisions:
+            return self._latest_governor_decisions
+        return tuple(
+            _governor_decision_from_trace(trace)
+            for trace in self.list_governor_decision_traces(limit=10)
+        )
+
     def _decisions_for_deployment(self, deployment_id: UUID) -> tuple[GovernorDecision, ...]:
+        if not self._latest_governor_decisions:
+            return tuple(
+                _governor_decision_from_trace(trace)
+                for trace in self.list_governor_decision_traces(deployment_id=deployment_id, limit=10)
+            )
         matched: list[GovernorDecision] = []
         for decision in self._latest_governor_decisions:
             projected_state = decision.projected_state or {}
@@ -829,6 +920,20 @@ class OperationsCenterService:
 
 def _broker_order_terminal(status: str) -> bool:
     return status in {"filled", "canceled", "rejected", "expired"}
+
+
+def _governor_decision_from_trace(trace: GovernorDecisionTrace) -> GovernorDecision:
+    reason = next(iter(trace.reasons or trace.violations), trace.status.value)
+    rule_id = next(iter(trace.violations or trace.reasons), trace.status.value)
+    projected_state = dict(trace.projected_state or {})
+    projected_state.setdefault("account_id", str(trace.account_id))
+    projected_state.setdefault("signal_plan_id", str(trace.signal_plan_id))
+    return GovernorDecision(
+        approved=trace.approved,
+        reason=reason,
+        rule_id=rule_id,
+        projected_state=projected_state,
+    )
 
 
 def _research_evidence_type_name(evidence: object) -> str:

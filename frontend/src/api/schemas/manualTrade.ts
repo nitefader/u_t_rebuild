@@ -58,6 +58,8 @@ export const ManualOrderResponseSchema = z.object({
   status: InternalOrderStatusSchema,
   intent: InternalOrderIntentSchema,
   submitted_at: z.string(),
+  origin: z.string().optional(),
+  source: z.string().optional(),
   duplicate: z.boolean().default(false),
 });
 export type ManualOrderResponse = z.infer<typeof ManualOrderResponseSchema>;

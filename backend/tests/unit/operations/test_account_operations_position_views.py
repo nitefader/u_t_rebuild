@@ -131,6 +131,8 @@ def test_position_view_marks_protected_when_active_stop_child_exists() -> None:
     assert view.protection_status == "protected"
     assert view.protective_order_count == 1
     assert view.snapshot is position
+    assert view.protection_coverage_pct == 1.0
+    assert view.warnings == ()
 
 
 def test_position_view_marks_naked_when_entry_filled_and_no_stop_children() -> None:
@@ -144,6 +146,8 @@ def test_position_view_marks_naked_when_entry_filled_and_no_stop_children() -> N
     assert len(views) == 1
     assert views[0].protection_status == "naked"
     assert views[0].protective_order_count == 0
+    assert views[0].protection_coverage_pct == 0.0
+    assert views[0].warnings == ()
 
 
 def test_position_view_marks_pending_when_stop_child_only_created() -> None:
@@ -157,6 +161,8 @@ def test_position_view_marks_pending_when_stop_child_only_created() -> None:
 
     assert views[0].protection_status == "pending_protection"
     assert views[0].protective_order_count == 0
+    assert views[0].protection_coverage_pct == 0.0
+    assert views[0].warnings == ()
 
 
 def test_position_view_marks_unknown_when_position_has_no_lineage() -> None:
@@ -166,6 +172,8 @@ def test_position_view_marks_unknown_when_position_has_no_lineage() -> None:
 
     assert views[0].protection_status == "unknown"
     assert views[0].protective_order_count == 0
+    assert views[0].protection_coverage_pct == 0.0
+    assert views[0].warnings == ()
 
 
 def test_position_view_marks_unknown_when_position_qty_is_zero() -> None:
@@ -192,3 +200,97 @@ def test_position_view_marks_unknown_when_entry_not_filled() -> None:
     # rather than naked so the operator doesn't see a false alarm during
     # the BrokerSync refresh window.
     assert views[0].protection_status == "unknown"
+
+
+def test_position_view_marks_pending_when_only_partial_stop_qty_is_live() -> None:
+    opening = uuid4()
+    lineage = uuid4()
+    entry = _entry_order(status=InternalOrderStatus.FILLED, opening_signal_plan_id=opening, position_lineage_id=lineage)
+    partial_stop = _stop_child(
+        parent_order_id=entry.order_id,
+        opening_signal_plan_id=opening,
+        position_lineage_id=lineage,
+        status=InternalOrderStatus.ACCEPTED,
+    )
+    partial_stop = InternalOrder(
+        **{
+            **partial_stop.model_dump(),
+            "quantity": 5,
+        }
+    )
+    position = _position(opening_signal_plan_id=opening, position_lineage_id=lineage, qty=10)
+
+    views = OperationsCenterService._position_views(positions=(position,), orders=(entry, partial_stop))
+
+    assert views[0].protection_status == "pending_protection"
+    assert views[0].protection_coverage_pct == 0.5
+    assert views[0].warnings == ()
+
+
+def test_position_view_marks_protected_for_target_only_full_qty_runner() -> None:
+    opening = uuid4()
+    lineage = uuid4()
+    entry = _entry_order(status=InternalOrderStatus.FILLED, opening_signal_plan_id=opening, position_lineage_id=lineage)
+    target = InternalOrder(
+        order_id=uuid4(),
+        client_order_id=f"tp-{uuid4()}",
+        account_id=ACCOUNT_ID,
+        origin=OrderOrigin.SIGNAL_PLAN,
+        deployment_id=DEPLOYMENT_ID,
+        strategy_id=STRATEGY_ID,
+        strategy_version_id=STRATEGY_VERSION_ID,
+        signal_plan_id=opening,
+        opening_signal_plan_id=opening,
+        current_signal_plan_id=opening,
+        position_lineage_id=lineage,
+        account_evaluation_id=uuid4(),
+        governor_decision_id=uuid4(),
+        parent_order_id=entry.order_id,
+        order_class="oco",
+        leg_label="target@10",
+        lifecycle_intent="take_profit",
+        symbol="SPY",
+        side=CandidateSide.SHORT,
+        quantity=10,
+        order_type=OrderType.LIMIT,
+        limit_price=110.0,
+        time_in_force=TimeInForce.DAY,
+        intent=InternalOrderIntent.TAKE_PROFIT,
+        status=InternalOrderStatus.ACCEPTED,
+        created_at=NOW,
+        updated_at=NOW,
+    )
+    position = _position(opening_signal_plan_id=opening, position_lineage_id=lineage, qty=10)
+
+    views = OperationsCenterService._position_views(positions=(position,), orders=(entry, target))
+
+    assert views[0].protection_status == "protected"
+    assert views[0].protection_coverage_pct == 1.0
+    assert views[0].warnings == ()
+
+
+def test_position_view_surfaces_double_protected_warning_for_native_plus_children() -> None:
+    opening = uuid4()
+    lineage = uuid4()
+    entry = _entry_order(
+        status=InternalOrderStatus.FILLED,
+        opening_signal_plan_id=opening,
+        position_lineage_id=lineage,
+    )
+    entry = InternalOrder(
+        **{
+            **entry.model_dump(),
+            "order_class": "bracket",
+        }
+    )
+    stop = _stop_child(
+        parent_order_id=entry.order_id,
+        opening_signal_plan_id=opening,
+        position_lineage_id=lineage,
+        status=InternalOrderStatus.ACCEPTED,
+    )
+    position = _position(opening_signal_plan_id=opening, position_lineage_id=lineage, qty=10)
+
+    views = OperationsCenterService._position_views(positions=(position,), orders=(entry, stop))
+
+    assert views[0].warnings == ("double_protected",)

@@ -1,7 +1,6 @@
 """Runtime control-plane safety gates."""
 
 from .client_order_id import (
-    build_program_client_order_id,
     parse_order_deployment_id,
     parse_order_intent,
 )
@@ -33,7 +32,6 @@ __all__ = [
     "ControlPlaneState",
     "DeploymentControlState",
     "KillSwitchEvent",
-    "build_program_client_order_id",
     "hydrate_control_plane",
     "parse_order_deployment_id",
     "parse_order_intent",

@@ -32,7 +32,7 @@ class FakeSmokeAdapter:
     market_is_open = True
     calls: list[str] = []
 
-    def __init__(self) -> None:
+    def __init__(self, *args: object, **kwargs: object) -> None:
         FakeSmokeAdapter.calls.append("AlpacaBrokerAdapter.__init__")
         self.submitted_orders = FakeSmokeAdapter.submitted_orders
 
@@ -58,6 +58,9 @@ class FakeSmokeAdapter:
 
 class FakeReadinessAdapter:
     submit_count = 0
+
+    def __init__(self, *args: object, **kwargs: object) -> None:
+        pass
 
     def submit_order(self, order: InternalOrder) -> BrokerOrderResult:
         _ = order
@@ -105,7 +108,7 @@ class FakeRuntimeAdapter:
     market_is_open = True
     calls: list[str] = []
 
-    def __init__(self) -> None:
+    def __init__(self, *args: object, **kwargs: object) -> None:
         FakeRuntimeAdapter.calls.append("AlpacaBrokerAdapter.__init__")
         self.submitted_orders = FakeRuntimeAdapter.submitted_orders
 

@@ -23,7 +23,6 @@ from backend.app.domain.execution_style import (
 from backend.app.domain.strategy_controls import (
     AllowedDirections,
     StrategyControlsVersion,
-    TradingHorizon,
 )
 from backend.app.execution_plans import ExecutionPlanRepository
 from backend.app.strategies import StrategyService
@@ -61,7 +60,6 @@ def _make_bracket_draft(composer: StrategyComposerService, *, stop_pct: float, t
         version=1,
         name="bracket controls",
         timeframe="5m",
-        trading_horizon=TradingHorizon.INTRADAY,
         allowed_directions=AllowedDirections.LONG,
         cooldown_minutes=cooldown_minutes,
     )
@@ -89,7 +87,6 @@ def test_save_draft_persists_strategy_controls_and_execution_plan(tmp_path: Path
     loaded_plan = plan_repo.load_version(response.execution_plan_version_id)
 
     assert loaded_controls.payload.cooldown_minutes == 15
-    assert loaded_controls.payload.trading_horizon == TradingHorizon.INTRADAY
 
     assert isinstance(loaded_plan.payload.preset, BracketStopTargetPreset)
     assert loaded_plan.payload.preset.stop_pct == 5.0

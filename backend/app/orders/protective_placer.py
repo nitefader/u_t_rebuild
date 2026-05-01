@@ -153,9 +153,9 @@ class ProtectiveOrderPlacer:
         legs: list[ProtectiveLeg] = []
         exit_side = self._exit_side(signal_plan.side)
 
-        stop_pct = self._read_post_fill_pct(
-            signal_plan.stop.rule if signal_plan.stop is not None else None
-        )
+        atr_value = self._atr_value(signal_plan)
+        stop_rule = signal_plan.stop.rule if signal_plan.stop is not None else None
+        stop_pct = self._read_post_fill_pct(stop_rule)
         if stop_pct is not None:
             stop_price = self._stop_price(
                 fill_price=fill_price,
@@ -172,16 +172,44 @@ class ProtectiveOrderPlacer:
                     rule=signal_plan.stop.rule or "",
                 )
             )
+        else:
+            stop_atr_multiple = self._read_atr_multiple(stop_rule)
+            if stop_atr_multiple is not None and atr_value is not None:
+                stop_price = self._atr_stop_price(
+                    fill_price=fill_price,
+                    atr_value=atr_value,
+                    multiple=stop_atr_multiple,
+                    side=signal_plan.side,
+                )
+                legs.append(
+                    ProtectiveLeg(
+                        label="stop",
+                        side=exit_side,
+                        quantity=new_qty,
+                        stop_price=stop_price,
+                        limit_price=None,
+                        rule=stop_rule or "",
+                    )
+                )
 
         for target in signal_plan.targets:
             target_pct = self._read_post_fill_pct(target.rule)
-            if target_pct is None:
-                continue
-            target_price = self._target_price(
-                fill_price=fill_price,
-                target_pct=target_pct,
-                side=signal_plan.side,
-            )
+            if target_pct is not None:
+                target_price = self._target_price(
+                    fill_price=fill_price,
+                    target_pct=target_pct,
+                    side=signal_plan.side,
+                )
+            else:
+                target_atr_multiple = self._read_atr_multiple(target.rule)
+                if target_atr_multiple is None or atr_value is None:
+                    continue
+                target_price = self._atr_target_price(
+                    fill_price=fill_price,
+                    atr_value=atr_value,
+                    multiple=target_atr_multiple,
+                    side=signal_plan.side,
+                )
             target_qty = new_qty * (target.quantity_pct / 100.0)
             if target_qty <= 0:
                 continue
@@ -223,6 +251,36 @@ class ProtectiveOrderPlacer:
         return parse_post_fill_pct(rule)
 
     @staticmethod
+    def _read_atr_multiple(rule: str | None) -> float | None:
+        if not rule:
+            return None
+        prefix, sep, raw = rule.strip().partition(":")
+        if sep != ":" or prefix.lower() != "atr":
+            return None
+        try:
+            value = float(raw)
+        except ValueError:
+            return None
+        return value if value > 0 else None
+
+    @staticmethod
+    def _atr_value(signal_plan: SignalPlan) -> float | None:
+        for key, raw in signal_plan.feature_snapshot.items():
+            key_l = key.lower()
+            if not (
+                key_l.startswith("atr")
+                or ".atr" in key_l
+                or "technical.atr" in key_l
+            ):
+                continue
+            if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+                continue
+            value = float(raw)
+            if value > 0:
+                return value
+        return None
+
+    @staticmethod
     def _exit_side(entry_side: SignalPlanSide) -> str:
         if entry_side == SignalPlanSide.LONG:
             return "sell"
@@ -256,4 +314,26 @@ class ProtectiveOrderPlacer:
             return fill_price - delta
         raise ProtectiveOrderPlacerError(
             f"unsupported side for target computation: {side}"
+        )
+
+    @staticmethod
+    def _atr_stop_price(*, fill_price: float, atr_value: float, multiple: float, side: SignalPlanSide) -> float:
+        delta = atr_value * multiple
+        if side == SignalPlanSide.LONG:
+            return fill_price - delta
+        if side == SignalPlanSide.SHORT:
+            return fill_price + delta
+        raise ProtectiveOrderPlacerError(
+            f"unsupported side for ATR stop computation: {side}"
+        )
+
+    @staticmethod
+    def _atr_target_price(*, fill_price: float, atr_value: float, multiple: float, side: SignalPlanSide) -> float:
+        delta = atr_value * multiple
+        if side == SignalPlanSide.LONG:
+            return fill_price + delta
+        if side == SignalPlanSide.SHORT:
+            return fill_price - delta
+        raise ProtectiveOrderPlacerError(
+            f"unsupported side for ATR target computation: {side}"
         )

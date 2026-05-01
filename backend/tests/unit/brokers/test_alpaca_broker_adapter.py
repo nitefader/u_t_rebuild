@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import inspect
 import re
-from datetime import datetime, timezone
 from enum import Enum
 from uuid import UUID, uuid4
 
@@ -18,8 +17,7 @@ from backend.app.brokers import (
 )
 from backend.app.domain import CandidateSide, OrderType, TimeInForce, TradingMode
 from backend.app.domain._base import utc_now
-from backend.app.orders import InternalOrder, InternalOrderIntent, InternalOrderStatus
-from backend.tests.fixtures.legacy_intent import LegacyExecutionIntent as ExecutionIntent
+from backend.app.orders import InternalOrder, InternalOrderIntent, InternalOrderStatus, OrderOrigin
 import backend.app.brokers.alpaca as alpaca_module
 
 try:
@@ -31,7 +29,10 @@ except ImportError:  # pragma: no cover - local fallback when alpaca-py is unava
 
 ACCOUNT_ID = UUID("11111111-2222-3333-4444-555555555555")
 DEPLOYMENT_ID = UUID("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
-PROGRAM_ID = UUID("99999999-8888-7777-6666-555555555555")
+STRATEGY_ID = UUID("22222222-3333-4444-5555-666666666666")
+STRATEGY_VERSION_ID = UUID("33333333-4444-5555-6666-777777777777")
+SIGNAL_PLAN_ID = UUID("44444444-5555-6666-7777-888888888888")
+CLIENT_ORDER_ID = "sigplan-11111111-44444444-open-0000010000"
 
 
 def _order(
@@ -45,10 +46,18 @@ def _order(
     now = utc_now()
     return InternalOrder(
         order_id=uuid4(),
-        client_order_id="utos-11111111-aaaaaaaa-99999999-open-000001",
+        client_order_id=CLIENT_ORDER_ID,
         account_id=ACCOUNT_ID,
+        origin=OrderOrigin.SIGNAL_PLAN,
         deployment_id=DEPLOYMENT_ID,
-        program_id=PROGRAM_ID,
+        strategy_id=STRATEGY_ID,
+        strategy_version_id=STRATEGY_VERSION_ID,
+        signal_plan_id=SIGNAL_PLAN_ID,
+        opening_signal_plan_id=SIGNAL_PLAN_ID,
+        current_signal_plan_id=SIGNAL_PLAN_ID,
+        position_lineage_id=SIGNAL_PLAN_ID,
+        account_evaluation_id=uuid4(),
+        governor_decision_id=uuid4(),
         symbol="SPY",
         side=side,
         quantity=10,
@@ -67,7 +76,7 @@ class FakeTradingClient:
     def __init__(self, response: dict | None = None, *, existing_order: dict | None = None) -> None:
         self.response = response or {
             "id": "alpaca-order-1",
-            "client_order_id": "utos-11111111-aaaaaaaa-99999999-open-000001",
+            "client_order_id": CLIENT_ORDER_ID,
             "status": "new",
             "filled_qty": "0",
             "qty": "10",
@@ -127,7 +136,7 @@ def test_market_order_translation_correct() -> None:
         "side": "buy",
         "type": "market",
         "time_in_force": "day",
-        "client_order_id": "utos-11111111-aaaaaaaa-99999999-open-000001",
+        "client_order_id": CLIENT_ORDER_ID,
     }
 
 
@@ -193,6 +202,8 @@ def test_status_normalization_works() -> None:
     assert adapter.normalize_status("OrderStatus.PENDING_NEW") == BrokerOrderStatus.ACCEPTED
     assert adapter.normalize_status("new") == BrokerOrderStatus.ACCEPTED
     assert adapter.normalize_status("accepted") == BrokerOrderStatus.ACCEPTED
+    assert adapter.normalize_status("held") == BrokerOrderStatus.ACCEPTED
+    assert adapter.normalize_status("stopped") == BrokerOrderStatus.ACCEPTED
     assert adapter.normalize_status("partial_fill") == BrokerOrderStatus.PARTIAL_FILL
     assert adapter.normalize_status("partially_filled") == BrokerOrderStatus.PARTIAL_FILL
     assert adapter.normalize_status("filled") == BrokerOrderStatus.FILLED
@@ -201,7 +212,8 @@ def test_status_normalization_works() -> None:
     assert adapter.normalize_status("expired") == BrokerOrderStatus.EXPIRED
     assert adapter.normalize_status("pending_cancel") == BrokerOrderStatus.PENDING_CANCEL
     assert adapter.normalize_status("pending_replace") == BrokerOrderStatus.REPLACED
-    assert adapter.normalize_status("done_for_day") == BrokerOrderStatus.ACCEPTED
+    assert adapter.normalize_status("done_for_day") == BrokerOrderStatus.DONE_FOR_DAY
+    assert adapter.normalize_status("calculated") == BrokerOrderStatus.DONE_FOR_DAY
 
 
 def test_unknown_status_returns_controlled_failure() -> None:
@@ -345,23 +357,9 @@ def test_open_order_snapshot_normalization_works() -> None:
 
 def test_adapter_cannot_create_internal_orders() -> None:
     adapter = _adapter()
-    intent = ExecutionIntent(
-        deployment_id=DEPLOYMENT_ID,
-        program_version_id=PROGRAM_ID,
-        symbol="SPY",
-        side=CandidateSide.LONG,
-        intent_type="entry",
-        qty=10,
-        order_type=OrderType.MARKET,
-        time_in_force=TimeInForce.DAY,
-        timestamp=datetime(2026, 1, 2, 14, 30, tzinfo=timezone.utc),
-        signal_name="entry",
-        reason="signal_condition_true",
-        governor_approved=True,
-    )
 
     with pytest.raises(AlpacaBrokerError) as exc_info:
-        adapter.submit_order(intent)  # type: ignore[arg-type]
+        adapter.submit_order(object())  # type: ignore[arg-type]
 
     assert exc_info.value.details.code == "invalid_order_boundary"
 
@@ -377,7 +375,7 @@ def test_mocked_submission_uses_trading_client(monkeypatch) -> None:
     assert fake_client.get_order_calls == 1
     assert fake_client.submit_order_calls == 1
     assert isinstance(fake_client.submitted_order_data, FakeOrderRequest)
-    assert fake_client.submitted_order_data.kwargs["client_order_id"] == "utos-11111111-aaaaaaaa-99999999-open-000001"
+    assert fake_client.submitted_order_data.kwargs["client_order_id"] == CLIENT_ORDER_ID
 
 
 def test_mocked_limit_submission_uses_limit_order_request(monkeypatch) -> None:

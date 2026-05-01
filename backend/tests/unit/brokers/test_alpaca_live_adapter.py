@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import inspect
-from datetime import datetime, timezone
 from uuid import UUID, uuid4
 
 import pytest
@@ -9,14 +8,16 @@ import pytest
 from backend.app.brokers import AlpacaBrokerAdapter, AlpacaBrokerError, BrokerOrderStatus, BrokerPositionSide
 from backend.app.domain import CandidateSide, OrderType, TimeInForce
 from backend.app.domain._base import utc_now
-from backend.app.orders import InternalOrder, InternalOrderIntent, InternalOrderStatus
-from backend.tests.fixtures.legacy_intent import LegacyExecutionIntent as ExecutionIntent
+from backend.app.orders import InternalOrder, InternalOrderIntent, InternalOrderStatus, OrderOrigin
 import backend.app.brokers.alpaca as alpaca_module
 
 
 ACCOUNT_ID = UUID("11111111-2222-3333-4444-555555555555")
 DEPLOYMENT_ID = UUID("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
-PROGRAM_ID = UUID("99999999-8888-7777-6666-555555555555")
+STRATEGY_ID = UUID("22222222-3333-4444-5555-666666666666")
+STRATEGY_VERSION_ID = UUID("33333333-4444-5555-6666-777777777777")
+SIGNAL_PLAN_ID = UUID("44444444-5555-6666-7777-888888888888")
+CLIENT_ORDER_ID = "sigplan-11111111-44444444-open-0000010000"
 
 
 class FakeOrderRequest:
@@ -85,7 +86,7 @@ def _alpaca_order(
 ) -> dict:
     return {
         "id": broker_id,
-        "client_order_id": "utos-11111111-aaaaaaaa-99999999-open-000001",
+        "client_order_id": CLIENT_ORDER_ID,
         "symbol": "SPY",
         "side": "buy",
         "type": "market",
@@ -104,10 +105,18 @@ def _order() -> InternalOrder:
     now = utc_now()
     return InternalOrder(
         order_id=uuid4(),
-        client_order_id="utos-11111111-aaaaaaaa-99999999-open-000001",
+        client_order_id=CLIENT_ORDER_ID,
         account_id=ACCOUNT_ID,
+        origin=OrderOrigin.SIGNAL_PLAN,
         deployment_id=DEPLOYMENT_ID,
-        program_id=PROGRAM_ID,
+        strategy_id=STRATEGY_ID,
+        strategy_version_id=STRATEGY_VERSION_ID,
+        signal_plan_id=SIGNAL_PLAN_ID,
+        opening_signal_plan_id=SIGNAL_PLAN_ID,
+        current_signal_plan_id=SIGNAL_PLAN_ID,
+        position_lineage_id=SIGNAL_PLAN_ID,
+        account_evaluation_id=uuid4(),
+        governor_decision_id=uuid4(),
         symbol="SPY",
         side=CandidateSide.LONG,
         quantity=10,
@@ -134,7 +143,7 @@ def test_submit_market_order_success(monkeypatch) -> None:
     assert result.status == BrokerOrderStatus.ACCEPTED
     assert result.broker_order_id == "alpaca-order-1"
     assert client.submit_order_calls == 1
-    assert client.submitted_order_data.kwargs["client_order_id"] == "utos-11111111-aaaaaaaa-99999999-open-000001"
+    assert client.submitted_order_data.kwargs["client_order_id"] == CLIENT_ORDER_ID
     assert client.submitted_order_data.kwargs["symbol"] == "SPY"
     assert client.submitted_order_data.kwargs["qty"] == 10
 
@@ -213,7 +222,7 @@ def test_open_orders_mapping() -> None:
         BrokerOrderStatus.ACCEPTED,
         BrokerOrderStatus.PENDING_CANCEL,
     ]
-    assert open_orders[0].client_order_id == "utos-11111111-aaaaaaaa-99999999-open-000001"
+    assert open_orders[0].client_order_id == CLIENT_ORDER_ID
     assert getattr(client.get_orders_filter.status, "value", client.get_orders_filter.status) == "open"
     assert client.get_orders_filter.limit == 500
     assert client.get_orders_filter.nested is False
@@ -231,19 +240,5 @@ def test_adapter_never_creates_internal_order() -> None:
     source = inspect.getsource(alpaca_module.AlpacaBrokerAdapter)
     assert "InternalOrder(" not in source
 
-    intent = ExecutionIntent(
-        deployment_id=DEPLOYMENT_ID,
-        program_version_id=PROGRAM_ID,
-        symbol="SPY",
-        side=CandidateSide.LONG,
-        intent_type="entry",
-        qty=10,
-        order_type=OrderType.MARKET,
-        time_in_force=TimeInForce.DAY,
-        timestamp=datetime(2026, 1, 2, 14, 30, tzinfo=timezone.utc),
-        signal_name="entry",
-        reason="signal_condition_true",
-        governor_approved=True,
-    )
     with pytest.raises(AlpacaBrokerError):
-        _adapter(FakeAlpacaClient()).submit_order(intent)  # type: ignore[arg-type]
+        _adapter(FakeAlpacaClient()).submit_order(object())  # type: ignore[arg-type]

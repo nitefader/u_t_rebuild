@@ -1,11 +1,9 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
-from uuid import UUID, uuid4
+from uuid import UUID
 
 import pytest
 
-from backend.app.domain import CandidateSide, IntentType, OrderType, TimeInForce
 from backend.app.governor import (
     BrokerSyncFreshness,
     GovernorPolicy,
@@ -17,50 +15,24 @@ from backend.app.governor import (
 )
 from backend.app.orders import InternalOrderIntent, OrderManager, OrderManagerError
 from backend.app.runtime import RuntimeState
-from backend.tests.fixtures.legacy_intent import LegacyExecutionIntent as ExecutionIntent
 
 
 ACCOUNT_ID = UUID("11111111-2222-3333-4444-555555555555")
 OTHER_ACCOUNT_ID = UUID("22222222-3333-4444-5555-666666666666")
 DEPLOYMENT_ID = UUID("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
 OTHER_DEPLOYMENT_ID = UUID("bbbbbbbb-cccc-dddd-eeee-ffffffffffff")
-PROGRAM_ID = UUID("99999999-8888-7777-6666-555555555555")
-
-
-def _intent(
-    *,
-    deployment_id: UUID = DEPLOYMENT_ID,
-    intent_type: IntentType = IntentType.ENTRY,
-    approved: bool = False,
-) -> ExecutionIntent:
-    return ExecutionIntent(
-        deployment_id=deployment_id,
-        program_version_id=PROGRAM_ID,
-        symbol="SPY",
-        side=CandidateSide.LONG,
-        intent_type=intent_type,
-        qty=10,
-        order_type=OrderType.MARKET,
-        time_in_force=TimeInForce.DAY,
-        timestamp=datetime(2026, 1, 2, 14, 30, tzinfo=timezone.utc),
-        signal_name="entry",
-        reason="signal_condition_true",
-        governor_approved=approved,
-        governor_reason="approved" if approved else None,
-    )
 
 
 def _request(
     *,
     account_id: UUID = ACCOUNT_ID,
-    intent: ExecutionIntent | None = None,
+    deployment_id: UUID = DEPLOYMENT_ID,
     broker_sync: BrokerSyncFreshness | None = None,
     portfolio: PortfolioSnapshot | None = None,
     order_intent: InternalOrderIntent | None = None,
     candidate_market_value: float = 0,
     candidate_open_risk: float = 0,
 ) -> GovernorRequest:
-    execution_intent = intent or _intent()
     # W2-A-1b: tests that don't intentionally exercise the equity=None
     # fail-closed path get a non-None default equity so the new
     # portfolio_equity_unavailable rule does not pre-empt the rule each test
@@ -69,8 +41,9 @@ def _request(
     # rule pass an explicit ``portfolio=PortfolioSnapshot()`` (equity=None).
     return GovernorRequest(
         account_id=account_id,
-        execution_intent=execution_intent,
-        runtime_state=RuntimeState(deployment_id=execution_intent.deployment_id),
+        deployment_id=deployment_id,
+        symbol="SPY",
+        runtime_state=RuntimeState(deployment_id=deployment_id),
         broker_sync=broker_sync or BrokerSyncFreshness(),
         portfolio=portfolio if portfolio is not None else PortfolioSnapshot(equity=100_000),
         order_intent=order_intent,
@@ -89,12 +62,40 @@ def test_approved_normal_open() -> None:
     assert decision.projected_state["projected_open_positions"] == 1
 
 
+def test_governor_reloads_persisted_policy_without_restart() -> None:
+    class _StateStore:
+        def __init__(self) -> None:
+            self.policy = GovernorPolicy()
+
+        def load_portfolio_governor_state(self, _governor_id: str) -> GovernorPolicy:
+            return self.policy
+
+        def save_portfolio_governor_state(self, _governor_id: str, policy: GovernorPolicy) -> None:
+            self.policy = policy
+
+    store = _StateStore()
+    governor = PortfolioGovernor(state_store=store)
+
+    # Baseline: no global kill, OPEN is allowed.
+    allowed = governor.evaluate(_request())
+    assert allowed.approved is True
+
+    # Simulate operator pause/kill update persisted after runtime start.
+    store.save_portfolio_governor_state(
+        "portfolio-governor",
+        GovernorPolicy(global_kill_active=True),
+    )
+
+    blocked = governor.evaluate(_request())
+    assert blocked.approved is False
+    assert blocked.rule_id == "global_kill_blocks_open"
+
+
 def test_governor_accepts_canonical_request_without_execution_intent() -> None:
     decision = PortfolioGovernor().evaluate(
         GovernorRequest(
             account_id=ACCOUNT_ID,
             deployment_id=DEPLOYMENT_ID,
-            program_id=PROGRAM_ID,
             symbol="spy",
             runtime_state=RuntimeState(deployment_id=DEPLOYMENT_ID),
             broker_sync=BrokerSyncFreshness(),
@@ -106,7 +107,6 @@ def test_governor_accepts_canonical_request_without_execution_intent() -> None:
     assert decision.approved is True
     assert decision.projected_state is not None
     assert decision.projected_state["deployment_id"] == str(DEPLOYMENT_ID)
-    assert decision.projected_state["program_id"] == str(PROGRAM_ID)
     assert decision.projected_state["symbol"] == "SPY"
 
 
@@ -134,8 +134,8 @@ def test_account_pause_rejects_only_that_account() -> None:
 def test_deployment_pause_rejects_only_that_deployment() -> None:
     governor = PortfolioGovernor(GovernorPolicy(paused_deployment_ids=frozenset({DEPLOYMENT_ID})))
 
-    blocked = governor.evaluate(_request(intent=_intent(deployment_id=DEPLOYMENT_ID)))
-    allowed = governor.evaluate(_request(intent=_intent(deployment_id=OTHER_DEPLOYMENT_ID)))
+    blocked = governor.evaluate(_request(deployment_id=DEPLOYMENT_ID))
+    allowed = governor.evaluate(_request(deployment_id=OTHER_DEPLOYMENT_ID))
 
     assert blocked.approved is False
     assert blocked.reason == "deployment_pause_active"
@@ -158,11 +158,10 @@ def test_protective_close_tp_sl_allowed_during_pause() -> None:
             paused_deployment_ids=frozenset({DEPLOYMENT_ID}),
         )
     )
-    exit_intent = _intent(intent_type=IntentType.EXIT)
 
-    close_decision = governor.evaluate(_request(intent=exit_intent, order_intent=InternalOrderIntent.CLOSE))
-    tp_decision = governor.evaluate(_request(intent=exit_intent, order_intent=InternalOrderIntent.TAKE_PROFIT))
-    sl_decision = governor.evaluate(_request(intent=exit_intent, order_intent=InternalOrderIntent.STOP_LOSS))
+    close_decision = governor.evaluate(_request(order_intent=InternalOrderIntent.CLOSE))
+    tp_decision = governor.evaluate(_request(order_intent=InternalOrderIntent.TAKE_PROFIT))
+    sl_decision = governor.evaluate(_request(order_intent=InternalOrderIntent.STOP_LOSS))
 
     assert close_decision.approved is True
     assert tp_decision.approved is True
@@ -195,7 +194,7 @@ def test_all_position_management_intents_allowed_during_pause(order_intent: Inte
         )
     )
 
-    decision = governor.evaluate(_request(intent=_intent(intent_type=IntentType.EXIT), order_intent=order_intent))
+    decision = governor.evaluate(_request(order_intent=order_intent))
 
     assert decision.approved is True
     assert decision.reason == "protective_exit_allowed"
@@ -210,7 +209,6 @@ def test_max_positions_rejects() -> None:
             PositionSummary(
                 account_id=ACCOUNT_ID,
                 deployment_id=DEPLOYMENT_ID,
-                program_id=PROGRAM_ID,
                 symbol="SPY",
                 quantity=10,
                 market_value=1000,
@@ -246,7 +244,6 @@ def test_symbol_concentration_rejection() -> None:
             PositionSummary(
                 account_id=ACCOUNT_ID,
                 deployment_id=DEPLOYMENT_ID,
-                program_id=PROGRAM_ID,
                 symbol="QQQ",
                 quantity=10,
                 market_value=4_000,
@@ -271,7 +268,6 @@ def test_open_risk_rejection() -> None:
             PositionSummary(
                 account_id=ACCOUNT_ID,
                 deployment_id=DEPLOYMENT_ID,
-                program_id=PROGRAM_ID,
                 symbol="QQQ",
                 quantity=10,
                 market_value=2_000,
@@ -282,7 +278,6 @@ def test_open_risk_rejection() -> None:
             PendingOpenSummary(
                 account_id=ACCOUNT_ID,
                 deployment_id=DEPLOYMENT_ID,
-                program_id=PROGRAM_ID,
                 symbol="IWM",
                 quantity=10,
                 market_value=1_000,
@@ -304,11 +299,9 @@ def test_open_risk_rejection() -> None:
 
 def test_rejected_intent_never_creates_order() -> None:
     manager = OrderManager()
-    decision = PortfolioGovernor(GovernorPolicy(global_kill_active=True)).evaluate(_request())
-    rejected_intent = _intent(approved=decision.approved)
 
-    with pytest.raises(OrderManagerError):
-        manager.create_order(account_id=ACCOUNT_ID, execution_intent=rejected_intent)
+    with pytest.raises(OrderManagerError, match="legacy ExecutionIntent/Program order creation has been removed"):
+        manager.create_order(account_id=ACCOUNT_ID, execution_intent=object())
 
     assert manager.ledger.all() == ()
 
@@ -320,7 +313,6 @@ def test_symbol_concentration_projected_state() -> None:
             PositionSummary(
                 account_id=ACCOUNT_ID,
                 deployment_id=DEPLOYMENT_ID,
-                program_id=PROGRAM_ID,
                 symbol="SPY",
                 quantity=10,
                 market_value=1000,
@@ -352,7 +344,6 @@ def test_protective_exit_allowed_under_all_conditions() -> None:
 
     decision = governor.evaluate(
         _request(
-            intent=_intent(intent_type=IntentType.EXIT),
             broker_sync=BrokerSyncFreshness(is_stale=True, reason="timeout"),
             portfolio=portfolio,
             order_intent=InternalOrderIntent.STOP_LOSS,
@@ -455,10 +446,9 @@ def test_missing_risk_plan_rule_does_not_block_protective_exit() -> None:
     """Protective exits (STOP, CLOSE, etc.) bypass ALL rules including the plan check."""
     governor = PortfolioGovernor()
     policy = GovernorPolicy(requires_risk_plan=True)
-    exit_intent = _intent(intent_type=IntentType.EXIT)
 
     decision = governor.evaluate(
-        _request(intent=exit_intent, order_intent=InternalOrderIntent.STOP_LOSS),
+        _request(order_intent=InternalOrderIntent.STOP_LOSS),
         policy_override=policy,
     )
 
@@ -535,11 +525,9 @@ def test_equity_none_rejects_open_with_portfolio_equity_unavailable() -> None:
 def test_equity_none_does_not_block_protective_exit() -> None:
     """Protective exits bypass equity check the same way they bypass everything else."""
     governor = PortfolioGovernor()
-    exit_intent = _intent(intent_type=IntentType.EXIT)
 
     decision = governor.evaluate(
         _request(
-            intent=exit_intent,
             order_intent=InternalOrderIntent.STOP_LOSS,
             portfolio=PortfolioSnapshot(),
         )
@@ -663,7 +651,6 @@ def test_candidate_inputs_zero_for_protective_exit_intents() -> None:
     # on a fully-loaded book.
     decision = governor.evaluate(
         _request(
-            intent=_intent(intent_type=IntentType.EXIT),
             order_intent=InternalOrderIntent.STOP_LOSS,
             portfolio=portfolio,
             candidate_market_value=100_000,

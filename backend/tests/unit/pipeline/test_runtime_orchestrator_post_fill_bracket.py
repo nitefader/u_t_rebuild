@@ -53,6 +53,7 @@ from backend.app.orders import InternalOrderIntent, InternalOrderStatus
 from backend.app.orders.models import OrderOrigin
 from backend.app.pipeline import PipelineEventType, RuntimeOrchestrator
 from backend.app.runtime import DeploymentContext
+from backend.app.domain._base import utc_now
 
 
 ACCOUNT_ID = UUID("11111111-2222-3333-4444-555555555555")
@@ -165,7 +166,7 @@ def _bar(*, open_: float = 99, close: float = 100) -> NormalizedBar:
     return NormalizedBar(
         symbol="SPY",
         timeframe="5m",
-        timestamp=datetime(2026, 1, 2, 14, 30, tzinfo=timezone.utc),
+        timestamp=utc_now(),
         open=open_,
         high=max(open_, close) + 2,
         low=min(open_, close) - 2,
@@ -189,19 +190,16 @@ def _orchestrator(*, components: ResolvedDeploymentComponents, broker: FakeBroke
 
 def test_post_fill_bracket_long_entry_triggers_protective_children() -> None:
     components = _components(side=CandidateSide.LONG)
-    # FakeBroker returns FILLED for the entry, ACCEPTED for both
-    # protective children (stop + target).
-    broker = FakeBrokerAdapter(
-        [BrokerOrderStatus.FILLED, BrokerOrderStatus.ACCEPTED, BrokerOrderStatus.ACCEPTED]
-    )
+    # FakeBroker returns FILLED for the entry, ACCEPTED for the native OCO child.
+    broker = FakeBrokerAdapter([BrokerOrderStatus.FILLED, BrokerOrderStatus.ACCEPTED])
     pipeline = _orchestrator(components=components, broker=broker)
 
     result = pipeline.process_bar(_bar(open_=99, close=100))
 
-    # Three orders submitted: entry + 2 protective children.
-    assert len(broker.submitted_orders) == 3
+    # Two orders submitted: entry + 1 native OCO protective child.
+    assert len(broker.submitted_orders) == 2
     entry_submit = broker.submitted_orders[0]
-    child_submits = broker.submitted_orders[1:]
+    oco_submit = broker.submitted_orders[1]
 
     # Entry side and intent.
     assert entry_submit.intent == InternalOrderIntent.OPEN
@@ -212,61 +210,40 @@ def test_post_fill_bracket_long_entry_triggers_protective_children() -> None:
     assert entry_submit.bracket_stop_loss_stop_price is None
     assert entry_submit.order_class is None
 
-    # Children: stop + target, both pointing at the entry as parent,
-    # both labeled with the cumulative fill breakpoint.
-    intents = {child.intent for child in child_submits}
-    assert intents == {InternalOrderIntent.STOP_LOSS, InternalOrderIntent.TAKE_PROFIT}
-    for child in child_submits:
-        assert child.parent_order_id == entry_submit.order_id
-        assert child.signal_plan_id == entry_submit.signal_plan_id
-        assert child.account_id == ACCOUNT_ID
-        assert child.deployment_id == DEPLOYMENT_ID
-        assert child.origin == OrderOrigin.SIGNAL_PLAN
-        assert child.order_class == "oco"
-        # LONG entry -> children exit on SELL side (CandidateSide.SHORT
-        # represents SELL on the internal side enum).
-        assert child.side == CandidateSide.SHORT
+    assert oco_submit.parent_order_id == entry_submit.order_id
+    assert oco_submit.signal_plan_id == entry_submit.signal_plan_id
+    assert oco_submit.account_id == ACCOUNT_ID
+    assert oco_submit.deployment_id == DEPLOYMENT_ID
+    assert oco_submit.origin == OrderOrigin.SIGNAL_PLAN
+    assert oco_submit.order_class == "oco"
+    assert oco_submit.side == CandidateSide.SHORT
+    # Native OCO shape: primary target on limit + attached stop.
+    assert oco_submit.intent == InternalOrderIntent.TAKE_PROFIT
+    assert oco_submit.order_type == OrderType.LIMIT
+    assert oco_submit.limit_price == pytest.approx(110.0)
+    assert oco_submit.bracket_stop_loss_stop_price == pytest.approx(95.0)
 
-    # Concrete prices off the FakeBroker fill price (100.0).
-    stop_child = next(c for c in child_submits if c.intent == InternalOrderIntent.STOP_LOSS)
-    target_child = next(c for c in child_submits if c.intent == InternalOrderIntent.TAKE_PROFIT)
-    assert stop_child.order_type == OrderType.STOP
-    assert stop_child.stop_price == pytest.approx(95.0)  # 100 * (1 - 5/100)
-    assert stop_child.limit_price is None
-    assert target_child.order_type == OrderType.LIMIT
-    assert target_child.limit_price == pytest.approx(110.0)  # 100 * (1 + 10/100)
-    assert target_child.stop_price is None
-
-    # Pipeline event: protection_placed with leg_count=2.
+    # Pipeline event: one native OCO child submitted.
     placed_events = [
         event for event in result.events if event.event_type == PipelineEventType.PROTECTION_PLACED
     ]
     assert len(placed_events) == 1
-    assert placed_events[0].details.get("leg_count") == 2
+    assert placed_events[0].details.get("leg_count") == 1
 
 
 def test_post_fill_bracket_short_entry_triggers_inverse_protective_children() -> None:
     components = _components(side=CandidateSide.SHORT)
-    broker = FakeBrokerAdapter(
-        [BrokerOrderStatus.FILLED, BrokerOrderStatus.ACCEPTED, BrokerOrderStatus.ACCEPTED]
-    )
+    broker = FakeBrokerAdapter([BrokerOrderStatus.FILLED, BrokerOrderStatus.ACCEPTED])
     pipeline = _orchestrator(components=components, broker=broker)
 
     result = pipeline.process_bar(_bar(open_=100, close=99))
 
-    assert len(broker.submitted_orders) == 3
-    entry_submit, *child_submits = broker.submitted_orders
+    assert len(broker.submitted_orders) == 2
+    entry_submit, oco_submit = broker.submitted_orders
     assert entry_submit.intent == InternalOrderIntent.OPEN
-
-    stop_child = next(c for c in child_submits if c.intent == InternalOrderIntent.STOP_LOSS)
-    target_child = next(c for c in child_submits if c.intent == InternalOrderIntent.TAKE_PROFIT)
-
-    # SHORT entry -> exit side flips to BUY (CandidateSide.LONG on internal enum).
-    for child in child_submits:
-        assert child.side == CandidateSide.LONG
-    # SHORT stop is ABOVE entry, SHORT target is BELOW.
-    assert stop_child.stop_price == pytest.approx(105.0)
-    assert target_child.limit_price == pytest.approx(90.0)
+    assert oco_submit.side == CandidateSide.LONG
+    assert oco_submit.limit_price == pytest.approx(90.0)
+    assert oco_submit.bracket_stop_loss_stop_price == pytest.approx(105.0)
 
 
 def test_post_fill_bracket_does_not_fire_when_entry_is_rejected() -> None:
@@ -332,9 +309,7 @@ def test_orchestrator_emits_proxy_event_when_stop_is_post_fill_pct() -> None:
         stop_pct=5.0,
         target_pct=10.0,
     )
-    broker = FakeBrokerAdapter(
-        [BrokerOrderStatus.FILLED, BrokerOrderStatus.ACCEPTED, BrokerOrderStatus.ACCEPTED]
-    )
+    broker = FakeBrokerAdapter([BrokerOrderStatus.FILLED, BrokerOrderStatus.ACCEPTED])
     pipeline = _orchestrator(components=components, broker=broker)
 
     result = pipeline.process_bar(_bar(open_=99, close=100))
@@ -362,9 +337,7 @@ def test_orchestrator_governor_projected_state_carries_nonzero_gross_exposure() 
     candidate_market_value defaulted to 0 in GovernorRequest.
     """
     components = _components(side=CandidateSide.LONG)
-    broker = FakeBrokerAdapter(
-        [BrokerOrderStatus.FILLED, BrokerOrderStatus.ACCEPTED, BrokerOrderStatus.ACCEPTED]
-    )
+    broker = FakeBrokerAdapter([BrokerOrderStatus.FILLED, BrokerOrderStatus.ACCEPTED])
     pipeline = _orchestrator(components=components, broker=broker)
 
     result = pipeline.process_bar(_bar(open_=99, close=100))
@@ -409,3 +382,86 @@ def test_orchestrator_blocks_open_when_gross_exposure_cap_breached_with_real_num
     assert decision.rule_id == "max_gross_exposure_pct"
     # No order should have been submitted.
     assert len(broker.submitted_orders) == 0
+
+
+def test_native_vs_post_fill_price_symmetry_for_same_signal_plan_and_fill_price() -> None:
+    from backend.app.decision.signal_plan_builder import post_fill_pct_rule
+    from backend.app.domain import SignalPlan, SignalPlanEntry, SignalPlanIntent
+    from backend.app.domain.signal_plan import SignalPlanStop, SignalPlanTarget, SignalPlanTargetAction
+    from backend.app.orders.protective_placer import ProtectiveOrderPlacer
+
+    components = _components(side=CandidateSide.LONG)
+    broker = FakeBrokerAdapter([BrokerOrderStatus.ACCEPTED])
+    pipeline = _orchestrator(components=components, broker=broker)
+    signal_plan = SignalPlan(
+        signal_plan_id=uuid4(),
+        deployment_id=DEPLOYMENT_ID,
+        strategy_id=components.strategy.strategy_id,
+        strategy_version_id=components.strategy.id,
+        symbol="SPY",
+        side=SignalPlanSide.LONG,
+        intent=SignalPlanIntent.OPEN,
+        entry=SignalPlanEntry(order_type=OrderType.MARKET, time_in_force_preference=TimeInForce.DAY),
+        stop=SignalPlanStop(type="percent", rule=post_fill_pct_rule(5.0), required=True),
+        targets=(
+            SignalPlanTarget(
+                label="t1",
+                action=SignalPlanTargetAction.CLOSE,
+                quantity_pct=100,
+                rule=post_fill_pct_rule(10.0),
+            ),
+        ),
+        reason="symmetry",
+    )
+    fill_price = 100.0
+    stop_pct = 5.0
+    target_pct = 10.0
+    native_prices = pipeline._protective_prices_from_reference(  # type: ignore[attr-defined]
+        side=signal_plan.side,
+        reference_price=fill_price,
+        stop_pct=stop_pct,
+        target_pct=target_pct,
+    )
+    assert native_prices is not None
+    native_take_profit, native_stop = native_prices
+
+    placement = ProtectiveOrderPlacer().compute_protective_plan(
+        signal_plan=signal_plan,
+        parent_order_id=uuid4(),
+        account_id=ACCOUNT_ID,
+        fill_price=fill_price,
+        cumulative_filled_qty=10.0,
+    )
+    stop_leg = next(leg for leg in placement.legs if leg.stop_price is not None)
+    target_leg = next(leg for leg in placement.legs if leg.limit_price is not None)
+
+    assert target_leg.limit_price == pytest.approx(native_take_profit)
+    assert stop_leg.stop_price == pytest.approx(native_stop)
+
+
+def test_native_alpaca_bracket_stale_bar_reference_fails_closed_and_uses_post_fill() -> None:
+    components = _components(
+        side=CandidateSide.LONG,
+        execution_mode=ExecutionMode.NATIVE_ALPACA_BRACKET,
+    )
+    broker = FakeBrokerAdapter([BrokerOrderStatus.FILLED, BrokerOrderStatus.ACCEPTED])
+    pipeline = _orchestrator(components=components, broker=broker)
+    stale_bar = NormalizedBar(
+        symbol="SPY",
+        timeframe="5m",
+        timestamp=utc_now() - timedelta(minutes=15),
+        open=99,
+        high=102,
+        low=97,
+        close=100,
+        volume=100_000,
+    )
+
+    result = pipeline.process_bar(stale_bar)
+
+    # Native attach is skipped on stale reference; post-fill OCO still protects.
+    assert len(broker.submitted_orders) == 2
+    assert broker.submitted_orders[0].order_class is None
+    assert broker.submitted_orders[1].order_class == "oco"
+    placed = [e for e in result.events if e.event_type == PipelineEventType.PROTECTION_PLACED]
+    assert len(placed) == 1

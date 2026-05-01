@@ -119,6 +119,18 @@ class ExecutionMode(StrEnum):
     NATIVE_ALPACA_BRACKET = "native_alpaca_bracket"
 
 
+class OrderRetryPolicy(StrEnum):
+    NONE = "none"
+    REPRICE_ONCE = "reprice_once"
+    REPRICE_UNTIL_FILLED = "reprice_until_filled"
+
+
+class OrderCancelPolicy(StrEnum):
+    HOLD = "hold"
+    CANCEL_ON_OPPOSITE_SIGNAL = "cancel_on_opposite_signal"
+    CANCEL_AFTER_BARS = "cancel_after_bars"
+
+
 class ExecutionStyleVersion(DomainSchema):
     """Persisted, immutable Execution Plan version.
 
@@ -150,6 +162,32 @@ class ExecutionStyleVersion(DomainSchema):
     execution_mode: ExecutionMode = ExecutionMode.POST_FILL_BRACKET
     trailing_stop_enabled: bool = False
     scale_out_enabled: bool = False
+    order_retry_policy: OrderRetryPolicy = OrderRetryPolicy.NONE
+    order_cancel_policy: OrderCancelPolicy = OrderCancelPolicy.HOLD
+    order_retry_max_attempts: int | None = Field(default=None, ge=1)
+    order_retry_offset_bps: float | None = Field(default=None, ge=0)
     feature_refs: list[str] = Field(default_factory=list)
     preset: ExecutionStylePresetSpec | None = None
     created_at: datetime = Field(default_factory=utc_now)
+
+    @model_validator(mode="after")
+    def validate_retry_fields(self) -> "ExecutionStyleVersion":
+        if self.order_retry_policy != OrderRetryPolicy.NONE:
+            if self.order_retry_max_attempts is None:
+                raise ValueError(
+                    "order_retry_max_attempts is required when order_retry_policy is not NONE"
+                )
+            if self.order_retry_offset_bps is None:
+                raise ValueError(
+                    "order_retry_offset_bps is required when order_retry_policy is not NONE"
+                )
+        else:
+            if self.order_retry_max_attempts is not None:
+                raise ValueError(
+                    "order_retry_max_attempts must be None when order_retry_policy is NONE"
+                )
+            if self.order_retry_offset_bps is not None:
+                raise ValueError(
+                    "order_retry_offset_bps must be None when order_retry_policy is NONE"
+                )
+        return self

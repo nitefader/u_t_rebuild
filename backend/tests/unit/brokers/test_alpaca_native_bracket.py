@@ -25,7 +25,7 @@ from backend.app.brokers import AlpacaBrokerAdapter, AlpacaBrokerError
 from backend.app.brokers.alpaca import AlpacaBrokerCapabilities
 from backend.app.domain import CandidateSide, OrderType, TimeInForce, TradingMode
 from backend.app.domain._base import utc_now
-from backend.app.orders import InternalOrder, InternalOrderIntent, InternalOrderStatus
+from backend.app.orders import InternalOrder, InternalOrderIntent, InternalOrderStatus, OrderOrigin
 
 try:
     from alpaca.trading.enums import OrderClass as AlpacaOrderClass
@@ -43,7 +43,9 @@ except ImportError:  # pragma: no cover
 
 ACCOUNT_ID = UUID("11111111-2222-3333-4444-555555555555")
 DEPLOYMENT_ID = UUID("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
-PROGRAM_ID = UUID("99999999-8888-7777-6666-555555555555")
+STRATEGY_ID = UUID("22222222-3333-4444-5555-666666666666")
+STRATEGY_VERSION_ID = UUID("33333333-4444-5555-6666-777777777777")
+SIGNAL_PLAN_ID = UUID("44444444-5555-6666-7777-888888888888")
 
 
 def _bracket_order(
@@ -59,10 +61,18 @@ def _bracket_order(
     now = utc_now()
     return InternalOrder(
         order_id=uuid4(),
-        client_order_id="utos-bracket-test-000001",
+        client_order_id="sigplan-11111111-44444444-open-0000010000",
         account_id=ACCOUNT_ID,
+        origin=OrderOrigin.SIGNAL_PLAN,
         deployment_id=DEPLOYMENT_ID,
-        program_id=PROGRAM_ID,
+        strategy_id=STRATEGY_ID,
+        strategy_version_id=STRATEGY_VERSION_ID,
+        signal_plan_id=SIGNAL_PLAN_ID,
+        opening_signal_plan_id=SIGNAL_PLAN_ID,
+        current_signal_plan_id=SIGNAL_PLAN_ID,
+        position_lineage_id=SIGNAL_PLAN_ID,
+        account_evaluation_id=uuid4(),
+        governor_decision_id=uuid4(),
         symbol="SPY",
         side=side,
         quantity=quantity,
@@ -217,3 +227,76 @@ def test_internal_order_accepts_bracket_child_prices() -> None:
     assert order.bracket_take_profit_limit_price == 110.0
     assert order.bracket_stop_loss_stop_price == 95.0
     assert order.order_class == "bracket"
+
+
+@pytest.mark.skipif(AlpacaOrderClass is None, reason="alpaca-py SDK not installed")
+def test_native_oco_request_uses_limit_primary_with_attached_stop_loss() -> None:
+    adapter = _adapter()
+    order = _bracket_order(
+        order_class="oco",
+        take_profit=None,
+        stop_loss=95.0,
+    ).model_copy(update={"order_type": OrderType.LIMIT, "limit_price": 110.0})
+
+    request = adapter.to_alpaca_order_request(order)
+
+    assert request.order_class == AlpacaOrderClass.OCO
+    assert request.limit_price == pytest.approx(110.0)
+    assert request.take_profit is not None
+    assert request.take_profit.limit_price == pytest.approx(110.0)
+    assert request.stop_loss is not None
+    assert request.stop_loss.stop_price == pytest.approx(95.0)
+
+
+@pytest.mark.skipif(AlpacaOrderClass is None, reason="alpaca-py SDK not installed")
+def test_native_oco_request_quantizes_fractional_penny_prices() -> None:
+    adapter = _adapter()
+    order = _bracket_order(
+        order_class="oco",
+        take_profit=None,
+        stop_loss=65.47461329431461,
+    ).model_copy(update={"order_type": OrderType.LIMIT, "limit_price": 65.8282734113708})
+
+    request = adapter.to_alpaca_order_request(order)
+
+    assert request.limit_price == pytest.approx(65.83)
+    assert request.take_profit is not None
+    assert request.take_profit.limit_price == pytest.approx(65.83)
+    assert request.stop_loss is not None
+    assert request.stop_loss.stop_price == pytest.approx(65.47)
+
+
+def test_native_oco_without_limit_or_stop_fails_explicitly() -> None:
+    adapter = _adapter()
+    order = _bracket_order(order_class="oco", take_profit=None, stop_loss=None).model_copy(
+        update={"order_type": OrderType.LIMIT}
+    )
+
+    with pytest.raises(AlpacaBrokerError) as exc_info:
+        adapter.to_alpaca_order_request(order)
+
+    assert exc_info.value.details.code == "native_oco_missing_prices"
+
+
+def test_native_oco_without_limit_price_fails_explicitly() -> None:
+    adapter = _adapter()
+    order = _bracket_order(order_class="oco", take_profit=None, stop_loss=95.0).model_copy(
+        update={"order_type": OrderType.LIMIT}
+    )
+
+    with pytest.raises(AlpacaBrokerError) as exc_info:
+        adapter.to_alpaca_order_request(order)
+
+    assert exc_info.value.details.code == "native_oco_missing_prices"
+
+
+def test_native_oco_without_stop_loss_fails_explicitly() -> None:
+    adapter = _adapter()
+    order = _bracket_order(order_class="oco", take_profit=None, stop_loss=None).model_copy(
+        update={"order_type": OrderType.LIMIT, "limit_price": 110.0}
+    )
+
+    with pytest.raises(AlpacaBrokerError) as exc_info:
+        adapter.to_alpaca_order_request(order)
+
+    assert exc_info.value.details.code == "native_oco_missing_prices"

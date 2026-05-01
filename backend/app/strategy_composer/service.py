@@ -973,7 +973,6 @@ class StrategyComposerService:
             version=1,
             name="Draft Controls (wizard)",
             timeframe=timeframe,
-            trading_horizon=wizard.horizon,
             allowed_directions=wizard.direction,
             higher_timeframe_confirmation_required=wizard.higher_timeframe_confirmation,
         )

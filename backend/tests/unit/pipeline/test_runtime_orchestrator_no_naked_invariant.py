@@ -221,10 +221,11 @@ def test_no_naked_invariant_emits_alarm_when_protective_child_rejected() -> None
         for order in pipeline.order_manager.ledger.all()
         if order.parent_order_id is not None and order.status.value == "rejected"
     ]
-    # Only the stop child was attempted; the target was never submitted
-    # because the loop aborted on stop-leg rejection.
+    # FOLLOWUP-A emits one native post-fill OCO child (primary TAKE_PROFIT
+    # with attached stop-loss). A broker rejection on that child still means
+    # no protective order reached the broker.
     assert len(rejected_children) == 1
-    assert rejected_children[0].intent == InternalOrderIntent.STOP_LOSS
+    assert rejected_children[0].intent == InternalOrderIntent.TAKE_PROFIT
 
 
 def test_no_naked_invariant_alarm_on_missing_fill_price() -> None:

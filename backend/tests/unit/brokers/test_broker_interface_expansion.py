@@ -18,39 +18,20 @@ from backend.app.brokers import (
     BrokerSync,
     FakeBrokerAdapter,
 )
-from backend.app.domain import CandidateSide, IntentType, OrderType, TimeInForce, TradingMode
+from backend.app.domain import TradingMode
 from backend.app.orders import InternalOrderStatus, OrderManager
-from backend.tests.fixtures.legacy_intent import LegacyExecutionIntent as ExecutionIntent
+from backend.tests.fixtures.modern_order import make_signal_plan_order
 import backend.app.brokers.adapter as adapter_module
 import backend.app.brokers.fake as fake_module
 
 
 ACCOUNT_ID = UUID("11111111-2222-3333-4444-555555555555")
 DEPLOYMENT_ID = UUID("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
-PROGRAM_ID = UUID("99999999-8888-7777-6666-555555555555")
-
-
-def _execution_intent() -> ExecutionIntent:
-    return ExecutionIntent(
-        deployment_id=DEPLOYMENT_ID,
-        program_version_id=PROGRAM_ID,
-        symbol="SPY",
-        side=CandidateSide.LONG,
-        intent_type=IntentType.ENTRY,
-        qty=10,
-        order_type=OrderType.MARKET,
-        time_in_force=TimeInForce.DAY,
-        timestamp=datetime(2026, 1, 2, 14, 30, tzinfo=timezone.utc),
-        signal_name="entry",
-        reason="signal_condition_true",
-        governor_approved=True,
-        governor_reason="approved",
-    )
 
 
 def _order():
     manager = OrderManager()
-    return manager, manager.create_order(account_id=ACCOUNT_ID, execution_intent=_execution_intent())
+    return manager, make_signal_plan_order(manager, account_id=ACCOUNT_ID, deployment_id=DEPLOYMENT_ID)
 
 
 def test_fake_broker_adapter_supports_expanded_protocol() -> None:
@@ -188,7 +169,7 @@ def test_adapter_still_cannot_create_internal_orders() -> None:
     adapter = FakeBrokerAdapter()
 
     with pytest.raises(BrokerAdapterError):
-        adapter.submit_order(_execution_intent())  # type: ignore[arg-type]
+        adapter.submit_order(object())  # type: ignore[arg-type]
 
 
 def test_expanded_result_can_be_constructed_without_raw_payload() -> None:

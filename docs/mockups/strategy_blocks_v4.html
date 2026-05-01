@@ -1,0 +1,2202 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Strategy IDE v4 — Compact vars, long/short tabs, expression stops</title>
+<style>
+  :root {
+    --bg: #0b1220;
+    --canvas: #0d1626;
+    --panel: #131e30;
+    --line: #233247;
+    --line-2: #2e4262;
+    --text: #e6edf3;
+    --muted: #93a3b8;
+    --muted-2: #6b7d97;
+
+    --accent: #4f8cff;
+    --green: #2ecc71;
+    --green-2: #27ae60;
+    --orange: #f39c12;
+    --orange-2: #e67e22;
+    --purple: #9b59b6;
+    --purple-2: #8e44ad;
+    --red: #e74c3c;
+    --red-2: #c0392b;
+    --teal: #1abc9c;
+    --teal-2: #16a085;
+    --yellow: #f1c40f;
+    --yellow-2: #e1b416;
+    --blue: #3498db;
+    --blue-2: #2980b9;
+    --pink: #ff6b9d;
+    --pink-2: #e84393;
+
+    --shadow: 0 18px 50px rgba(0,0,0,.45);
+    --shadow-block: 0 5px 0 rgba(0,0,0,.20), 0 10px 18px rgba(0,0,0,.32);
+
+    --code-bg: #0a0f17;
+    --code-line: #1a2438;
+    --kw: #ff79c6;
+    --num: #f1c40f;
+    --str: #50fa7b;
+    --fn: #8be9fd;
+    --tf: #b388ff;
+    --var: #ffa657;
+    --op: #93a3b8;
+    --comment: #6b7d97;
+  }
+
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0; min-height: 100%;
+    background:
+      radial-gradient(1100px 700px at 18% -20%, rgba(79,140,255,.12), transparent 70%),
+      radial-gradient(900px 600px at 110% 110%, rgba(155,89,182,.10), transparent 70%),
+      var(--bg);
+    color: var(--text);
+    font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, system-ui, sans-serif;
+    overflow-x: hidden;
+  }
+  button, input, select, textarea { font: inherit; color: inherit; }
+  button { cursor: pointer; }
+
+  .topbar {
+    display: flex; align-items: center; justify-content: space-between; gap: 12px;
+    padding: 14px 22px; border-bottom: 1px solid var(--line);
+    background: rgba(11,18,32,.78); backdrop-filter: blur(8px);
+    position: sticky; top: 0; z-index: 30;
+  }
+  .brand { display: flex; align-items: center; gap: 10px; font-weight: 800; }
+  .brand .mark {
+    width: 26px; height: 26px; border-radius: 8px;
+    background: linear-gradient(135deg, var(--accent), var(--purple));
+    box-shadow: 0 0 22px rgba(79,140,255,.35);
+  }
+  .crumb { color: var(--muted); font-size: 12px; }
+  .h1 { font-size: 18px; margin: 0; font-weight: 700; }
+  .btn {
+    background: #1b2740; color: var(--text); border: 1px solid var(--line-2);
+    padding: 7px 12px; border-radius: 8px; font-size: 13px;
+    display: inline-flex; align-items: center; gap: 6px;
+  }
+  .btn:hover { background: #233252; }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: white; box-shadow: 0 8px 22px rgba(79,140,255,.28); }
+  .btn.purple { background: rgba(155,89,182,.18); border-color: rgba(155,89,182,.42); color: #d4b5ff; }
+  .btn-row { display: flex; gap: 8px; align-items: center; }
+
+  .shell {
+    display: grid;
+    grid-template-columns: 300px minmax(0, 1fr) 340px;
+    height: calc(100vh - 60px);
+    min-height: 700px;
+  }
+  .palette, .inspector {
+    background: rgba(15,24,40,.85);
+    border-right: 1px solid var(--line);
+    overflow-y: auto;
+  }
+  .inspector { border-right: 0; border-left: 1px solid var(--line); }
+  .canvas-wrap { position: relative; overflow: hidden; }
+
+  /* Palette */
+  .palette-head {
+    padding: 14px 14px 10px; border-bottom: 1px solid var(--line);
+    position: sticky; top: 0; background: rgba(15,24,40,.96); z-index: 5;
+  }
+  .palette-search {
+    width: 100%;
+    padding: 8px 10px; background: #0d1626; color: var(--text);
+    border: 1px solid var(--line-2); border-radius: 8px; outline: none;
+  }
+  .palette-search:focus { border-color: var(--accent); }
+  .palette-tabs {
+    display: flex; gap: 4px; margin-top: 10px; overflow-x: auto;
+    scrollbar-width: thin;
+  }
+  .palette-tab {
+    background: transparent; color: var(--muted-2); border: 1px solid transparent;
+    padding: 4px 9px; border-radius: 999px; font-size: 11px; font-weight: 700;
+    white-space: nowrap; letter-spacing: .3px;
+  }
+  .palette-tab.active { color: var(--accent); border-color: rgba(79,140,255,.4); background: rgba(79,140,255,.1); }
+  .palette-tab:hover { color: var(--text); }
+
+  .palette-section {
+    padding: 12px 14px 4px;
+    border-bottom: 1px solid var(--line);
+  }
+  .palette-section h4 {
+    margin: 0 0 8px; font-size: 11px; color: var(--muted-2);
+    text-transform: uppercase; letter-spacing: .8px; font-weight: 700;
+    display: flex; align-items: center; gap: 6px;
+  }
+  .palette-section h4 .sw {
+    width: 10px; height: 10px; border-radius: 3px; display: inline-block;
+  }
+  .feature-list { display: flex; flex-direction: column; gap: 4px; }
+  .feature-item {
+    display: flex; align-items: center; justify-content: space-between; gap: 8px;
+    padding: 7px 9px;
+    background: #0d1626; border: 1px solid var(--line); border-radius: 8px;
+    cursor: grab; font-size: 12px;
+    transition: border-color .12s, background .12s, transform .08s;
+  }
+  .feature-item:hover { border-color: var(--accent); background: #101e34; transform: translateX(2px); }
+  .feature-item:active { cursor: grabbing; }
+  .feature-item .name { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; color: var(--fn); font-weight: 600; }
+  .feature-item .desc { color: var(--muted-2); font-size: 10px; }
+  .feature-item .insert {
+    background: transparent; border: 1px solid var(--line-2); color: var(--muted);
+    padding: 2px 7px; border-radius: 5px; font-size: 11px;
+  }
+  .feature-item .insert:hover { color: white; border-color: var(--accent); background: rgba(79,140,255,.2); }
+
+  /* Block styles for non-code sections */
+  .block {
+    position: relative;
+    display: inline-flex; align-items: center; gap: 7px;
+    padding: 9px 13px;
+    color: white; font-weight: 700; font-size: 13px;
+    border-radius: 10px;
+    box-shadow: var(--shadow-block);
+    user-select: none; cursor: grab;
+    border: 2px solid rgba(0,0,0,.18);
+    white-space: nowrap; margin: 5px;
+    transition: transform .08s ease;
+  }
+  .block:hover { transform: translateY(-1px); }
+  .block.cat-exit { background: linear-gradient(180deg, var(--blue), var(--blue-2)); }
+  .block .icon {
+    width: 20px; height: 20px; border-radius: 5px;
+    display: inline-flex; align-items: center; justify-content: center;
+    background: rgba(0,0,0,.22); font-size: 12px;
+  }
+  .block .badge {
+    background: rgba(0,0,0,.30); padding: 2px 7px; border-radius: 999px;
+    font-size: 11px; font-weight: 600;
+  }
+
+  /* Canvas */
+  .canvas { position: absolute; inset: 0;
+    background-image:
+      radial-gradient(rgba(255,255,255,.04) 1px, transparent 1px),
+      radial-gradient(rgba(255,255,255,.03) 1px, transparent 1px);
+    background-size: 20px 20px, 60px 60px;
+    background-position: 0 0, 10px 10px;
+    overflow: auto;
+  }
+  .canvas-inner { padding: 22px 28px 80px; min-height: 100%; max-width: 1100px; }
+
+  /* Bindings */
+  .bindings { display: flex; gap: 12px; margin-bottom: 16px; flex-wrap: wrap; }
+  .binding-card {
+    background: rgba(255,255,255,.04); border: 1px solid var(--line);
+    border-radius: 12px; padding: 9px 12px; min-width: 220px;
+  }
+  .binding-card .lbl { font-size: 10px; color: var(--muted-2); letter-spacing: .8px; text-transform: uppercase; font-weight: 700; }
+  .binding-card .name { font-weight: 700; font-size: 13px; margin-top: 2px; }
+  .binding-card .meta { color: var(--muted); font-size: 11px; }
+
+  /* Section */
+  .section {
+    background: linear-gradient(180deg, rgba(255,255,255,.04), rgba(255,255,255,.01));
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    padding: 14px 16px;
+    margin-bottom: 14px;
+  }
+  .section h3 {
+    margin: 0 0 10px; font-size: 13px; color: var(--muted);
+    text-transform: uppercase; letter-spacing: .8px; font-weight: 700;
+    display: flex; align-items: center; gap: 8px; justify-content: space-between;
+  }
+  .section h3 .left { display: flex; align-items: center; gap: 8px; }
+  .section h3 .swatch { width: 12px; height: 12px; border-radius: 4px; }
+  .section.entry { border-left: 4px solid var(--green); }
+  .section.entry h3 .swatch { background: var(--green); }
+  .section.legs { border-left: 4px solid var(--purple); }
+  .section.legs h3 .swatch { background: var(--purple); }
+  .section.exit { border-left: 4px solid var(--blue); }
+  .section.exit h3 .swatch { background: var(--blue); }
+  .section.vars { border-left: 4px solid var(--accent); }
+  .section.vars h3 .swatch { background: var(--accent); }
+  .section h3 .pill {
+    background: rgba(0,0,0,.3); color: var(--text); padding: 2px 8px;
+    border-radius: 999px; font-size: 11px; font-weight: 700;
+  }
+
+  /* Variable bindings — COMPACT inline strip */
+  .vars-strip {
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+    padding: 6px 10px;
+    background: rgba(79,140,255,.05);
+    border: 1px solid rgba(79,140,255,.22);
+    border-radius: 10px;
+    margin-bottom: 12px;
+    font-size: 12px;
+  }
+  .vars-strip .lead {
+    color: var(--accent); font-size: 10px; font-weight: 700;
+    text-transform: uppercase; letter-spacing: .8px; padding-right: 4px;
+  }
+  .var-chip {
+    display: inline-flex; align-items: center; gap: 4px;
+    background: rgba(255,166,87,.08);
+    border: 1px solid rgba(255,166,87,.3);
+    border-radius: 7px;
+    padding: 3px 7px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 11px;
+    cursor: pointer;
+    transition: background .12s, border-color .12s;
+  }
+  .var-chip:hover { background: rgba(255,166,87,.18); border-color: rgba(255,166,87,.5); }
+  .var-chip .vn { color: var(--var); font-weight: 700; }
+  .var-chip .vsep { color: var(--muted-2); margin: 0 3px; }
+  .var-chip .vex { color: var(--fn); }
+  .var-chip .x { color: var(--muted-2); margin-left: 4px; padding: 0 2px; border-radius: 3px; }
+  .var-chip .x:hover { color: var(--red); background: rgba(231,76,60,.15); }
+  .var-add {
+    background: transparent; border: 1px dashed var(--line-2); color: var(--muted);
+    border-radius: 7px; padding: 3px 9px; font-size: 11px; font-weight: 600;
+  }
+  .var-add:hover { border-color: var(--accent); color: var(--accent); }
+  .vars-edit-pop {
+    position: absolute; z-index: 250;
+    background: #11192a; border: 1px solid var(--line-2);
+    border-radius: 10px; box-shadow: var(--shadow);
+    padding: 12px; min-width: 320px;
+    display: none;
+  }
+  .vars-edit-pop.show { display: block; }
+  .vars-edit-pop label { color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: .6px; }
+  .vars-edit-pop input {
+    width: 100%; background: #0d1626; color: var(--text);
+    border: 1px solid var(--line-2); border-radius: 6px;
+    padding: 6px 9px; outline: none; margin-top: 3px; margin-bottom: 8px;
+    font-family: ui-monospace, monospace; font-size: 12px;
+  }
+  .vars-edit-pop input:focus { border-color: var(--accent); }
+  .vars-edit-pop .vname-in { color: var(--var); font-weight: 700; }
+  .vars-edit-pop .vexpr-in { color: var(--fn); }
+
+  /* Entry tabs (Long / Short) */
+  .entry-tabs {
+    display: flex; align-items: center; gap: 4px;
+    border-bottom: 1px solid var(--line); margin-bottom: 10px;
+    margin-top: -4px;
+  }
+  .entry-tab {
+    background: transparent; color: var(--muted-2); border: none;
+    padding: 8px 14px; border-bottom: 2px solid transparent;
+    font-size: 12px; font-weight: 700; letter-spacing: .3px;
+    text-transform: uppercase; cursor: pointer;
+    display: flex; align-items: center; gap: 6px;
+  }
+  .entry-tab:hover { color: var(--text); }
+  .entry-tab.active { color: var(--text); border-bottom-color: var(--green); }
+  .entry-tab.short.active { border-bottom-color: var(--red); }
+  .entry-tab .dot {
+    width: 7px; height: 7px; border-radius: 50%; background: var(--muted-2);
+  }
+  .entry-tab.long .dot { background: var(--green); }
+  .entry-tab.short .dot { background: var(--red); }
+  .entry-tab .badge {
+    background: rgba(255,255,255,.08); color: var(--muted);
+    padding: 1px 6px; border-radius: 999px; font-size: 10px;
+    margin-left: 4px;
+  }
+  .entry-tab.short.empty .badge { color: var(--muted-2); font-style: italic; }
+  .entry-tab-spacer { flex: 1; }
+  .entry-tab-actions {
+    display: flex; gap: 6px; padding-bottom: 6px;
+  }
+  .mirror-btn {
+    background: rgba(155,89,182,.12); border: 1px solid rgba(155,89,182,.32);
+    color: #d4b5ff; padding: 4px 10px; border-radius: 7px;
+    font-size: 11px; font-weight: 600; cursor: pointer;
+    display: inline-flex; align-items: center; gap: 5px;
+  }
+  .mirror-btn:hover { background: rgba(155,89,182,.22); }
+  .browse-btn {
+    background: transparent; border: 1px solid var(--line-2);
+    color: var(--muted); padding: 4px 10px; border-radius: 7px;
+    font-size: 11px; cursor: pointer;
+  }
+  .browse-btn:hover { color: var(--accent); border-color: var(--accent); }
+  .entry-pane { display: none; }
+  .entry-pane.active { display: block; }
+
+  /* Stop expression mode */
+  .stop-mode-toggle {
+    display: inline-flex; align-items: center; background: rgba(0,0,0,.28);
+    border: 1px solid var(--line-2); border-radius: 7px; overflow: hidden;
+  }
+  .stop-mode-toggle button {
+    background: transparent; border: none; color: var(--muted-2);
+    padding: 4px 9px; font-size: 10px; font-weight: 700;
+    text-transform: uppercase; letter-spacing: .5px; cursor: pointer;
+  }
+  .stop-mode-toggle button.active {
+    background: rgba(231,76,60,.18); color: var(--red);
+  }
+  .stop-expr-input {
+    flex: 1; min-width: 240px;
+    background: var(--code-bg); border: 1px solid var(--line);
+    border-radius: 7px; padding: 6px 9px;
+    font-family: ui-monospace, monospace; font-size: 12px;
+    color: var(--fn); outline: none;
+  }
+  .stop-expr-input:focus { border-color: var(--red); }
+  .stop-expr-row {
+    display: grid; grid-template-columns: 32px auto 1fr 28px;
+    gap: 10px; align-items: center; margin-bottom: 6px;
+    padding: 9px 12px; background: rgba(231,76,60,.06);
+    border: 1px solid rgba(231,76,60,.22); border-radius: 10px;
+  }
+
+  /* Browse features overlay */
+  .browse-overlay {
+    position: fixed; inset: 0; background: rgba(5,8,15,.62);
+    backdrop-filter: blur(4px); z-index: 300;
+    display: none; align-items: flex-start; justify-content: center; padding-top: 80px;
+  }
+  .browse-overlay.show { display: flex; }
+  .browse-modal {
+    width: min(900px, 92vw); max-height: 70vh; overflow-y: auto;
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: 14px; box-shadow: var(--shadow);
+    padding: 18px 22px;
+  }
+  .browse-modal h3 { margin: 0 0 4px; }
+  .browse-modal .desc { color: var(--muted); font-size: 12px; margin-bottom: 12px; }
+  .browse-grid {
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: 10px;
+  }
+  .browse-grid .item {
+    padding: 8px 10px; background: #0d1626;
+    border: 1px solid var(--line); border-radius: 8px;
+    font-family: ui-monospace, monospace; font-size: 11px;
+    cursor: pointer;
+  }
+  .browse-grid .item:hover { border-color: var(--accent); background: #101e34; }
+  .browse-grid .item .name { color: var(--fn); font-weight: 600; }
+  .browse-grid .item .desc { color: var(--muted-2); font-size: 10px; font-family: -apple-system, system-ui, sans-serif; margin-top: 3px; }
+  .browse-modal .close-x {
+    float: right; background: transparent; border: none; color: var(--muted);
+    font-size: 22px; cursor: pointer; line-height: 1;
+  }
+
+  /* Code editor */
+  .code-shell {
+    background: var(--code-bg); border: 1px solid var(--line);
+    border-radius: 10px; overflow: hidden;
+    box-shadow: 0 2px 0 rgba(0,0,0,.2);
+    position: relative;
+  }
+  .code-toolbar {
+    display: flex; align-items: center; gap: 8px;
+    padding: 6px 10px; border-bottom: 1px solid var(--line);
+    background: #0c1320; font-size: 11px;
+  }
+  .code-toolbar .stat { color: var(--muted-2); }
+  .code-toolbar .stat.ok { color: var(--green); }
+  .code-toolbar .stat.warn { color: var(--orange); }
+  .code-toolbar .stat.bad { color: var(--red); }
+  .code-toolbar select {
+    background: #1b2740; color: var(--text); border: 1px solid var(--line-2);
+    border-radius: 6px; padding: 3px 6px; font-size: 11px; outline: none;
+  }
+  .code-area {
+    position: relative;
+    display: grid; grid-template-columns: 36px 1fr;
+  }
+  .gutter {
+    background: #0a0f1a; color: #3a4458;
+    padding: 12px 0; text-align: right;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 12px; line-height: 20px; user-select: none;
+    border-right: 1px solid var(--line);
+  }
+  .gutter div { padding: 0 8px; }
+
+  .code-input-wrap { position: relative; }
+  .code-input {
+    width: 100%; min-height: 130px;
+    background: transparent; color: transparent; caret-color: white;
+    border: none; outline: none; resize: vertical;
+    padding: 12px 14px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 13px; line-height: 20px;
+    white-space: pre; overflow: auto;
+    position: relative; z-index: 2;
+    tab-size: 2;
+  }
+  .code-highlight {
+    position: absolute; inset: 0; padding: 12px 14px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 13px; line-height: 20px;
+    white-space: pre; pointer-events: none;
+    color: var(--text);
+    z-index: 1; overflow: hidden;
+  }
+  .code-highlight .kw { color: var(--kw); font-weight: 600; }
+  .code-highlight .num { color: var(--num); }
+  .code-highlight .fn { color: var(--fn); }
+  .code-highlight .tf { color: var(--tf); }
+  .code-highlight .var { color: var(--var); font-weight: 600; }
+  .code-highlight .op { color: var(--op); }
+  .code-highlight .str { color: var(--str); }
+  .code-highlight .comment { color: var(--comment); font-style: italic; }
+  .code-highlight .err { text-decoration: underline wavy var(--red); text-decoration-thickness: 1.5px; }
+
+  /* Autocomplete dropdown */
+  .ac-pop {
+    position: absolute; z-index: 200;
+    background: #11192a; border: 1px solid var(--line-2);
+    border-radius: 8px; box-shadow: var(--shadow);
+    min-width: 280px; max-height: 240px; overflow-y: auto;
+    display: none;
+  }
+  .ac-pop.show { display: block; }
+  .ac-item {
+    padding: 6px 10px; font-size: 12px;
+    display: flex; align-items: center; justify-content: space-between; gap: 8px;
+    cursor: pointer; font-family: ui-monospace, monospace;
+  }
+  .ac-item:hover, .ac-item.active { background: rgba(79,140,255,.18); }
+  .ac-item .lbl { color: var(--fn); }
+  .ac-item .desc { color: var(--muted-2); font-size: 10px; font-family: -apple-system, system-ui, sans-serif; }
+  .ac-item .cat { font-size: 9px; color: var(--muted-2); padding: 1px 5px; background: rgba(255,255,255,.06); border-radius: 4px; }
+
+  .diag-strip {
+    display: flex; flex-wrap: wrap; gap: 8px;
+    padding: 8px 10px; border-top: 1px solid var(--line);
+    background: #0c1320; font-size: 11px;
+  }
+  .diag { display: flex; align-items: center; gap: 5px; }
+  .diag.ok { color: var(--green); }
+  .diag.warn { color: var(--orange); }
+  .diag.bad { color: var(--red); }
+  .diag.muted { color: var(--muted-2); }
+
+  /* Trade legs (inline) */
+  .legs-rows { display: flex; flex-direction: column; gap: 8px; margin-bottom: 8px; }
+  .leg-row {
+    display: grid;
+    grid-template-columns: 32px 1fr 1fr 1fr 28px;
+    gap: 10px; align-items: center;
+    background: rgba(0,0,0,.18);
+    border: 1px solid var(--line);
+    border-radius: 12px; padding: 10px 12px;
+  }
+  .leg-row.head {
+    background: transparent; border: none; padding: 4px 12px;
+    font-size: 10px; color: var(--muted-2); text-transform: uppercase;
+    letter-spacing: .8px; font-weight: 700;
+  }
+  .leg-row .num {
+    width: 28px; height: 28px; border-radius: 8px;
+    display: flex; align-items: center; justify-content: center;
+    font-weight: 800; color: white; font-size: 13px;
+    background: linear-gradient(180deg, var(--purple), var(--purple-2));
+  }
+  .leg-row.runner .num { background: linear-gradient(180deg, var(--yellow), var(--yellow-2)); color: #2a1c00; }
+  .leg-row .col { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  .leg-row .rm-leg { background: transparent; border: none; color: var(--muted-2); font-size: 18px; cursor: pointer; }
+  .leg-row .rm-leg:hover { color: var(--red); }
+
+  .stops-row {
+    display: grid; grid-template-columns: 32px 1fr 28px; gap: 10px;
+    align-items: center; margin-bottom: 6px;
+    padding: 9px 12px; background: rgba(231,76,60,.06);
+    border: 1px solid rgba(231,76,60,.22); border-radius: 10px;
+  }
+  .stops-row .num {
+    width: 28px; height: 28px; border-radius: 8px;
+    background: linear-gradient(180deg, var(--red), var(--red-2));
+    color: white; display: flex; align-items: center; justify-content: center;
+    font-weight: 800; font-size: 12px;
+  }
+  .stops-row .col { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+
+  .add-row {
+    border: 2px dashed var(--line-2); background: transparent; color: var(--muted);
+    padding: 8px 14px; border-radius: 10px; cursor: pointer;
+    font-weight: 600; font-size: 12px; margin-right: 8px;
+  }
+  .add-row:hover { border-color: var(--accent); color: var(--accent); }
+
+  .chip {
+    display: inline-flex; align-items: center; gap: 4px;
+    background: rgba(0,0,0,.28); border: 1px solid rgba(255,255,255,.12);
+    padding: 4px 8px; border-radius: 8px;
+    font-size: 12px; font-weight: 600;
+  }
+  .chip-input {
+    background: transparent; border: none; color: white;
+    width: 50px; outline: none; padding: 0; font: inherit; text-align: right;
+  }
+  .chip-input.size-input { width: 40px; }
+  .chip-select {
+    background: transparent; border: none; color: white; outline: none;
+    font: inherit; padding: 0; cursor: pointer;
+  }
+  .chip-select option { color: black; }
+  .chip .lbl { color: rgba(255,255,255,.7); font-weight: 500; font-size: 11px; }
+
+  .size-summary {
+    display: flex; align-items: center; gap: 12px;
+    padding: 8px 12px; background: rgba(155,89,182,.08);
+    border: 1px solid rgba(155,89,182,.22); border-radius: 10px;
+    font-size: 12px; margin-top: 8px;
+  }
+  .size-summary.bad { background: rgba(231,76,60,.10); border-color: rgba(231,76,60,.32); color: var(--red); }
+  .size-summary.good { color: var(--green); }
+  .size-bar {
+    flex: 1; height: 8px; background: rgba(255,255,255,.06); border-radius: 4px;
+    overflow: hidden; display: flex;
+  }
+  .size-bar .seg { background: var(--purple); border-right: 2px solid #0d1626; }
+  .size-bar .seg.runner { background: var(--yellow); }
+
+  .entry-trigger {
+    display: flex; align-items: center; gap: 10px;
+    background: rgba(46,204,113,.08);
+    border: 1px solid rgba(46,204,113,.25);
+    padding: 8px 12px; border-radius: 10px;
+    margin-bottom: 10px; font-size: 13px;
+  }
+  .entry-trigger .lbl { color: var(--green); font-weight: 700; font-size: 11px; text-transform: uppercase; letter-spacing: .8px; }
+  .entry-trigger .v { color: var(--text); font-weight: 600; }
+
+  /* Logical exits — two columns */
+  .exits-grid {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 12px;
+  }
+  .exits-col {
+    background: rgba(255,255,255,.02);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 10px 12px;
+    min-height: 90px;
+  }
+  .exits-col.long { border-left: 3px solid var(--green); }
+  .exits-col.short { border-left: 3px solid var(--red); }
+  .exits-col-head {
+    display: flex; align-items: center; gap: 8px;
+    margin-bottom: 8px;
+    padding-bottom: 6px;
+    border-bottom: 1px dashed var(--line);
+  }
+  .exits-col.long .exits-col-head .dot {
+    width: 8px; height: 8px; border-radius: 50%; background: var(--green);
+  }
+  .exits-col.short .exits-col-head .dot {
+    width: 8px; height: 8px; border-radius: 50%; background: var(--red);
+  }
+  .exits-col-head .lbl {
+    font-size: 11px; font-weight: 700; color: var(--muted);
+    text-transform: uppercase; letter-spacing: .8px;
+  }
+  .exits-col-head .exits-count {
+    background: rgba(255,255,255,.08); color: var(--text);
+    padding: 1px 7px; border-radius: 999px; font-size: 10px; font-weight: 700;
+  }
+  .exits-col-head .copy-btn {
+    margin-left: auto; padding: 3px 8px; font-size: 10px;
+    background: rgba(155,89,182,.12); color: #d4b5ff;
+    border: 1px solid rgba(155,89,182,.3);
+  }
+  .exits-col-head .copy-btn:hover { background: rgba(155,89,182,.22); }
+  .exits-hint {
+    margin-top: 10px; padding: 8px 10px;
+    color: var(--muted-2); font-size: 11px; line-height: 1.5;
+    background: rgba(255,255,255,.02); border-radius: 8px;
+  }
+  .exits-hint code {
+    background: rgba(0,0,0,.28); padding: 1px 5px; border-radius: 4px;
+    font-family: ui-monospace, monospace; color: var(--blue);
+  }
+
+  .stack { display: flex; flex-direction: column; align-items: flex-start; gap: 1px; }
+  .drop-zone {
+    width: 320px; height: 14px; border-radius: 8px;
+    border: 2px dashed transparent;
+    transition: border-color .12s, background .12s, height .12s;
+    margin: -1px 0;
+  }
+  .drop-zone.hot { border-color: rgba(79,140,255,.7); background: rgba(79,140,255,.10); height: 26px; }
+  .drop-zone.empty {
+    border-color: rgba(147,163,184,.30); height: 36px; width: 340px;
+    display: flex; align-items: center; justify-content: center;
+    color: var(--muted-2); font-size: 12px; font-style: italic;
+  }
+  .placed { cursor: pointer; }
+
+  /* Inspector */
+  .insp-head { padding: 14px 16px; border-bottom: 1px solid var(--line); }
+  .insp-head h4 { margin: 0 0 4px; font-size: 14px; }
+  .insp-head .desc { color: var(--muted); font-size: 12px; }
+  .insp-body { padding: 14px 16px; }
+
+  /* AI panel */
+  .ai-card {
+    background: linear-gradient(180deg, rgba(176,136,255,.14), rgba(17,22,29,.95));
+    border: 1px solid rgba(176,136,255,.32);
+    border-radius: 12px; padding: 14px;
+    margin-bottom: 12px;
+  }
+  .ai-card h4 {
+    margin: 0 0 6px; font-size: 13px; color: #d4b5ff;
+    display: flex; align-items: center; gap: 6px;
+  }
+  .ai-card .desc { font-size: 11px; color: var(--muted); margin-bottom: 8px; }
+  .ai-input {
+    width: 100%; min-height: 70px;
+    background: #0d1626; color: var(--text);
+    border: 1px solid rgba(155,89,182,.32);
+    border-radius: 8px; padding: 8px 10px; outline: none;
+    resize: vertical; font: inherit;
+  }
+  .ai-input:focus { border-color: rgba(155,89,182,.7); box-shadow: 0 0 0 3px rgba(155,89,182,.15); }
+  .ai-shortcuts {
+    display: flex; flex-wrap: wrap; gap: 5px; margin-top: 8px;
+  }
+  .ai-shortcut {
+    background: rgba(255,255,255,.05); border: 1px solid var(--line);
+    color: var(--muted); padding: 4px 8px; border-radius: 999px;
+    font-size: 10px; cursor: pointer;
+  }
+  .ai-shortcut:hover { color: var(--text); border-color: var(--accent); }
+
+  .health-card {
+    background: rgba(255,255,255,.03); border: 1px solid var(--line);
+    border-radius: 12px; padding: 14px;
+  }
+  .health-row {
+    display: flex; justify-content: space-between; padding: 5px 0;
+    border-bottom: 1px dashed var(--line); font-size: 12px;
+  }
+  .health-row:last-child { border-bottom: 0; }
+  .health-row .k { color: var(--muted); }
+
+  .toast {
+    position: fixed; right: 22px; bottom: 22px; z-index: 200;
+    background: #131e30; border: 1px solid var(--line-2);
+    padding: 10px 13px; border-radius: 10px; box-shadow: var(--shadow);
+    color: var(--text); font-size: 13px; opacity: 0;
+    transform: translateY(8px); transition: opacity .15s, transform .15s;
+  }
+  .toast.show { opacity: 1; transform: translateY(0); }
+
+  /* Hide one section based on tab */
+  .palette-cat { display: none; }
+  .palette-cat.active { display: block; }
+</style>
+</head>
+<body>
+  <div class="topbar">
+    <div style="display:flex; align-items:center; gap:14px;">
+      <div class="brand"><span class="mark"></span> Ultimate Trader</div>
+      <div>
+        <div class="crumb">Strategies / Compose · v4 IDE</div>
+        <h1 class="h1">ORB 5min Long — draft</h1>
+      </div>
+    </div>
+    <div class="btn-row">
+      <button class="btn">Validate</button>
+      <button class="btn purple">⚡ Ask AI</button>
+      <button class="btn primary">Save Strategy v1</button>
+    </div>
+  </div>
+
+  <div class="shell">
+
+    <!-- ============== PALETTE ============== -->
+    <aside class="palette">
+      <div class="palette-head">
+        <input class="palette-search" id="paletteSearch" placeholder="Search 200+ features..." />
+        <div class="palette-tabs" id="paletteTabs">
+          <button class="palette-tab active" data-cat="all">All</button>
+          <button class="palette-tab" data-cat="trend">Trend</button>
+          <button class="palette-tab" data-cat="momentum">Momentum</button>
+          <button class="palette-tab" data-cat="volatility">Volatility</button>
+          <button class="palette-tab" data-cat="volume">Volume</button>
+          <button class="palette-tab" data-cat="bb">Bollinger</button>
+          <button class="palette-tab" data-cat="time">Time/Session</button>
+          <button class="palette-tab" data-cat="bar">Bar/Price</button>
+          <button class="palette-tab" data-cat="exits">Exit blocks</button>
+        </div>
+      </div>
+      <div id="paletteBody"></div>
+    </aside>
+
+    <!-- ============== CANVAS ============== -->
+    <div class="canvas-wrap">
+      <div class="canvas">
+        <div class="canvas-inner">
+
+          <div class="bindings">
+            <div class="binding-card">
+              <div class="lbl">Strategy Controls</div>
+              <div class="name">Day Trader Default · v3</div>
+              <div class="meta">09:45–15:30 · skip power hour · 5/day cap</div>
+            </div>
+            <div class="binding-card">
+              <div class="lbl">Execution Profile</div>
+              <div class="name">Aggressive Market In/Out · v2</div>
+              <div class="meta">market entry · native bracket · Alpaca trail</div>
+            </div>
+          </div>
+
+          <!-- =================== VARIABLES (compact strip) =================== -->
+          <div class="vars-strip" id="varsStrip"></div>
+          <div class="vars-edit-pop" id="varsEditPop">
+            <label>Variable name</label>
+            <input class="vname-in" id="varNameIn" placeholder="short_ema" />
+            <label>Expression</label>
+            <input class="vexpr-in" id="varExprIn" placeholder="5m.ema(9)" />
+            <div style="display:flex; gap:6px; justify-content:flex-end; margin-top:4px;">
+              <button class="btn" id="varDel" style="display:none">Delete</button>
+              <button class="btn" id="varCancel">Cancel</button>
+              <button class="btn primary" id="varSave">Save</button>
+            </div>
+          </div>
+
+          <!-- =================== ENTRY (Long/Short tabs) =================== -->
+          <div class="section entry">
+            <div class="entry-tabs">
+              <button class="entry-tab long active" data-side="long">
+                <span class="dot"></span> Long entry
+                <span class="badge" id="longCount">6 features</span>
+              </button>
+              <button class="entry-tab short empty" data-side="short">
+                <span class="dot"></span> Short entry
+                <span class="badge" id="shortCount">empty</span>
+              </button>
+              <span class="entry-tab-spacer"></span>
+              <div class="entry-tab-actions">
+                <button class="mirror-btn" id="mirrorBtn" title="Generate short entry as logical inverse of long">⇄ Mirror to short</button>
+                <button class="browse-btn" id="browseBtn">Browse features</button>
+              </div>
+            </div>
+
+            <!-- LONG pane -->
+            <div class="entry-pane active" data-pane="long">
+              <div class="code-shell">
+                <div class="code-toolbar">
+                  <span class="stat ok" id="codeStat">✓ valid</span>
+                  <span style="color:var(--muted-2); margin-left:8px;">supports: <code style="color:var(--kw)">AND OR NOT</code> · parens · <code style="color:var(--kw)">crosses_above</code> · math · variables</span>
+                  <span style="flex:1"></span>
+                  <span class="stat" id="cursorPos">L1:C1</span>
+                  <span class="stat" id="featCount">0 features</span>
+                </div>
+                <div class="code-area">
+                  <div class="gutter" id="codeGutter"></div>
+                  <div class="code-input-wrap">
+                    <pre class="code-highlight" id="codeHighlight"></pre>
+                    <textarea class="code-input" id="codeInput" spellcheck="false"
+                      placeholder="Type or drag features. Try: 5m.ema(9) crosses_above 5m.ema(21)"></textarea>
+                    <div class="ac-pop" id="acPop"></div>
+                  </div>
+                </div>
+                <div class="diag-strip" id="diagStrip">
+                  <span class="diag muted">Press . after a timeframe (e.g. 5m.) for autocomplete · Ctrl+Space to browse features</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- SHORT pane -->
+            <div class="entry-pane" data-pane="short">
+              <div class="code-shell">
+                <div class="code-toolbar">
+                  <span class="stat ok" id="codeStatShort">empty</span>
+                  <span style="flex:1"></span>
+                  <span class="stat" id="cursorPosShort">L1:C1</span>
+                  <span class="stat" id="featCountShort">0 features</span>
+                </div>
+                <div class="code-area">
+                  <div class="gutter" id="codeGutterShort"></div>
+                  <div class="code-input-wrap">
+                    <pre class="code-highlight" id="codeHighlightShort"></pre>
+                    <textarea class="code-input" id="codeInputShort" spellcheck="false"
+                      placeholder="Empty — use ⇄ Mirror from long, or write short entry conditions here"></textarea>
+                  </div>
+                </div>
+                <div class="diag-strip">
+                  <span class="diag muted">Tip: click ⇄ Mirror to auto-invert your long expression as a starting point</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- =================== TRADE LEGS =================== -->
+          <div class="section legs">
+            <h3>
+              <span class="left"><span class="swatch"></span> Trade legs</span>
+              <span class="pill" id="legsCountPill">1 stop · 2 targets · 1 runner</span>
+            </h3>
+
+            <div class="entry-trigger">
+              <span class="lbl">Entry order</span>
+              <span class="v">Market (from Execution Profile)</span>
+              <span style="color:var(--muted); font-size:12px;">— fires when entry expression is true</span>
+            </div>
+
+            <div class="leg-row head">
+              <div></div><div>Stops</div><div></div><div></div><div></div>
+            </div>
+            <div id="stopsContainer"></div>
+            <button class="add-row" id="addStopBtn">+ Add stop</button>
+
+            <div class="leg-row head" style="margin-top:14px;">
+              <div></div><div>Size</div><div>Target</div><div>On-fill: move stops</div><div></div>
+            </div>
+            <div class="legs-rows" id="targetsContainer"></div>
+            <button class="add-row" id="addTargetBtn">+ Add target</button>
+            <button class="add-row" id="addRunnerBtn">+ Add runner</button>
+
+            <div class="size-summary" id="sizeSummary">
+              <span style="font-weight:700;">Position size split</span>
+              <div class="size-bar" id="sizeBar"></div>
+              <span id="sizeText">100% allocated ✓</span>
+            </div>
+          </div>
+
+          <!-- =================== LOGICAL EXITS (two columns: long / short) =================== -->
+          <div class="section exit">
+            <h3>
+              <span class="left"><span class="swatch"></span> Logical exits</span>
+              <span class="pill">ANY in the active side can fire · independent rules per direction</span>
+            </h3>
+            <div class="exits-grid">
+              <div class="exits-col long">
+                <div class="exits-col-head">
+                  <span class="dot"></span>
+                  <span class="lbl">Long exits</span>
+                  <span class="exits-count" id="longExitCount">0</span>
+                  <button class="btn copy-btn" id="copyLongToShort" title="Copy these exits to short side">⇄ Copy to short</button>
+                </div>
+                <div class="stack" data-stack="logical_exit_long"></div>
+              </div>
+              <div class="exits-col short">
+                <div class="exits-col-head">
+                  <span class="dot"></span>
+                  <span class="lbl">Short exits</span>
+                  <span class="exits-count" id="shortExitCount">0</span>
+                  <button class="btn copy-btn" id="copyShortToLong" title="Copy these exits to long side">⇄ Copy to long</button>
+                </div>
+                <div class="stack" data-stack="logical_exit_short"></div>
+              </div>
+            </div>
+            <div class="exits-hint">
+              Drag exit blocks from the <b>Exit blocks</b> palette tab (left). Some exits, like <code>Force flat at close</code>, apply equally to both sides — drop them in either column.
+            </div>
+          </div>
+
+        </div>
+      </div>
+    </div>
+
+    <!-- ============== AI / INSPECTOR ============== -->
+    <aside class="inspector">
+      <div class="insp-body">
+        <div class="ai-card">
+          <h4>⚡ AI assistant</h4>
+          <div class="desc">Ask for a strategy, a feature, or an explanation. AI fills the IDE for you.</div>
+          <textarea class="ai-input" id="aiInput" placeholder="e.g. Give me the FVG strategy on 5m. Or: what features detect opening-range expansion?"></textarea>
+          <div class="ai-shortcuts">
+            <button class="ai-shortcut" data-prompt="Generate the full Alligator strategy (Bill Williams) for 15m">🐊 Alligator strategy</button>
+            <button class="ai-shortcut" data-prompt="Generate the Fair Value Gap (FVG) reclaim strategy for 5m">📐 FVG strategy</button>
+            <button class="ai-shortcut" data-prompt="Generate the Williams fractal breakout strategy">🌀 Fractal breakout</button>
+            <button class="ai-shortcut" data-prompt="What features are available for opening-range and end-of-day exits?">❓ Find features for ORB</button>
+            <button class="ai-shortcut" data-prompt="Explain my current entry expression and any risks">🔎 Explain my entry</button>
+          </div>
+          <button class="btn purple" id="aiGo" style="width:100%; margin-top:10px;">Generate / Ask</button>
+        </div>
+
+        <div class="health-card">
+          <h4 style="margin:0 0 8px; font-size:13px;">Strategy health</h4>
+          <div class="health-row"><span class="k">Variables</span><span id="h-vars">3</span></div>
+          <div class="health-row"><span class="k">Features used</span><span id="h-feats">6</span></div>
+          <div class="health-row"><span class="k">Entry expression</span><span id="h-entry" style="color:var(--green)">valid</span></div>
+          <div class="health-row"><span class="k">Stops</span><span id="h-stops">1</span></div>
+          <div class="health-row"><span class="k">Targets / runner</span><span id="h-targets">2 / 1</span></div>
+          <div class="health-row"><span class="k">Size split</span><span id="h-size" style="color:var(--green)">100% ✓</span></div>
+          <div class="health-row"><span class="k">Logical exits</span><span id="h-exits">2</span></div>
+        </div>
+      </div>
+    </aside>
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+  <!-- Browse features overlay -->
+  <div class="browse-overlay" id="browseOverlay">
+    <div class="browse-modal">
+      <button class="close-x" id="browseClose">×</button>
+      <h3>Browse features</h3>
+      <div class="desc">Click any feature to insert at cursor in the active entry expression. Categorized for fast scanning.</div>
+      <input class="palette-search" id="browseSearch" placeholder="Search 200+ features..." style="width:100%; margin-bottom:14px;" />
+      <div id="browseGrid"></div>
+    </div>
+  </div>
+
+<script>
+/* =========================================================
+ * FEATURE CATALOG — categorized, dot-notation, with defaults
+ * ========================================================= */
+const FEATURES = [
+  // Trend
+  {cat:'trend', tf:true, name:'ema', sig:'ema(period)',         defaults:[9],          desc:'Exponential moving average'},
+  {cat:'trend', tf:true, name:'sma', sig:'sma(period)',         defaults:[20],         desc:'Simple moving average'},
+  {cat:'trend', tf:true, name:'wma', sig:'wma(period)',         defaults:[20],         desc:'Weighted moving average'},
+  {cat:'trend', tf:true, name:'hma', sig:'hma(period)',         defaults:[14],         desc:'Hull moving average'},
+  {cat:'trend', tf:true, name:'vwap', sig:'vwap()',             defaults:[],           desc:'Volume-weighted average price'},
+  {cat:'trend', tf:true, name:'supertrend', sig:'supertrend(period, mult)', defaults:[10,3], desc:'ATR-based supertrend'},
+  {cat:'trend', tf:true, name:'donchian_high', sig:'donchian_high(period)', defaults:[20], desc:'Donchian channel high'},
+  {cat:'trend', tf:true, name:'donchian_low',  sig:'donchian_low(period)',  defaults:[20], desc:'Donchian channel low'},
+  {cat:'trend', tf:true, name:'ichimoku_tenkan', sig:'ichimoku_tenkan()', defaults:[], desc:'Ichimoku conversion line'},
+  {cat:'trend', tf:true, name:'ichimoku_kijun',  sig:'ichimoku_kijun()',  defaults:[], desc:'Ichimoku base line'},
+  // Momentum
+  {cat:'momentum', tf:true, name:'rsi', sig:'rsi(period)',     defaults:[14],         desc:'Relative strength index'},
+  {cat:'momentum', tf:true, name:'macd_line',   sig:'macd_line(fast, slow, signal)',   defaults:[12,26,9], desc:'MACD line'},
+  {cat:'momentum', tf:true, name:'macd_signal', sig:'macd_signal(fast, slow, signal)', defaults:[12,26,9], desc:'MACD signal line'},
+  {cat:'momentum', tf:true, name:'macd_hist',   sig:'macd_hist(fast, slow, signal)',   defaults:[12,26,9], desc:'MACD histogram'},
+  {cat:'momentum', tf:true, name:'cci', sig:'cci(period)',     defaults:[20],         desc:'Commodity channel index'},
+  {cat:'momentum', tf:true, name:'stoch_k', sig:'stoch_k(period, smooth)', defaults:[14,3], desc:'Stochastic %K'},
+  {cat:'momentum', tf:true, name:'stoch_d', sig:'stoch_d(period, smooth)', defaults:[14,3], desc:'Stochastic %D'},
+  {cat:'momentum', tf:true, name:'roc', sig:'roc(period)',     defaults:[10],         desc:'Rate of change'},
+  {cat:'momentum', tf:true, name:'williams_r', sig:'williams_r(period)', defaults:[14], desc:'Williams %R'},
+  // Volatility
+  {cat:'volatility', tf:true, name:'atr', sig:'atr(period)',   defaults:[14],         desc:'Average true range'},
+  {cat:'volatility', tf:true, name:'true_range', sig:'true_range()', defaults:[],     desc:'Current bar true range'},
+  {cat:'volatility', tf:true, name:'natr', sig:'natr(period)', defaults:[14],         desc:'Normalized ATR (%)'},
+  {cat:'volatility', tf:true, name:'historical_vol', sig:'historical_vol(period)', defaults:[20], desc:'Annualized historical volatility'},
+  // Volume
+  {cat:'volume', tf:true, name:'volume',     sig:'volume',                defaults:[],   desc:'Current bar volume'},
+  {cat:'volume', tf:true, name:'volume_sma', sig:'volume_sma(period)',    defaults:[20], desc:'Average volume'},
+  {cat:'volume', tf:true, name:'rvol',       sig:'rvol(period)',          defaults:[20], desc:'Relative volume vs avg'},
+  {cat:'volume', tf:true, name:'obv',        sig:'obv()',                 defaults:[],   desc:'On-balance volume'},
+  {cat:'volume', tf:true, name:'cmf',        sig:'cmf(period)',           defaults:[20], desc:'Chaikin money flow'},
+  {cat:'volume', tf:true, name:'mfi',        sig:'mfi(period)',           defaults:[14], desc:'Money flow index'},
+  // Bollinger
+  {cat:'bb', tf:true, name:'bb_upper',  sig:'bb_upper(period, std)',  defaults:[20,2], desc:'Bollinger upper band'},
+  {cat:'bb', tf:true, name:'bb_lower',  sig:'bb_lower(period, std)',  defaults:[20,2], desc:'Bollinger lower band'},
+  {cat:'bb', tf:true, name:'bb_middle', sig:'bb_middle(period)',      defaults:[20],   desc:'Bollinger middle (SMA)'},
+  {cat:'bb', tf:true, name:'bb_width',  sig:'bb_width(period, std)',  defaults:[20,2], desc:'Bollinger band width'},
+  {cat:'bb', tf:true, name:'kc_upper',  sig:'kc_upper(period, mult)', defaults:[20,2], desc:'Keltner channel upper'},
+  {cat:'bb', tf:true, name:'kc_lower',  sig:'kc_lower(period, mult)', defaults:[20,2], desc:'Keltner channel lower'},
+  // Time / Session
+  {cat:'time', tf:false, name:'session.is_open', sig:'session.is_open',         defaults:[], desc:'In RTH session'},
+  {cat:'time', tf:false, name:'session.minutes_since_open', sig:'session.minutes_since_open', defaults:[], desc:'Minutes since 09:30 ET'},
+  {cat:'time', tf:false, name:'session.minutes_to_close',   sig:'session.minutes_to_close',   defaults:[], desc:'Minutes until 16:00 ET'},
+  {cat:'time', tf:false, name:'session.is_power_hour',      sig:'session.is_power_hour',      defaults:[], desc:'Last hour of RTH'},
+  {cat:'time', tf:false, name:'orb.high',  sig:'orb.high(window)',   defaults:[15], desc:'Opening range high (minutes)'},
+  {cat:'time', tf:false, name:'orb.low',   sig:'orb.low(window)',    defaults:[15], desc:'Opening range low (minutes)'},
+  {cat:'time', tf:false, name:'orb.range', sig:'orb.range(window)',  defaults:[15], desc:'Opening range size'},
+  {cat:'time', tf:false, name:'prior_day.high',  sig:'prior_day.high',  defaults:[], desc:'Yesterday high'},
+  {cat:'time', tf:false, name:'prior_day.low',   sig:'prior_day.low',   defaults:[], desc:'Yesterday low'},
+  {cat:'time', tf:false, name:'prior_day.close', sig:'prior_day.close', defaults:[], desc:'Yesterday close'},
+  // Bar / Price
+  {cat:'bar', tf:true, name:'close',  sig:'close',  defaults:[], desc:'Current bar close'},
+  {cat:'bar', tf:true, name:'open',   sig:'open',   defaults:[], desc:'Current bar open'},
+  {cat:'bar', tf:true, name:'high',   sig:'high',   defaults:[], desc:'Current bar high'},
+  {cat:'bar', tf:true, name:'low',    sig:'low',    defaults:[], desc:'Current bar low'},
+  {cat:'bar', tf:true, name:'range',  sig:'range',  defaults:[], desc:'high - low'},
+  {cat:'bar', tf:true, name:'body',   sig:'body',   defaults:[], desc:'abs(close - open)'},
+  {cat:'bar', tf:true, name:'is_doji',sig:'is_doji',defaults:[], desc:'Doji pattern detected'},
+  {cat:'bar', tf:true, name:'bar',    sig:'bar[N]', defaults:[], desc:'Lookback: bar[-1].close, bar[-3].high, etc.'},
+];
+
+const TIMEFRAMES = ['1m','5m','15m','30m','1h','4h','1d'];
+
+const KEYWORDS = ['AND','OR','NOT','crosses_above','crosses_below','within','any_of','all_of'];
+
+/* Logical-exit blocks (boxes, not code) */
+const EXIT_TEMPLATES = {
+  exit_no_progress:    { kind:'exit', label:'No-progress timeout', icon:'⏱', cat:'cat-exit', fields:[{k:'minutes',default:30}] },
+  exit_opposite_cross: { kind:'exit', label:'Opposite EMA cross', icon:'↩', cat:'cat-exit', fields:[{k:'fast',default:9},{k:'slow',default:21}] },
+  exit_session_end:    { kind:'exit', label:'Force flat at close', icon:'🌅', cat:'cat-exit', fields:[] },
+  exit_bars_since:     { kind:'exit', label:'Exit after N bars', icon:'▦', cat:'cat-exit', fields:[{k:'bars',default:20}] },
+};
+
+/* =========================================================
+ * STATE
+ * ========================================================= */
+let nextId = 1;
+const uid = (p='b')=> p + (nextId++);
+
+const variables = [
+  { id: uid('v'), name: 'short_ema', expr: '5m.ema(9)' },
+  { id: uid('v'), name: 'long_ema',  expr: '5m.ema(21)' },
+  { id: uid('v'), name: 'orb_high',  expr: 'orb.high(15)' },
+];
+
+let entryCode =
+`// ORB long: break of opening range with trend + volume confirmation
+close > orb_high
+AND short_ema crosses_above long_ema
+AND 5m.rsi(14) < 70
+AND 5m.volume > 1.5 * 5m.volume_sma(20)
+AND session.minutes_since_open > 15
+AND NOT session.is_power_hour`;
+
+let stops = [
+  { id: 's1', type: '%', value: 0.5, scope: 'all' }
+];
+
+let legs = [
+  { id: 'l1', kind: 'target', size: 33, targetType: '%', targetValue: 1.0, onFillType: 'be_plus', onFillValue: 0.10, manualSize: false },
+  { id: 'l2', kind: 'target', size: 33, targetType: 'ATR', targetValue: 2.0, onFillType: 'tighten', onFillValue: 0.5, manualSize: false },
+  { id: 'l3', kind: 'runner', size: 34, targetType: 'trail-ATR', targetValue: 1.5, onFillType: 'na', onFillValue: 0, manualSize: false },
+];
+
+const stacks = { logical_exit_long: [], logical_exit_short: [] };
+function exitInstance(templateId) {
+  const t = EXIT_TEMPLATES[templateId];
+  const inst = { id: uid(), templateId, kind: t.kind, params: {} };
+  t.fields.forEach(f => inst.params[f.k] = f.default);
+  return inst;
+}
+stacks.logical_exit_long.push(exitInstance('exit_no_progress'));
+stacks.logical_exit_long.push(exitInstance('exit_session_end'));
+
+let activeCat = 'all';
+
+/* =========================================================
+ * PALETTE
+ * ========================================================= */
+function renderPalette() {
+  const search = document.getElementById('paletteSearch').value.trim().toLowerCase();
+  const body = document.getElementById('paletteBody');
+  body.innerHTML = '';
+
+  if (activeCat === 'exits') {
+    const sec = document.createElement('div');
+    sec.className = 'palette-section';
+    sec.innerHTML = `<h4><span class="sw" style="background:var(--blue)"></span> Logical exit blocks</h4>`;
+    const list = document.createElement('div');
+    list.className = 'feature-list';
+    Object.entries(EXIT_TEMPLATES).forEach(([id, t]) => {
+      if (search && !t.label.toLowerCase().includes(search)) return;
+      const el = document.createElement('div');
+      el.className = 'feature-item';
+      el.draggable = true;
+      el.dataset.kind = 'exit';
+      el.dataset.template = id;
+      el.innerHTML = `<div><div class="name" style="color:var(--blue)">${t.icon} ${t.label}</div></div><button class="insert">drop in exits</button>`;
+      el.addEventListener('dragstart', (e) => {
+        dragData = { kind: 'exit', templateId: id };
+        e.dataTransfer.effectAllowed = 'copy';
+      });
+      list.appendChild(el);
+    });
+    sec.appendChild(list);
+    body.appendChild(sec);
+    return;
+  }
+
+  const groups = {};
+  FEATURES.forEach(f => {
+    if (activeCat !== 'all' && f.cat !== activeCat) return;
+    if (search && !(f.name.toLowerCase().includes(search) || f.desc.toLowerCase().includes(search))) return;
+    if (!groups[f.cat]) groups[f.cat] = [];
+    groups[f.cat].push(f);
+  });
+
+  const catNames = {
+    trend:'Trend', momentum:'Momentum', volatility:'Volatility',
+    volume:'Volume', bb:'Bollinger / Keltner', time:'Time / Session', bar:'Bar / Price'
+  };
+  const catColors = {
+    trend:'var(--green)', momentum:'var(--pink)', volatility:'var(--orange)',
+    volume:'var(--teal)', bb:'var(--purple)', time:'var(--accent)', bar:'var(--yellow)'
+  };
+
+  Object.entries(groups).forEach(([cat, items]) => {
+    const sec = document.createElement('div');
+    sec.className = 'palette-section';
+    sec.innerHTML = `<h4><span class="sw" style="background:${catColors[cat]}"></span> ${catNames[cat]}</h4>`;
+    const list = document.createElement('div');
+    list.className = 'feature-list';
+    items.forEach(f => {
+      const el = document.createElement('div');
+      el.className = 'feature-item';
+      el.draggable = true;
+      el.dataset.kind = 'feature';
+      el.dataset.feature = f.name;
+      el.innerHTML = `
+        <div>
+          <div class="name">${f.tf ? '5m.' : ''}${f.sig}</div>
+          <div class="desc">${f.desc}</div>
+        </div>
+        <button class="insert">insert</button>
+      `;
+      el.addEventListener('dragstart', (e) => {
+        dragData = { kind: 'feature', feature: f };
+        e.dataTransfer.effectAllowed = 'copy';
+      });
+      el.querySelector('.insert').addEventListener('click', (e) => {
+        e.stopPropagation();
+        insertFeatureAtCursor(f);
+      });
+      el.addEventListener('dblclick', () => insertFeatureAtCursor(f));
+      list.appendChild(el);
+    });
+    sec.appendChild(list);
+    body.appendChild(sec);
+  });
+
+  if (Object.keys(groups).length === 0 && activeCat !== 'exits') {
+    body.innerHTML = `<div style="padding:18px; color:var(--muted); font-size:12px; text-align:center;">No features match.</div>`;
+  }
+}
+
+document.querySelectorAll('.palette-tab').forEach(b => {
+  b.addEventListener('click', () => {
+    document.querySelectorAll('.palette-tab').forEach(x => x.classList.remove('active'));
+    b.classList.add('active');
+    activeCat = b.dataset.cat;
+    renderPalette();
+  });
+});
+document.getElementById('paletteSearch').addEventListener('input', renderPalette);
+
+/* =========================================================
+ * CODE EDITOR — syntax highlight, autocomplete, drag drop
+ * ========================================================= */
+const codeInput = document.getElementById('codeInput');
+const codeHL = document.getElementById('codeHighlight');
+const codeGutter = document.getElementById('codeGutter');
+const acPop = document.getElementById('acPop');
+
+function escapeHTML(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+
+function highlight(text) {
+  let s = escapeHTML(text);
+  // Comments
+  s = s.replace(/(\/\/[^\n]*)/g, '<span class="comment">$1</span>');
+  // Strings
+  s = s.replace(/("[^"]*")/g, '<span class="str">$1</span>');
+  // Keywords
+  s = s.replace(/\b(AND|OR|NOT|crosses_above|crosses_below|within|any_of|all_of|in)\b/g, '<span class="kw">$1</span>');
+  // Timeframes
+  s = s.replace(/\b(1m|5m|15m|30m|1h|4h|1d)\.(?=[a-zA-Z_])/g, '<span class="tf">$1</span>.');
+  // Function calls — colour name as fn
+  const featNames = FEATURES.map(f => f.name.replace('.','\\.')).join('|');
+  s = s.replace(new RegExp(`\\b(${featNames})\\b`, 'g'), '<span class="fn">$1</span>');
+  // Variables
+  const varNames = variables.map(v => v.name).join('|');
+  if (varNames) s = s.replace(new RegExp(`\\b(${varNames})\\b`, 'g'), '<span class="var">$1</span>');
+  // Numbers
+  s = s.replace(/\b(\d+(\.\d+)?)\b/g, '<span class="num">$1</span>');
+  // Operators
+  s = s.replace(/(&gt;=?|&lt;=?|==|!=|\+|-|\*|\/)/g, '<span class="op">$1</span>');
+  return s + '\n';
+}
+
+function renderCode() {
+  codeHL.innerHTML = highlight(codeInput.value);
+  const lines = codeInput.value.split('\n').length;
+  codeGutter.innerHTML = Array.from({length: Math.max(lines, 7)}, (_,i)=>`<div>${i+1}</div>`).join('');
+  syncScroll();
+  validateCode();
+  updateHealth();
+}
+
+function syncScroll() {
+  codeHL.scrollTop = codeInput.scrollTop;
+  codeHL.scrollLeft = codeInput.scrollLeft;
+}
+codeInput.addEventListener('scroll', syncScroll);
+
+codeInput.addEventListener('input', () => {
+  entryCode = codeInput.value;
+  renderCode();
+  maybeAutoComplete();
+});
+
+codeInput.addEventListener('keyup', (e) => {
+  updateCursorPos();
+  if (e.key === 'Escape') hideAC();
+});
+codeInput.addEventListener('click', () => { updateCursorPos(); hideAC(); });
+
+function updateCursorPos() {
+  const pos = codeInput.selectionStart;
+  const before = codeInput.value.substring(0, pos);
+  const lines = before.split('\n');
+  const line = lines.length;
+  const col = lines[lines.length-1].length + 1;
+  document.getElementById('cursorPos').textContent = `L${line}:C${col}`;
+}
+
+/* Autocomplete */
+let acItems = [];
+let acActive = 0;
+function maybeAutoComplete() {
+  const pos = codeInput.selectionStart;
+  const before = codeInput.value.substring(0, pos);
+
+  // After "5m." style or just typing identifier
+  const tfMatch = before.match(/(1m|5m|15m|30m|1h|4h|1d)\.([a-zA-Z_]*)$/);
+  const identMatch = before.match(/([a-zA-Z_][a-zA-Z0-9_]*)$/);
+
+  let items = [];
+  if (tfMatch) {
+    const prefix = tfMatch[2].toLowerCase();
+    items = FEATURES.filter(f => f.tf && f.name.toLowerCase().startsWith(prefix))
+      .map(f => ({label: f.sig, insert: f.sig.replace(/\((.*?)\)/, (m,args)=>{
+        if (!args) return '()';
+        const a = f.defaults.length ? f.defaults.join(', ') : args;
+        return '(' + a + ')';
+      }), desc: f.desc, cat: f.cat, full: f}));
+    showAC(items, tfMatch[2].length);
+    return;
+  }
+  if (identMatch) {
+    const prefix = identMatch[1].toLowerCase();
+    if (prefix.length < 2) { hideAC(); return; }
+    // Variables, no-tf features, keywords, timeframes
+    const varItems = variables.filter(v => v.name.toLowerCase().startsWith(prefix))
+      .map(v => ({label: v.name, insert: v.name, desc: '= '+v.expr, cat: 'var'}));
+    const noTfFeats = FEATURES.filter(f => !f.tf && f.name.toLowerCase().startsWith(prefix))
+      .map(f => ({label: f.sig, insert: f.sig.replace(/\((.*?)\)/, (m,args)=>{
+        if (!args) return '()';
+        const a = f.defaults.length ? f.defaults.join(', ') : args;
+        return '(' + a + ')';
+      }), desc: f.desc, cat: f.cat}));
+    const tfItems = TIMEFRAMES.filter(tf => tf.toLowerCase().startsWith(prefix))
+      .map(tf => ({label: tf+'.', insert: tf+'.', desc: 'timeframe — autocomplete features', cat: 'tf'}));
+    const kwItems = KEYWORDS.filter(k => k.toLowerCase().startsWith(prefix))
+      .map(k => ({label: k, insert: k+' ', desc: 'keyword', cat: 'kw'}));
+    items = [...varItems, ...tfItems, ...noTfFeats, ...kwItems].slice(0, 12);
+    if (items.length) showAC(items, identMatch[1].length);
+    else hideAC();
+    return;
+  }
+  hideAC();
+}
+
+function showAC(items, replaceLen) {
+  acItems = items;
+  acActive = 0;
+  acPop.dataset.replaceLen = replaceLen;
+  acPop.innerHTML = '';
+  items.forEach((it, i) => {
+    const el = document.createElement('div');
+    el.className = 'ac-item' + (i===0?' active':'');
+    el.innerHTML = `<span class="lbl">${it.label}</span><span class="cat">${it.cat}</span>`;
+    if (it.desc) {
+      el.title = it.desc;
+    }
+    el.addEventListener('click', () => acceptAC(i));
+    el.addEventListener('mouseenter', () => {
+      acActive = i;
+      [...acPop.children].forEach((c,j)=>c.classList.toggle('active', i===j));
+    });
+    acPop.appendChild(el);
+  });
+  // Position near cursor
+  positionAC();
+  acPop.classList.add('show');
+}
+function hideAC() { acPop.classList.remove('show'); acItems = []; }
+
+function positionAC() {
+  // Approximate: position below current cursor line
+  const pos = codeInput.selectionStart;
+  const before = codeInput.value.substring(0, pos);
+  const lines = before.split('\n');
+  const lineIdx = lines.length - 1;
+  const charPx = 7.7, lineH = 20;
+  const top = 12 + (lineIdx + 1) * lineH - codeInput.scrollTop;
+  const left = 14 + lines[lineIdx].length * charPx - codeInput.scrollLeft;
+  acPop.style.top = top + 'px';
+  acPop.style.left = Math.max(8, Math.min(left, codeInput.offsetWidth - 280)) + 'px';
+}
+
+codeInput.addEventListener('keydown', (e) => {
+  if (!acPop.classList.contains('show')) return;
+  if (e.key === 'ArrowDown') {
+    e.preventDefault();
+    acActive = (acActive + 1) % acItems.length;
+    [...acPop.children].forEach((c,i)=>c.classList.toggle('active', acActive===i));
+  } else if (e.key === 'ArrowUp') {
+    e.preventDefault();
+    acActive = (acActive - 1 + acItems.length) % acItems.length;
+    [...acPop.children].forEach((c,i)=>c.classList.toggle('active', acActive===i));
+  } else if (e.key === 'Enter' || e.key === 'Tab') {
+    e.preventDefault();
+    acceptAC(acActive);
+  } else if (e.key === 'Escape') {
+    hideAC();
+  }
+});
+
+function acceptAC(idx) {
+  const it = acItems[idx];
+  if (!it) return;
+  const replaceLen = parseInt(acPop.dataset.replaceLen || '0', 10);
+  const pos = codeInput.selectionStart;
+  const before = codeInput.value.substring(0, pos - replaceLen);
+  const after = codeInput.value.substring(pos);
+  const newVal = before + it.insert + after;
+  codeInput.value = newVal;
+  const newPos = before.length + it.insert.length;
+  codeInput.setSelectionRange(newPos, newPos);
+  entryCode = newVal;
+  renderCode();
+  hideAC();
+  codeInput.focus();
+}
+
+function insertFeatureAtCursor(f) {
+  const target = activeSide === 'short' ? document.getElementById('codeInputShort') : codeInput;
+  const text = (f.tf ? '5m.' : '') + f.sig.replace(/\((.*?)\)/, (m,args) => {
+    if (!args) return '';
+    const a = f.defaults.length ? f.defaults.join(', ') : args;
+    return '(' + a + ')';
+  });
+  const pos = target.selectionStart;
+  const before = target.value.substring(0, pos);
+  const after = target.value.substring(pos);
+  const needsSpace = before.length > 0 && !/\s$/.test(before) && !/^[(\s]/.test(text);
+  const inserted = (needsSpace ? ' ' : '') + text;
+  target.value = before + inserted + after;
+  if (activeSide === 'short') {
+    entryCodeShort = target.value;
+    document.querySelector('.entry-tab.short').classList.remove('empty');
+    document.getElementById('shortCount').textContent = countFeatures(target.value) + ' features';
+  } else {
+    entryCode = target.value;
+    renderCode();
+  }
+  const newPos = before.length + inserted.length;
+  target.focus();
+  target.setSelectionRange(newPos, newPos);
+  toast(`Inserted ${f.name} into ${activeSide} entry`);
+}
+
+/* Drag-drop feature into code editor */
+let dragData = null;
+codeInput.addEventListener('dragover', (e) => {
+  if (!dragData || dragData.kind !== 'feature') return;
+  e.preventDefault();
+});
+codeInput.addEventListener('drop', (e) => {
+  if (!dragData || dragData.kind !== 'feature') return;
+  e.preventDefault();
+  insertFeatureAtCursor(dragData.feature);
+  dragData = null;
+});
+
+/* Validation */
+function validateCode() {
+  const text = codeInput.value;
+  const diags = [];
+  // Check unknown identifiers
+  const allowedIds = new Set([
+    ...FEATURES.map(f => f.name),
+    ...variables.map(v => v.name),
+    ...KEYWORDS,
+    ...TIMEFRAMES,
+    'true','false','session','orb','prior_day','bar'
+  ]);
+  const idRegex = /\b([a-zA-Z_][a-zA-Z0-9_]*)\b/g;
+  let m;
+  const unknown = new Set();
+  while ((m = idRegex.exec(text))) {
+    const tok = m[1];
+    if (!allowedIds.has(tok) && !/^\d/.test(tok)) {
+      // Skip if preceded by . (member of known like session.is_open already in list as 'session.is_open')
+      const prevChar = text[m.index - 1];
+      if (prevChar === '.') continue;
+      unknown.add(tok);
+    }
+  }
+  // Parens balance
+  const opens = (text.match(/\(/g)||[]).length;
+  const closes = (text.match(/\)/g)||[]).length;
+  const stat = document.getElementById('codeStat');
+  const strip = document.getElementById('diagStrip');
+  strip.innerHTML = '';
+  if (unknown.size === 0 && opens === closes) {
+    stat.className = 'stat ok';
+    stat.textContent = '✓ valid';
+    strip.innerHTML = `<span class="diag ok">✓ Expression compiles</span><span class="diag muted">${countFeatures(text)} features referenced</span>`;
+  } else {
+    stat.className = 'stat warn';
+    stat.textContent = `⚠ ${unknown.size + (opens!==closes?1:0)} issue${unknown.size>0?'s':''}`;
+    if (opens !== closes) strip.innerHTML += `<span class="diag bad">🔴 unbalanced parens (${opens} open / ${closes} close)</span>`;
+    [...unknown].forEach(u => {
+      strip.innerHTML += `<span class="diag warn">⚠ unknown: <code>${u}</code></span>`;
+    });
+  }
+  document.getElementById('featCount').textContent = `${countFeatures(text)} features`;
+  const longBadge = document.getElementById('longCount');
+  if (longBadge) longBadge.textContent = countFeatures(text) + ' features';
+}
+
+function countFeatures(text) {
+  const featNames = FEATURES.map(f => f.name);
+  let count = 0;
+  featNames.forEach(n => {
+    const re = new RegExp('\\b' + n.replace('.','\\.') + '\\b', 'g');
+    count += (text.match(re) || []).length;
+  });
+  return count;
+}
+
+/* =========================================================
+ * VARIABLES
+ * ========================================================= */
+/* ---------- Variables: compact strip + edit popover ---------- */
+let editingVarIdx = -1;
+function renderVars() {
+  const strip = document.getElementById('varsStrip');
+  strip.innerHTML = `<span class="lead">Vars</span>`;
+  if (variables.length === 0) {
+    const empty = document.createElement('span');
+    empty.style.color = 'var(--muted-2)';
+    empty.style.fontSize = '11px';
+    empty.style.fontStyle = 'italic';
+    empty.textContent = 'no variables — click + to add';
+    strip.appendChild(empty);
+  }
+  variables.forEach((v, i) => {
+    const chip = document.createElement('span');
+    chip.className = 'var-chip';
+    chip.innerHTML = `<span class="vn">${v.name}</span><span class="vsep">=</span><span class="vex">${v.expr}</span><span class="x">×</span>`;
+    chip.addEventListener('click', (e) => {
+      if (e.target.classList.contains('x')) {
+        variables.splice(i,1); renderVars(); renderCode(); return;
+      }
+      openVarEditor(i, chip);
+    });
+    strip.appendChild(chip);
+  });
+  const addBtn = document.createElement('button');
+  addBtn.className = 'var-add';
+  addBtn.textContent = '+ var';
+  addBtn.addEventListener('click', (e) => openVarEditor(-1, e.target));
+  strip.appendChild(addBtn);
+}
+
+function openVarEditor(idx, anchor) {
+  editingVarIdx = idx;
+  const pop = document.getElementById('varsEditPop');
+  const nIn = document.getElementById('varNameIn');
+  const eIn = document.getElementById('varExprIn');
+  const del = document.getElementById('varDel');
+  if (idx === -1) {
+    nIn.value = ''; eIn.value = '';
+    del.style.display = 'none';
+  } else {
+    nIn.value = variables[idx].name; eIn.value = variables[idx].expr;
+    del.style.display = '';
+  }
+  // position
+  const r = anchor.getBoundingClientRect();
+  pop.style.top = (r.bottom + window.scrollY + 4) + 'px';
+  pop.style.left = (r.left + window.scrollX) + 'px';
+  pop.classList.add('show');
+  setTimeout(() => nIn.focus(), 30);
+}
+document.getElementById('varCancel').addEventListener('click', () => {
+  document.getElementById('varsEditPop').classList.remove('show');
+});
+document.getElementById('varDel').addEventListener('click', () => {
+  if (editingVarIdx >= 0) {
+    variables.splice(editingVarIdx, 1);
+    document.getElementById('varsEditPop').classList.remove('show');
+    renderVars(); renderCode();
+  }
+});
+document.getElementById('varSave').addEventListener('click', () => {
+  const n = document.getElementById('varNameIn').value.trim().replace(/[^a-zA-Z0-9_]/g,'_');
+  const e = document.getElementById('varExprIn').value.trim();
+  if (!n || !e) { toast('Both name and expression required.'); return; }
+  if (editingVarIdx === -1) variables.push({ id: uid('v'), name: n, expr: e });
+  else { variables[editingVarIdx].name = n; variables[editingVarIdx].expr = e; }
+  document.getElementById('varsEditPop').classList.remove('show');
+  renderVars(); renderCode();
+});
+document.addEventListener('click', (e) => {
+  const pop = document.getElementById('varsEditPop');
+  if (!pop.contains(e.target) && !e.target.closest('.var-chip') && !e.target.classList.contains('var-add')) {
+    pop.classList.remove('show');
+  }
+});
+
+/* ---------- Long/Short entry tabs ---------- */
+let activeSide = 'long';
+let entryCodeShort = '';
+
+document.querySelectorAll('.entry-tab').forEach(tab => {
+  tab.addEventListener('click', () => {
+    activeSide = tab.dataset.side;
+    document.querySelectorAll('.entry-tab').forEach(t => t.classList.toggle('active', t === tab));
+    document.querySelectorAll('.entry-pane').forEach(p => {
+      p.classList.toggle('active', p.dataset.pane === activeSide);
+    });
+  });
+});
+
+/* Mirror long → short by inverting comparators */
+function mirrorLongToShort() {
+  let s = codeInput.value;
+  // Map of inversions
+  const swaps = [
+    [/\bcrosses_above\b/g, '__CA__'],
+    [/\bcrosses_below\b/g, 'crosses_above'],
+    [/__CA__/g, 'crosses_below'],
+    [/>=/g, '__GE__'], [/<=/g, '__LE__'],
+    [/__GE__/g, '<='], [/__LE__/g, '>='],
+    [/(?<![<>=!])>/g, '__GT__'], [/(?<![<>=!])</g, '__LT__'],
+    [/__GT__/g, '<'], [/__LT__/g, '>'],
+    [/\bbb_lower\b/g, '__BBL__'], [/\bbb_upper\b/g, 'bb_lower'], [/__BBL__/g, 'bb_upper'],
+    [/\bdonchian_low\b/g, '__DL__'], [/\bdonchian_high\b/g, 'donchian_low'], [/__DL__/g, 'donchian_high'],
+    [/\borb\.high\b/g, '__OH__'], [/\borb\.low\b/g, 'orb.high'], [/__OH__/g, 'orb.low'],
+    [/\bprior_day\.high\b/g, '__PH__'], [/\bprior_day\.low\b/g, 'prior_day.high'], [/__PH__/g, 'prior_day.low'],
+  ];
+  swaps.forEach(([re, rep]) => s = s.replace(re, rep));
+  // Comment header
+  if (!s.match(/^\s*\/\//)) s = '// Auto-mirrored from long entry — review and adjust\n' + s;
+  else s = s.replace(/^\s*\/\/[^\n]*\n?/, '// Auto-mirrored from long entry — review and adjust\n');
+  document.getElementById('codeInputShort').value = s;
+  entryCodeShort = s;
+  document.querySelectorAll('.entry-tab').forEach(t => t.classList.toggle('active', t.dataset.side === 'short'));
+  document.querySelectorAll('.entry-pane').forEach(p => p.classList.toggle('active', p.dataset.pane === 'short'));
+  activeSide = 'short';
+  document.querySelector('.entry-tab.short').classList.remove('empty');
+  document.getElementById('shortCount').textContent = countFeatures(s) + ' features';
+  document.getElementById('codeStatShort').textContent = '✓ valid (mirrored)';
+  document.getElementById('codeStatShort').className = 'stat ok';
+  toast('Mirrored — review the inverted expression');
+}
+document.getElementById('mirrorBtn').addEventListener('click', mirrorLongToShort);
+
+/* Short editor — basic input handling */
+const codeInputShort = document.getElementById('codeInputShort');
+codeInputShort.addEventListener('input', () => {
+  entryCodeShort = codeInputShort.value;
+  const tab = document.querySelector('.entry-tab.short');
+  if (entryCodeShort.trim()) {
+    tab.classList.remove('empty');
+    document.getElementById('shortCount').textContent = countFeatures(entryCodeShort) + ' features';
+  } else {
+    tab.classList.add('empty');
+    document.getElementById('shortCount').textContent = 'empty';
+  }
+});
+
+/* ---------- Browse features overlay ---------- */
+const browseOverlay = document.getElementById('browseOverlay');
+function openBrowse() {
+  browseOverlay.classList.add('show');
+  renderBrowse();
+  setTimeout(() => document.getElementById('browseSearch').focus(), 30);
+}
+function renderBrowse() {
+  const search = document.getElementById('browseSearch').value.trim().toLowerCase();
+  const grid = document.getElementById('browseGrid');
+  const filtered = FEATURES.filter(f => !search || f.name.toLowerCase().includes(search) || f.desc.toLowerCase().includes(search));
+  const groups = {};
+  filtered.forEach(f => { (groups[f.cat] = groups[f.cat] || []).push(f); });
+  const catNames = {trend:'Trend', momentum:'Momentum', volatility:'Volatility', volume:'Volume', bb:'Bollinger / Keltner', time:'Time / Session', bar:'Bar / Price'};
+  grid.innerHTML = '';
+  Object.entries(groups).forEach(([cat, items]) => {
+    const h = document.createElement('h4');
+    h.style.cssText = 'margin:14px 0 8px; font-size:11px; color:var(--muted-2); text-transform:uppercase; letter-spacing:.8px;';
+    h.textContent = catNames[cat] || cat;
+    grid.appendChild(h);
+    const sub = document.createElement('div');
+    sub.className = 'browse-grid';
+    items.forEach(f => {
+      const it = document.createElement('div');
+      it.className = 'item';
+      it.innerHTML = `<div class="name">${f.tf?'5m.':''}${f.sig}</div><div class="desc">${f.desc}</div>`;
+      it.addEventListener('click', () => {
+        insertFeatureAtCursor(f);
+        browseOverlay.classList.remove('show');
+      });
+      sub.appendChild(it);
+    });
+    grid.appendChild(sub);
+  });
+}
+document.getElementById('browseSearch').addEventListener('input', renderBrowse);
+document.getElementById('browseClose').addEventListener('click', () => browseOverlay.classList.remove('show'));
+browseOverlay.addEventListener('click', (e) => { if (e.target === browseOverlay) browseOverlay.classList.remove('show'); });
+document.getElementById('browseBtn').addEventListener('click', openBrowse);
+document.addEventListener('keydown', (e) => {
+  if ((e.ctrlKey || e.metaKey) && e.code === 'Space') { e.preventDefault(); openBrowse(); }
+  if (e.key === 'Escape' && browseOverlay.classList.contains('show')) browseOverlay.classList.remove('show');
+});
+
+/* =========================================================
+ * STOPS / LEGS (same as v2)
+ * ========================================================= */
+function stopRowEl(stop, idx) {
+  // Default mode if missing
+  if (!stop.mode) stop.mode = 'simple';
+
+  const row = document.createElement('div');
+  row.className = 'stop-expr-row';
+  row.dataset.id = stop.id;
+
+  const num = document.createElement('div');
+  num.className = 'num';
+  num.textContent = '⛔';
+  num.style.cssText = 'width:28px; height:28px; border-radius:8px; background:linear-gradient(180deg, var(--red), var(--red-2)); color:white; display:flex; align-items:center; justify-content:center; font-weight:800; font-size:12px;';
+  row.appendChild(num);
+
+  // Mode toggle
+  const toggle = document.createElement('div');
+  toggle.className = 'stop-mode-toggle';
+  ['simple','expression'].forEach(m => {
+    const b = document.createElement('button');
+    b.textContent = m;
+    if (stop.mode === m) b.classList.add('active');
+    b.addEventListener('click', () => {
+      stop.mode = m;
+      if (m === 'expression' && !stop.expr) {
+        stop.expr = stop.type === '%' ? `entry_price * ${(1 - (stop.value||0)/100)}` : '';
+      }
+      renderLegs();
+    });
+    toggle.appendChild(b);
+  });
+  row.appendChild(toggle);
+
+  const col = document.createElement('div');
+  col.className = 'col';
+  col.style.display = 'flex'; col.style.gap = '6px'; col.style.alignItems = 'center'; col.style.flexWrap = 'wrap';
+
+  if (stop.mode === 'simple') {
+    const typeChip = document.createElement('span');
+    typeChip.className = 'chip';
+    typeChip.innerHTML = `<span class="lbl">type</span>`;
+    const typeSel = document.createElement('select');
+    typeSel.className = 'chip-select';
+    ['%','ATR','$','R'].forEach(o => {
+      const op = document.createElement('option');
+      op.value = o; op.textContent = o;
+      if (stop.type === o) op.selected = true;
+      typeSel.appendChild(op);
+    });
+    typeSel.addEventListener('change', () => { stop.type = typeSel.value; });
+    typeChip.appendChild(typeSel);
+    col.appendChild(typeChip);
+
+    const valChip = document.createElement('span');
+    valChip.className = 'chip';
+    valChip.innerHTML = `<span class="lbl">value</span>`;
+    const valIn = document.createElement('input');
+    valIn.className = 'chip-input';
+    valIn.type = 'number'; valIn.step = 'any';
+    valIn.value = stop.value;
+    valIn.addEventListener('input', () => { stop.value = parseFloat(valIn.value)||0; });
+    valChip.appendChild(valIn);
+    col.appendChild(valChip);
+  } else {
+    const exprIn = document.createElement('input');
+    exprIn.className = 'stop-expr-input';
+    exprIn.placeholder = 'e.g. min(entry_price * 0.99, bar[-3].low - 0.05)';
+    exprIn.value = stop.expr || '';
+    exprIn.addEventListener('input', () => { stop.expr = exprIn.value; });
+    col.appendChild(exprIn);
+  }
+
+  const scopeChip = document.createElement('span');
+  scopeChip.className = 'chip';
+  scopeChip.innerHTML = `<span class="lbl">scope</span>`;
+  const scopeSel = document.createElement('select');
+  scopeSel.className = 'chip-select';
+  const scopeOpts = [{v:'all',t:'all legs'}];
+  legs.forEach((l,i) => scopeOpts.push({v:`leg-${i+1}`, t:`leg ${i+1} only`}));
+  scopeOpts.forEach(o => {
+    const op = document.createElement('option');
+    op.value = o.v; op.textContent = o.t;
+    if (stop.scope === o.v) op.selected = true;
+    scopeSel.appendChild(op);
+  });
+  scopeSel.addEventListener('change', () => { stop.scope = scopeSel.value; });
+  scopeChip.appendChild(scopeSel);
+  col.appendChild(scopeChip);
+
+  row.appendChild(col);
+
+  const rm = document.createElement('button');
+  rm.className = 'rm-leg';
+  rm.textContent = '×';
+  rm.addEventListener('click', () => {
+    if (stops.length === 1) { toast('At least one stop is required.'); return; }
+    stops.splice(idx, 1); renderLegs();
+  });
+  row.appendChild(rm);
+  return row;
+}
+
+function legRowEl(leg, idx) {
+  const row = document.createElement('div');
+  row.className = 'leg-row' + (leg.kind === 'runner' ? ' runner' : '');
+
+  const num = document.createElement('div');
+  num.className = 'num';
+  num.textContent = idx + 1;
+  row.appendChild(num);
+
+  const sizeCol = document.createElement('div');
+  sizeCol.className = 'col';
+  const sizeChip = document.createElement('span');
+  sizeChip.className = 'chip';
+  const sizeIn = document.createElement('input');
+  sizeIn.className = 'chip-input size-input';
+  sizeIn.type = 'number'; sizeIn.min = 0; sizeIn.max = 100;
+  sizeIn.value = leg.size;
+  sizeIn.addEventListener('input', () => {
+    leg.manualSize = true;
+    leg.size = parseFloat(sizeIn.value) || 0;
+    rebalanceSizes(leg.id);
+    renderLegs();
+  });
+  sizeChip.appendChild(sizeIn);
+  const sizePct = document.createElement('span');
+  sizePct.className = 'lbl'; sizePct.textContent = '%';
+  sizeChip.appendChild(sizePct);
+  sizeCol.appendChild(sizeChip);
+  row.appendChild(sizeCol);
+
+  const tgtCol = document.createElement('div');
+  tgtCol.className = 'col';
+  if (leg.kind === 'runner') {
+    const trailLabel = document.createElement('span');
+    trailLabel.style.color = 'var(--yellow)';
+    trailLabel.style.fontWeight = '700';
+    trailLabel.style.fontSize = '11px';
+    trailLabel.textContent = 'TRAIL';
+    tgtCol.appendChild(trailLabel);
+    const typeChip = document.createElement('span');
+    typeChip.className = 'chip';
+    const typeSel = document.createElement('select');
+    typeSel.className = 'chip-select';
+    ['ATR','%','$'].forEach(o => {
+      const op = document.createElement('option');
+      op.value = 'trail-'+o; op.textContent = o;
+      if (leg.targetType === 'trail-'+o) op.selected = true;
+      typeSel.appendChild(op);
+    });
+    typeSel.addEventListener('change', () => { leg.targetType = typeSel.value; });
+    typeChip.appendChild(typeSel);
+    tgtCol.appendChild(typeChip);
+    const valChip = document.createElement('span');
+    valChip.className = 'chip';
+    const valIn = document.createElement('input');
+    valIn.className = 'chip-input';
+    valIn.type = 'number'; valIn.step = 'any'; valIn.value = leg.targetValue;
+    valIn.addEventListener('input', () => { leg.targetValue = parseFloat(valIn.value) || 0; });
+    valChip.appendChild(valIn);
+    tgtCol.appendChild(valChip);
+  } else {
+    const typeChip = document.createElement('span');
+    typeChip.className = 'chip';
+    const typeSel = document.createElement('select');
+    typeSel.className = 'chip-select';
+    ['%','ATR','$','R','feature'].forEach(o => {
+      const op = document.createElement('option');
+      op.value = o; op.textContent = o;
+      if (leg.targetType === o) op.selected = true;
+      typeSel.appendChild(op);
+    });
+    typeSel.addEventListener('change', () => { leg.targetType = typeSel.value; });
+    typeChip.appendChild(typeSel);
+    tgtCol.appendChild(typeChip);
+    const valChip = document.createElement('span');
+    valChip.className = 'chip';
+    const valIn = document.createElement('input');
+    valIn.className = 'chip-input';
+    valIn.type = 'number'; valIn.step = 'any'; valIn.value = leg.targetValue;
+    valIn.addEventListener('input', () => { leg.targetValue = parseFloat(valIn.value) || 0; });
+    valChip.appendChild(valIn);
+    tgtCol.appendChild(valChip);
+  }
+  row.appendChild(tgtCol);
+
+  const ofCol = document.createElement('div');
+  ofCol.className = 'col';
+  if (leg.kind === 'runner') {
+    const span = document.createElement('span');
+    span.style.color = 'var(--muted-2)'; span.style.fontSize = '11px';
+    span.textContent = 'n/a (runner)';
+    ofCol.appendChild(span);
+  } else {
+    const ofChip = document.createElement('span');
+    ofChip.className = 'chip';
+    const ofSel = document.createElement('select');
+    ofSel.className = 'chip-select';
+    [
+      ['be_exact', 'BE exact'],
+      ['be_plus',  'BE + offset'],
+      ['be_minus', 'BE − offset'],
+      ['tighten',  'tighten ATR'],
+      ['leave',    'leave alone'],
+    ].forEach(([v,t]) => {
+      const op = document.createElement('option');
+      op.value = v; op.textContent = t;
+      if (leg.onFillType === v) op.selected = true;
+      ofSel.appendChild(op);
+    });
+    ofSel.addEventListener('change', () => { leg.onFillType = ofSel.value; renderLegs(); });
+    ofChip.appendChild(ofSel);
+    ofCol.appendChild(ofChip);
+    if (leg.onFillType === 'be_plus' || leg.onFillType === 'be_minus' || leg.onFillType === 'tighten') {
+      const valChip = document.createElement('span');
+      valChip.className = 'chip';
+      const valIn = document.createElement('input');
+      valIn.className = 'chip-input';
+      valIn.type = 'number'; valIn.step = 'any'; valIn.value = leg.onFillValue;
+      valIn.addEventListener('input', () => { leg.onFillValue = parseFloat(valIn.value) || 0; });
+      valChip.appendChild(valIn);
+      ofCol.appendChild(valChip);
+    }
+  }
+  row.appendChild(ofCol);
+
+  const rm = document.createElement('button');
+  rm.className = 'rm-leg';
+  rm.textContent = '×';
+  rm.addEventListener('click', () => {
+    const targetCount = legs.filter(l => l.kind === 'target').length;
+    if (leg.kind === 'target' && targetCount === 1) { toast('At least one target is required.'); return; }
+    legs.splice(idx, 1);
+    rebalanceSizes(null);
+    renderLegs();
+  });
+  row.appendChild(rm);
+  return row;
+}
+
+function rebalanceSizes() {
+  const total = 100;
+  const manualLegs = legs.filter(l => l.manualSize);
+  const autoLegs = legs.filter(l => !l.manualSize);
+  if (autoLegs.length === 0) return;
+  const manualSum = manualLegs.reduce((s, l) => s + (l.size || 0), 0);
+  const remaining = Math.max(0, total - manualSum);
+  const perAuto = autoLegs.length > 0 ? Math.floor((remaining / autoLegs.length) * 10) / 10 : 0;
+  autoLegs.forEach(l => l.size = perAuto);
+  const newSum = legs.reduce((s, l) => s + (l.size || 0), 0);
+  const diff = total - newSum;
+  if (autoLegs.length > 0 && Math.abs(diff) > 0.01) {
+    autoLegs[autoLegs.length - 1].size = Math.round((autoLegs[autoLegs.length - 1].size + diff) * 10) / 10;
+  }
+}
+
+function renderLegs() {
+  const stopsEl = document.getElementById('stopsContainer');
+  stopsEl.innerHTML = '';
+  stops.forEach((s, i) => stopsEl.appendChild(stopRowEl(s, i)));
+  const legsEl = document.getElementById('targetsContainer');
+  legsEl.innerHTML = '';
+  legs.forEach((l, i) => legsEl.appendChild(legRowEl(l, i)));
+
+  const sumEl = document.getElementById('sizeSummary');
+  const txt = document.getElementById('sizeText');
+  const bar = document.getElementById('sizeBar');
+  const total = legs.reduce((s,l) => s + (parseFloat(l.size)||0), 0);
+  bar.innerHTML = '';
+  legs.forEach(l => {
+    const seg = document.createElement('div');
+    seg.className = 'seg' + (l.kind === 'runner' ? ' runner' : '');
+    seg.style.width = `${(l.size||0)}%`;
+    bar.appendChild(seg);
+  });
+  if (Math.abs(total - 100) < 0.5) {
+    txt.textContent = `100% allocated ✓`;
+    sumEl.classList.remove('bad'); sumEl.classList.add('good');
+  } else {
+    txt.textContent = `${total.toFixed(1)}% allocated — ${total < 100 ? 'add ' + (100-total).toFixed(1) + '% more' : 'over by ' + (total-100).toFixed(1) + '%'}`;
+    sumEl.classList.remove('good'); sumEl.classList.add('bad');
+  }
+  const targetCount = legs.filter(l => l.kind === 'target').length;
+  const runnerCount = legs.filter(l => l.kind === 'runner').length;
+  document.getElementById('legsCountPill').textContent =
+    `${stops.length} stop${stops.length>1?'s':''} · ${targetCount} target${targetCount>1?'s':''}${runnerCount?` · ${runnerCount} runner`:''}`;
+  updateHealth();
+}
+
+document.getElementById('addStopBtn').addEventListener('click', () => {
+  stops.push({ id: uid('s'), type: '%', value: 0.5, scope: 'all' });
+  renderLegs();
+});
+document.getElementById('addTargetBtn').addEventListener('click', () => {
+  const newLeg = { id: uid('l'), kind:'target', size: 0, targetType: '%', targetValue: 1.0, onFillType: 'be_plus', onFillValue: 0.10, manualSize: false };
+  const runnerIdx = legs.findIndex(l => l.kind === 'runner');
+  if (runnerIdx === -1) legs.push(newLeg);
+  else legs.splice(runnerIdx, 0, newLeg);
+  rebalanceSizes();
+  renderLegs();
+});
+document.getElementById('addRunnerBtn').addEventListener('click', () => {
+  if (legs.find(l => l.kind === 'runner')) { toast('Only one runner per strategy.'); return; }
+  legs.push({ id: uid('l'), kind:'runner', size: 0, targetType: 'trail-ATR', targetValue: 1.5, onFillType: 'na', onFillValue: 0, manualSize: false });
+  rebalanceSizes();
+  renderLegs();
+});
+
+/* =========================================================
+ * LOGICAL EXIT BLOCKS (boxes — drag from palette tab "Exit blocks")
+ * ========================================================= */
+function exitBlockEl(inst, side) {
+  const t = EXIT_TEMPLATES[inst.templateId];
+  const el = document.createElement('div');
+  el.className = `block ${t.cat} placed`;
+  el.dataset.id = inst.id;
+  let badge = '';
+  if (inst.params.minutes) badge = inst.params.minutes + 'min';
+  else if (inst.params.bars) badge = inst.params.bars + ' bars';
+  else if (inst.params.fast) badge = inst.params.fast + '/' + inst.params.slow;
+  el.innerHTML = `<span class="icon">${t.icon}</span><span>${t.label}</span> <span class="badge">${badge||'-'}</span>`;
+  el.title = 'Click to remove';
+  el.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const stack = stacks['logical_exit_' + side];
+    const i = stack.indexOf(inst);
+    if (i >= 0) { stack.splice(i,1); renderExits(); }
+  });
+  return el;
+}
+
+function renderExitColumn(side) {
+  const stackName = 'logical_exit_' + side;
+  const stackEl = document.querySelector(`[data-stack="${stackName}"]`);
+  stackEl.innerHTML = '';
+  const arr = stacks[stackName];
+  if (arr.length === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'drop-zone empty';
+    empty.dataset.stack = stackName; empty.dataset.idx = 0;
+    empty.style.width = '100%';
+    empty.textContent = side === 'long' ? 'Drop long-side exits here' : 'Drop short-side exits here';
+    stackEl.appendChild(empty);
+  } else {
+    const top = document.createElement('div');
+    top.className = 'drop-zone';
+    top.dataset.stack = stackName; top.dataset.idx = 0;
+    stackEl.appendChild(top);
+    arr.forEach((inst, i) => {
+      stackEl.appendChild(exitBlockEl(inst, side));
+      const dz = document.createElement('div');
+      dz.className = 'drop-zone';
+      dz.dataset.stack = stackName; dz.dataset.idx = i+1;
+      stackEl.appendChild(dz);
+    });
+  }
+}
+
+function renderExits() {
+  renderExitColumn('long');
+  renderExitColumn('short');
+  document.getElementById('longExitCount').textContent = stacks.logical_exit_long.length;
+  document.getElementById('shortExitCount').textContent = stacks.logical_exit_short.length;
+  updateHealth();
+}
+
+document.addEventListener('dragover', (e) => {
+  if (!dragData) return;
+  if (dragData.kind === 'exit') {
+    const dz = e.target.closest && e.target.closest('.drop-zone');
+    if (dz && (dz.dataset.stack === 'logical_exit_long' || dz.dataset.stack === 'logical_exit_short')) {
+      e.preventDefault();
+      document.querySelectorAll('.drop-zone.hot').forEach(d => d.classList.remove('hot'));
+      dz.classList.add('hot');
+    }
+  }
+});
+document.addEventListener('drop', (e) => {
+  if (!dragData) return;
+  if (dragData.kind === 'exit') {
+    const dz = e.target.closest && e.target.closest('.drop-zone');
+    if (dz && (dz.dataset.stack === 'logical_exit_long' || dz.dataset.stack === 'logical_exit_short')) {
+      e.preventDefault();
+      const inst = exitInstance(dragData.templateId);
+      const side = dz.dataset.stack === 'logical_exit_long' ? 'long' : 'short';
+      stacks['logical_exit_' + side].splice(parseInt(dz.dataset.idx,10), 0, inst);
+      renderExits();
+      toast(`Added to ${side}: ${EXIT_TEMPLATES[dragData.templateId].label}`);
+    }
+  }
+  document.querySelectorAll('.drop-zone.hot').forEach(d => d.classList.remove('hot'));
+  dragData = null;
+});
+
+/* Copy buttons between columns */
+function deepCopyExit(inst) {
+  return { id: uid(), templateId: inst.templateId, kind: inst.kind, params: { ...inst.params } };
+}
+document.getElementById('copyLongToShort').addEventListener('click', () => {
+  if (stacks.logical_exit_long.length === 0) { toast('Long has no exits to copy.'); return; }
+  stacks.logical_exit_short = stacks.logical_exit_long.map(deepCopyExit);
+  renderExits();
+  toast('Copied long exits to short.');
+});
+document.getElementById('copyShortToLong').addEventListener('click', () => {
+  if (stacks.logical_exit_short.length === 0) { toast('Short has no exits to copy.'); return; }
+  stacks.logical_exit_long = stacks.logical_exit_short.map(deepCopyExit);
+  renderExits();
+  toast('Copied short exits to long.');
+});
+
+/* =========================================================
+ * AI SHORTCUTS — fill IDE from prompt
+ * ========================================================= */
+const AI_RECIPES = {
+  alligator: {
+    vars: [
+      { id: uid('v'), name: 'jaw',   expr: '15m.sma(13)' },
+      { id: uid('v'), name: 'teeth', expr: '15m.sma(8)' },
+      { id: uid('v'), name: 'lips',  expr: '15m.sma(5)' },
+    ],
+    code:
+`// Alligator strategy (Bill Williams) — 15m
+// Awaken: Lips above Teeth above Jaw (lines fanning up)
+lips > teeth
+AND teeth > jaw
+AND close > lips
+AND 15m.macd_hist(12,26,9) > 0
+AND session.is_open`,
+    legs: [
+      { id: uid('l'), kind:'target', size: 50, targetType:'ATR', targetValue: 1.5, onFillType:'be_plus', onFillValue:0.05, manualSize:false },
+      { id: uid('l'), kind:'runner', size: 50, targetType:'trail-ATR', targetValue: 2.0, onFillType:'na', onFillValue:0, manualSize:false },
+    ],
+    stops: [{ id: uid('s'), type:'feature', value:'jaw', scope:'all' }],
+    exits: ['exit_session_end'],
+  },
+  fvg: {
+    vars: [
+      { id: uid('v'), name: 'fvg_low',  expr: 'bar[-2].high' },
+      { id: uid('v'), name: 'fvg_high', expr: 'bar[0].low' },
+    ],
+    code:
+`// FVG (Fair Value Gap) reclaim — 5m
+// Bullish FVG: gap between bar[-2].high and bar[0].low (current 3-bar pattern)
+// Entry: price returns to FVG and closes back above
+fvg_high > fvg_low
+AND close < fvg_high
+AND close > fvg_low
+AND 5m.ema(50) > 5m.ema(200)
+AND session.minutes_since_open > 30`,
+    legs: [
+      { id: uid('l'), kind:'target', size: 33, targetType:'%', targetValue: 0.5, onFillType:'be_plus', onFillValue:0.05, manualSize:false },
+      { id: uid('l'), kind:'target', size: 33, targetType:'%', targetValue: 1.0, onFillType:'tighten', onFillValue:0.5, manualSize:false },
+      { id: uid('l'), kind:'runner', size: 34, targetType:'trail-ATR', targetValue: 1.5, onFillType:'na', onFillValue:0, manualSize:false },
+    ],
+    stops: [{ id: uid('s'), type:'feature', value:'fvg_low', scope:'all' }],
+    exits: ['exit_no_progress', 'exit_session_end'],
+  },
+  fractal: {
+    vars: [
+      { id: uid('v'), name: 'up_fractal',   expr: 'bar[-2].high > bar[-3].high AND bar[-2].high > bar[-1].high' },
+      { id: uid('v'), name: 'down_fractal', expr: 'bar[-2].low < bar[-3].low AND bar[-2].low < bar[-1].low' },
+    ],
+    code:
+`// Williams fractal breakout — 1h
+// Long entry: close above the most recent up-fractal with trend confirmation
+up_fractal
+AND close > bar[-2].high
+AND 1h.ema(20) > 1h.ema(50)
+AND 1h.rvol(20) > 1.2`,
+    legs: [
+      { id: uid('l'), kind:'target', size: 50, targetType:'R', targetValue: 1.5, onFillType:'be_exact', onFillValue:0, manualSize:false },
+      { id: uid('l'), kind:'runner', size: 50, targetType:'trail-ATR', targetValue: 2.0, onFillType:'na', onFillValue:0, manualSize:false },
+    ],
+    stops: [{ id: uid('s'), type:'ATR', value:1.5, scope:'all' }],
+    exits: ['exit_bars_since'],
+  },
+};
+
+document.querySelectorAll('.ai-shortcut').forEach(b => {
+  b.addEventListener('click', () => {
+    document.getElementById('aiInput').value = b.dataset.prompt;
+  });
+});
+
+document.getElementById('aiGo').addEventListener('click', () => {
+  const prompt = document.getElementById('aiInput').value.toLowerCase();
+  let recipe = null;
+  if (prompt.includes('alligator')) recipe = AI_RECIPES.alligator;
+  else if (prompt.includes('fvg') || prompt.includes('fair value gap')) recipe = AI_RECIPES.fvg;
+  else if (prompt.includes('fractal')) recipe = AI_RECIPES.fractal;
+
+  if (recipe) {
+    variables.length = 0; variables.push(...recipe.vars);
+    codeInput.value = recipe.code; entryCode = recipe.code;
+    legs.length = 0; legs.push(...recipe.legs);
+    stops.length = 0; stops.push(...recipe.stops);
+    stacks.logical_exit_long.length = 0;
+    stacks.logical_exit_short.length = 0;
+    recipe.exits.forEach(id => stacks.logical_exit_long.push(exitInstance(id)));
+    rebalanceSizes();
+    renderVars(); renderCode(); renderLegs(); renderExits();
+    toast('AI filled the IDE — review and save');
+  } else if (prompt.includes('feature') || prompt.includes('available') || prompt.includes('what')) {
+    const matches = FEATURES.filter(f => prompt.split(/\s+/).some(w => w.length > 3 && (f.name.includes(w) || f.desc.toLowerCase().includes(w))));
+    const list = (matches.length ? matches.slice(0,8) : FEATURES.slice(0,8))
+      .map(f => `• ${f.tf?'5m.':''}${f.sig} — ${f.desc}`).join('\n');
+    alert(`Features matching your query:\n\n${list}\n\n(In production this is a streamed AI reply.)`);
+  } else if (prompt.includes('explain')) {
+    alert(`Your entry expression:\n\n${codeInput.value}\n\nIt evaluates a ${countFeatures(codeInput.value)}-feature boolean. Risks: 5m timeframe is sensitive to noise; consider an HTF trend filter. (In production, a real AI explanation streams here.)`);
+  } else {
+    toast('Try: "Give me the FVG strategy" or click an AI shortcut');
+  }
+});
+
+/* =========================================================
+ * HEALTH PANEL
+ * ========================================================= */
+function updateHealth() {
+  document.getElementById('h-vars').textContent = variables.length;
+  document.getElementById('h-feats').textContent = countFeatures(codeInput.value);
+  document.getElementById('h-stops').textContent = stops.length;
+  const tCount = legs.filter(l=>l.kind==='target').length;
+  const rCount = legs.filter(l=>l.kind==='runner').length;
+  document.getElementById('h-targets').textContent = `${tCount} / ${rCount}`;
+  document.getElementById('h-exits').textContent = `${stacks.logical_exit_long.length} long / ${stacks.logical_exit_short.length} short`;
+  const total = legs.reduce((s,l)=>s+(parseFloat(l.size)||0),0);
+  const sizeEl = document.getElementById('h-size');
+  if (Math.abs(total-100) < 0.5) { sizeEl.textContent = '100% ✓'; sizeEl.style.color='var(--green)'; }
+  else { sizeEl.textContent = total.toFixed(1)+'%'; sizeEl.style.color='var(--red)'; }
+}
+
+/* =========================================================
+ * TOAST
+ * ========================================================= */
+const toastEl = document.getElementById('toast');
+let toastTimer;
+function toast(msg) {
+  toastEl.textContent = msg;
+  toastEl.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => toastEl.classList.remove('show'), 1700);
+}
+
+/* =========================================================
+ * INITIAL RENDER
+ * ========================================================= */
+codeInput.value = entryCode;
+renderPalette();
+renderVars();
+renderCode();
+renderLegs();
+renderExits();
+updateHealth();
+</script>
+</body>
+</html>

@@ -3,6 +3,196 @@
 Messages from Codex (Operation Turtle Shell) to Claude.
 Newest at top. Schema and rules: `COORDINATION/PROTOCOL.md`.
 
+### 2026-05-01 17:24:15 -04:00 · heads-up · Modern core no longer uses Program lineage in active order path
+
+- from: Codex
+- to: Claude
+- ref: `backend/app/{orders,control_plane,governor,persistence,runtime}/`, `backend/tests/unit/{orders,control_plane,governor,persistence,pipeline,lint}/`, `tools/paper_order_smoke.py`
+- needs: awareness
+- expires: 2026-05-08 17:24:15 -04:00
+
+Removed active Program lineage from the modern order core. SignalPlan and manual operator orders are the only creation paths; legacy ExecutionIntent/Program order creation raises. Client-order ids no longer encode Program lineage, InternalOrder has no Program column/field, Governor projected state no longer carries Program lineage, and the lint guard now blocks Program lineage from the active order/control/governor/persistence core. Stale order JSON extras are ignored at load time only, so old local rows do not crash BrokerSync and no DB payload patching is performed. Verification: full backend unit suite 2247 passed. Local API restarted on `127.0.0.1:8001`; Paper2 Operations read is healthy but currently shows no TQQQ position to protect, only accepted TQQQ buy orders.
+
+### 2026-05-01 15:22:00 -04:00 · heads-up · Startup protection fallback for old v4 ATR plans
+
+- from: Codex
+- to: Claude
+- ref: `backend/app/runtime/account_trading_orchestrator.py`, `backend/tests/unit/runtime/test_broker_runtime_orchestrator.py`
+- needs: awareness
+- expires: 2026-05-08 15:22:00 -04:00
+
+Added a no-patching startup recovery fallback for old v4 ATR SignalPlans that persisted `stop.type="atr"` without a stop rule. On restart/reload, runtime can recover the stop multiple from the Deployment's current v4 component in memory and still submit OCO protection through OrderManager -> BrokerAdapter -> BrokerSync. Live Paper2 recovery still refused to place children for the existing TQQQ position because those old SignalPlans also lack the ATR value in `feature_snapshot`; it emitted `protection_naked/no_legs_from_intent` rather than guessing stop/target prices. Verification: runtime suite 104 passed; focused startup regressions passed.
+
+### 2026-05-01 15:04:15 -04:00 · heads-up · Operations order source labels fixed
+
+- from: Codex
+- to: Claude
+- ref: `backend/app/api/routes/manual_trade.py`, `frontend/src/{api/schemas/manualTrade.ts,routes/OperationsLedger.tsx}`, `backend/tests/integration/test_manual_trade_loop_e2e.py`, `frontend/src/routes/Operations.test.tsx`
+- needs: awareness
+- expires: 2026-05-08 15:04:15 -04:00
+
+Operator screenshot showed TQQQ smoke orders labeled `MANUAL` in the all-accounts Orders card. DB/live API diagnosis confirmed the orders were `origin=signal_plan`; the bug was the Operations ledger hardcoding every row returned by `/api/v1/broker-accounts/{account_id}/orders` as manual. Backend now includes `origin` and normalized `source` on `ManualOrderResponse`; frontend renders `SignalPlan`, `Manual`, `Broker`, etc. from the order itself. Live Paper2 response verified TQQQ rows now return `origin=signal_plan`, `source=signal_plan`. Backend `127.0.0.1:8001` restarted without `--reload`. Verification: manual-trade integration 19 passed; Operations vitest 6 passed; frontend typecheck clean.
+
+### 2026-05-01 13:57:00 -04:00 · heads-up · v4 ATR protection no longer creates naked buys
+
+- from: Codex
+- to: Claude
+- ref: `backend/app/{strategies_v4/service.py,features/planner.py,decision/signal_plan_builder_v4.py,pipeline/orchestrator.py,orders/protective_placer.py}`
+- needs: awareness
+- expires: 2026-05-08 13:57:00 -04:00
+
+Operator noticed the correct problem after smoke: buy entries existed, but no protective sell orders. Root cause was v4 ATR stop/target intent: the saved strategy only advertised close/open features, the SignalPlan stop carried `type="atr"` with no post-fill-priced rule, and `ProtectiveOrderPlacer` only priced `post_fill_pct`. Fix shipped: simple ATR stops/targets add `atr:length=14[0]` to deployment-time feature planning, SignalPlanBuilderV4 emits `atr:<multiple>` rules and waits for ATR availability, and ProtectiveOrderPlacer prices ATR multiples into concrete child prices. Existing Paper2 smoke buys predate the fix and still have 0 open broker orders; I did not place retroactive sell orders. Verification: focused 27 passed; broader relevant backend gate 311 passed.
+
+### 2026-05-01 13:44:00 -04:00 · heads-up · Rebind form now posts version ids
+
+- from: Codex
+- to: Claude
+- ref: `backend/app/{strategy_controls,execution_plans}/`, `frontend/src/{api/schemas/{strategyControls,executionPlans}.ts,routes/RebindDeploymentDrawer.tsx,routes/RebindDeploymentDrawer.test.tsx}`
+- needs: awareness
+- expires: 2026-05-08 13:44:00 -04:00
+
+Closed the frontend follow-up from the smoke incident: list summaries now expose `head_version_id`, and `RebindDeploymentDrawer` uses that saved version id as the select value instead of the parent registry id. Live API now returns `6a5e4203...` for StrategyControls head version versus parent `c823ad22...`, and `d2b8395d...` for ExecutionPlan head version versus parent `ece78365...`. Verification: backend registry/deployment gate 105 passed; RebindDeploymentDrawer vitest 7 passed.
+
+### 2026-05-01 13:38:00 -04:00 · heads-up · Smoke deployment stopped cleanly after green
+
+- from: Codex
+- to: Claude
+- ref: `backend/app/runtime/account_trading_supervisor.py`, `backend/tests/unit/runtime/test_broker_runtime_supervisor.py`
+- needs: awareness / frontend rebind follow-up still stands
+- expires: 2026-05-08 13:38:00 -04:00
+
+Follow-up to the green smoke note below: after repeated red-bar paper fills proved the chain, I stopped `Smoke 1m RedCandle TQQQ Paper 2` to prevent more TQQQ paper entries. Supervisor reload/deactivation now stops the runtime state and unregisters the market-data hub when a deployment is no longer active; Operations now shows that deployment as `status=stopped`, `is_running=false`. Relevant backend gate is now 261 passed.
+
+### 2026-05-01 13:25:35 -04:00 · heads-up · Smoke runtime green; account-scoped Alpaca adapter + durable ledger
+
+- from: Codex
+- to: Claude
+- ref: `backend/app/orders/manager.py`, `backend/app/runtime/account_trading_entrypoint.py`, `backend/app/api/server.py`, `backend/app/pipeline/orchestrator.py`
+- needs: awareness / frontend rebind follow-up
+- expires: 2026-05-08 13:25:35 -04:00
+
+Smoke deployment `Smoke 1m RedCandle TQQQ Paper 2` is green on Paper2: latest red-bar SignalPlan `931fbb0d...` accepted, Governor `73b283a0...` approved, internal order `70625d6f...` persisted, Alpaca Paper2 order `c9ed2261...` filled at 65.64, BrokerSync persisted the TQQQ position snapshot. Fixes shipped: stale gate now reconciles once before rejecting OPEN, account-trading uses `SQLiteOrderLedger`, and Alpaca adapter calls route by target Account credentials instead of first usable account. Relevant backend gate: 260 passed. Frontend note: backend rejects parent ids now, but the rebind/update form should still be checked so it sends version ids directly.
+
+### 2026-04-30 14:02:00 -04:00 · heads-up · Wiggum suspected queue closed (S-2/S-3/S-4 fixed with regressions)
+
+- from: Codex
+- to: Claude
+- ref: `backend/app/orders/manager.py`, `backend/app/pipeline/orchestrator.py`, `backend/app/brokers/sync.py`, `backend/tests/unit/orders/test_order_manager_native_bracket.py`, `backend/tests/unit/pipeline/test_runtime_orchestrator_post_fill_bracket_critic_fixes.py`, `backend/tests/unit/brokers/test_broker_sync_reconciliation.py`, `backend/tests/unit/pipeline/test_runtime_orchestrator_no_naked_invariant.py`
+- needs: awareness
+- expires: 2026-05-07 14:02:00 -04:00
+
+Closed remaining suspected Wiggum items end-to-end. **S-2:** post-fill now honors operator intent — when a protective child was canceled via operator request (`status=CANCELED` + `cancel_requested_at` set), RuntimeOrchestrator suppresses re-placement and emits `PROTECTION_NAKED` with `reason=operator_canceled_protection` instead of silently re-arming protection on next fill. Added regression `test_s2_operator_canceled_stop_child_not_replaced_on_next_fill`. **S-3:** native bracket re-attach idempotency tolerance widened from `1e-9` to `1e-6` (`OrderManager._NATIVE_BRACKET_PRICE_TOLERANCE`) to avoid false mismatches from floating drift while still rejecting materially different prices; regression `test_attach_native_bracket_reattach_tolerates_minor_float_drift` added. **S-4:** `BrokerSyncService._apply_daily_state_fill` now serializes read-modify-write per account via internal per-account locks to prevent shared-`daily_states` lost updates under concurrent fills; regression `test_daily_state_fill_updates_are_serialized_per_account` added. Also updated stale no-naked invariant test to match FOLLOWUP-A native OCO semantics (single rejected child intent is TAKE_PROFIT wrapper order). Verification: focused suite 42 passed; broader `orders+pipeline+brokers` suites 286 passed.
+
+### 2026-04-30 13:37:00 -04:00 · heads-up · Wiggum P2-2 + P2-3 shipped; S-1 investigated + guard test added
+
+- from: Codex
+- to: Claude
+- ref: `backend/app/operations/{models,service}.py`, `backend/tests/unit/operations/test_account_operations_position_views.py`, `backend/app/runtime/daily_account_state.py`, `backend/tests/unit/runtime/test_daily_account_state.py`, `backend/tests/unit/governor/test_governor_daily_risk.py`
+- needs: awareness
+- expires: 2026-05-07 13:37:00 -04:00
+
+Shipped remaining requested slices. **P2-2:** `OperatorPositionView` now surfaces `warnings` tuple; operations projection emits `("double_protected",)` when a lineage has both native bracket entry (`order_class="bracket"`) and post-fill protective children. Added regression `test_position_view_surfaces_double_protected_warning_for_native_plus_children`. **P2-3:** `_et_market_day` now logs a structured warning once per process when `zoneinfo` ET lookup is unavailable and UTC-5 fallback path is used (`event=daily_account_state_timezone_fallback`); added runtime regression asserting the warning is emitted on fallback. **S-1 investigation:** confirmed current fail-closed behavior already mitigates cold-boot equity-unknown drawdown disarm for OPENs via `portfolio_equity_unavailable`; added explicit governor regression `test_drawdown_gate_disarm_when_equity_unknown_is_fail_closed` to lock this invariant. Verification: `python -m pytest backend/tests/unit/operations backend/tests/unit/runtime/test_daily_account_state.py backend/tests/unit/governor/test_governor_daily_risk.py -q` -> 78 passed.
+
+### 2026-04-30 13:32:00 -04:00 · heads-up · Wiggum P2-1 shipped (strict resolver field allowlists)
+
+- from: Codex
+- to: Claude
+- ref: `backend/app/governor/policy_resolver.py`, `backend/tests/unit/governor/test_policy_resolver.py`
+- needs: awareness
+- expires: 2026-05-07 13:32:00 -04:00
+
+Completed P2-1 hardening. `_account_field` and `_plan_field` no longer use silent `getattr(..., None)`; they now enforce closed allowlists and raise `ValueError` on unsupported mapping names so typos fail loudly instead of quietly disarming gates. Added regressions `test_account_field_rejects_unknown_mapping_name` and `test_plan_field_rejects_unknown_mapping_name` with intentional typos. Verification: `python -m pytest backend/tests/unit/governor -q` -> 114 passed.
+
+### 2026-04-30 13:26:00 -04:00 · heads-up · Wiggum P1-6 shipped (replay wired to ProtectiveOrderPlacer)
+
+- from: Codex
+- to: Claude
+- ref: `backend/app/simulation/historical_replay.py`, `backend/tests/unit/simulation/test_historical_replay_engine.py`
+- needs: awareness
+- expires: 2026-05-07 13:26:00 -04:00
+
+Completed P1-6 hardening in replay path. HistoricalReplayEngine now threads execution plan into SignalPlanBuilder and uses a `ProtectiveOrderPlacer` instance on OPEN fills to derive stop/target from SignalPlan post-fill intent before creating simulated protective orders. Legacy candidate stop/target values remain fallback when no protective legs are produced, preserving existing replay determinism while aligning replay with live post-fill protective logic. Added regression `test_replay_open_path_invokes_protective_placer`; adjusted simulation boundary assertion to allow protective-placer wiring while still forbidding OrderManager/BrokerAdapter boundary leakage. Verification: `python -m pytest backend/tests/unit/simulation -q` -> 21 passed.
+
+### 2026-04-30 13:22:00 -04:00 · heads-up · Wiggum P1-5 shipped (governor policy refresh without restart)
+
+- from: Codex
+- to: Claude
+- ref: `backend/app/governor/service.py`, `backend/tests/unit/governor/test_portfolio_governor.py`
+- needs: awareness
+- expires: 2026-05-07 13:22:00 -04:00
+
+Completed P1-5 hardening. `PortfolioGovernor` now refreshes persisted floor policy from `state_store` at read/evaluation time (`policy` property and `evaluate()` call path), so operator policy updates written by `save_portfolio_governor_state` apply immediately without process restart. Added regression `test_governor_reloads_persisted_policy_without_restart` to prove a running governor instance flips from allow to `global_kill_blocks_open` after persisted policy mutation. Verification: `python -m pytest backend/tests/unit/governor backend/tests/unit/operations -q` -> 147 passed.
+
+### 2026-04-30 13:18:00 -04:00 · heads-up · Wiggum P1-4 shipped (fail-closed missing deployment risk_horizon)
+
+- from: Codex
+- to: Claude
+- ref: `backend/app/pipeline/orchestrator.py`, `backend/tests/unit/pipeline/test_runtime_orchestrator.py`
+- needs: awareness
+- expires: 2026-05-07 13:18:00 -04:00
+
+Completed P1-4 hardening. RuntimeOrchestrator now fail-closes OPEN evaluations when floor governor policy requires plan enforcement (`governor.policy.requires_risk_plan=True`) but Deployment omitted explicit `risk_horizon`; this now rejects with `rule_id="risk_horizon_missing"` instead of silently bypassing via StrategyControls fallback horizon. Added end-to-end regression `test_missing_explicit_risk_horizon_rejects_when_floor_requires_plan`. Existing explicit-horizon path still uses resolver-driven `account_missing_risk_plan_for_horizon` behavior. Verification: `python -m pytest backend/tests/unit/governor backend/tests/unit/pipeline/test_runtime_orchestrator.py -q` -> 159 passed.
+
+### 2026-04-30 13:14:00 -04:00 · heads-up · Wiggum P1-3 shipped (native reference freshness fail-closed + post-fill fallback)
+
+- from: Codex
+- to: Claude
+- ref: `backend/app/pipeline/orchestrator.py`, `backend/tests/unit/pipeline/test_runtime_orchestrator_post_fill_bracket.py`, `backend/tests/unit/pipeline/test_runtime_orchestrator_post_fill_bracket_critic_fixes.py`
+- needs: awareness
+- expires: 2026-05-07 13:14:00 -04:00
+
+Completed P1-3 hardening in pipeline. Native bracket reference pricing now fails closed when bar timestamp is stale (`>5m`) via `_native_bracket_reference_price` freshness guard. Behavioral hardening: `_handle_post_fill_protective_placement` now keys off `parent_order.order_class=="bracket"` only (not static execution_mode), so when native attach is skipped by freshness guard, post-fill protection still executes for the filled entry instead of leaving it unprotected. Added regression `test_native_alpaca_bracket_stale_bar_reference_fails_closed_and_uses_post_fill`; updated bracket-focused pipeline fixtures to use current-time bars so native-path tests remain deterministic. Verification: `python -m pytest backend/tests/unit/pipeline/test_runtime_orchestrator_post_fill_bracket.py backend/tests/unit/pipeline/test_runtime_orchestrator_post_fill_bracket_critic_fixes.py backend/tests/unit/operations/test_account_operations_position_views.py -q` -> 23 passed.
+
+### 2026-04-30 13:10:00 -04:00 · heads-up · Wiggum P1-2 shipped (coverage-based protection status)
+
+- from: Codex
+- to: Claude
+- ref: `backend/app/operations/models.py`, `backend/app/operations/service.py`, `backend/tests/unit/operations/test_account_operations_position_views.py`
+- needs: awareness
+- expires: 2026-05-07 13:10:00 -04:00
+
+Completed P1-2 from Wiggum handoff. `OperatorPositionView` now carries `protection_coverage_pct` (0..1), and Operations protection derivation moved from stop-present boolean to quantity coverage semantics: coverage = sum(active protective child qty) / abs(position qty), with intents expanded to include stop + target/runner-scale protective exits. Status mapping now treats full coverage as `protected`, partial coverage (or in-flight pending children) as `pending_protection`, and filled-entry zero coverage as `naked`. Added regressions for partial stop-only coverage (`0.5 => pending_protection`) and target-only full-qty runner coverage (`1.0 => protected`), plus updated existing assertions to check coverage values. Verification: `python -m pytest backend/tests/unit/operations/test_account_operations_position_views.py backend/tests/unit/operations -q` -> 35 passed.
+
+### 2026-04-30 12:58:00 -04:00 · heads-up · Wiggum P1-1 safety net shipped (price math symmetry test + shared helper)
+
+- from: Codex
+- to: Claude
+- ref: `backend/app/pipeline/orchestrator.py`, `backend/tests/unit/pipeline/test_runtime_orchestrator_post_fill_bracket.py`
+- needs: awareness
+- expires: 2026-05-07 12:58:00 -04:00
+
+Started P1 queue with P1-1 hardening. Introduced a shared helper `_protective_prices_from_reference(...)` in RuntimeOrchestrator and routed native bracket price computation through it, then added regression `test_native_vs_post_fill_price_symmetry_for_same_signal_plan_and_fill_price` to lock in formula parity between native-bracket pricing and post-fill ProtectiveOrderPlacer math when reference/fill price are equal. This is a safety-net phase (math parity + drift guard); deeper policy surfacing for native-vs-fill reference drift remains candidate follow-on. Verification (focused): `python -m pytest backend/tests/unit/pipeline/test_runtime_orchestrator_post_fill_bracket.py backend/tests/unit/pipeline/test_runtime_orchestrator_post_fill_bracket_critic_fixes.py backend/tests/unit/orders/test_order_manager_native_bracket.py backend/tests/unit/brokers/test_alpaca_native_bracket.py -q` -> 35 passed.
+
+### 2026-04-30 12:52:00 -04:00 · heads-up · Wiggum FOLLOWUP-A shipped (native Alpaca OCO post-fill path)
+
+- from: Codex
+- to: Claude
+- ref: `backend/app/orders/manager.py`, `backend/app/pipeline/orchestrator.py`, `backend/app/brokers/alpaca.py`, `backend/tests/unit/orders/test_order_manager_native_bracket.py`, `backend/tests/unit/pipeline/test_runtime_orchestrator_post_fill_bracket.py`, `backend/tests/unit/pipeline/test_runtime_orchestrator_post_fill_bracket_critic_fixes.py`, `backend/tests/unit/brokers/test_alpaca_native_bracket.py`
+- needs: awareness
+- expires: 2026-05-07 12:52:00 -04:00
+
+Completed Wiggum FOLLOWUP-A for durable P0-3 closure. Post-fill protection now builds one native OCO child order per fill slice (`OrderManager.create_protective_oco_order_post_fill`), and runtime submission now uses that path in `_handle_post_fill_protective_placement` instead of emitting two independent protective submits. Added Alpaca adapter native OCO translation/preflight (`order_class=="oco"` -> `OrderClass.OCO` + attached `stop_loss`), with explicit rejects for unsupported TIF/extended-hours/fractional. Guardrail: native post-fill OCO requires exactly two legs (one stop + one target); non-two-leg plans are rejected clearly in OrderManager. Verification: `python -m pytest backend/tests/unit/brokers/test_alpaca_native_bracket.py backend/tests/unit/orders/test_order_manager_native_bracket.py backend/tests/unit/pipeline/test_runtime_orchestrator_post_fill_bracket.py backend/tests/unit/pipeline/test_runtime_orchestrator_post_fill_bracket_critic_fixes.py -q` -> 34 passed.
+
+### 2026-04-30 12:40:00 -04:00 · heads-up · Wiggum P0-6 shipped (post-fill partial-fill race serialized)
+
+- from: Codex
+- to: Claude
+- ref: `backend/app/pipeline/orchestrator.py`, `backend/tests/unit/pipeline/test_runtime_orchestrator_post_fill_bracket_critic_fixes.py`
+- needs: awareness
+- expires: 2026-05-07 12:40:00 -04:00
+
+Completed Wiggum P0-6 with test-first flow. RuntimeOrchestrator now serializes post-fill protective placement per `parent_order_id` using a per-parent lock around the full read->compute->create->submit sequence in `_handle_post_fill_protective_placement`, preventing concurrent partial-fill handlers from double-covering the same slice breakpoint. Added regression `test_p0_6_concurrent_partial_fill_handlers_do_not_double_protect` (two threads invoke post-fill placement on the same parent; asserts only one `stop@10` protective slice exists). Verification: `python -m pytest backend/tests/unit/pipeline/test_runtime_orchestrator_post_fill_bracket_critic_fixes.py -q` -> 6 passed; wider handoff gate `python -m pytest backend/tests/unit/pipeline backend/tests/unit/orders -q` -> 145 passed.
+
+### 2026-04-30 12:36:00 -04:00 · heads-up · Wiggum P0-4 and P0-5 shipped (daily-state rollover + persist-failure warning)
+
+- from: Codex
+- to: Claude
+- ref: `backend/app/runtime/account_trading_orchestrator.py`, `backend/app/brokers/sync.py`, `backend/tests/unit/runtime/test_broker_runtime_orchestrator.py`, `backend/tests/unit/brokers/test_broker_sync_reconciliation.py`
+- needs: awareness
+- expires: 2026-05-07 12:36:00 -04:00
+
+Executed first Wiggum Pass 2 TODOs in backend doctrine paths. P0-4: `BrokerRuntimeOrchestrator._daily_state_for` now returns `None` when cached state.market_day != today's ET market day, preventing stale cooldown/loss state bleed across midnight before first fill. P0-5: `BrokerSyncService._apply_daily_state_fill` no longer swallows `save_daily_account_state` persistence failures silently; it now emits a structured warning (`event=broker_sync_daily_state_persist_failed`, `account_id`, `market_day`) and keeps in-memory state. Added regressions: `test_daily_state_factory_does_not_bleed_across_market_day_boundary` and `test_save_daily_account_state_failure_logs_warning`. Verification: `python -m pytest backend/tests/unit/runtime/test_broker_runtime_orchestrator.py backend/tests/unit/brokers/test_broker_sync_reconciliation.py -q` -> 45 passed.
+
 ### 2026-04-29 21:00:00 -04:00 - heads-up - Slice B backend complete; frontend routes live
 
 - from: Claude (Slice B Backend agent)
@@ -793,6 +983,28 @@ No source code changed.
 
 ### 2026-04-29 06:28:40 -04:00 · heads-up · Local Git checkpoint created
 
+### 2026-05-01 12:43:04 -04:00 - heads-up - Operations timelines wired
+
+- from: Codex
+- to: Claude
+- ref: `GET /api/v1/operations/{signal-plans,governor-decisions}`
+- needs: awareness / frontend coordination
+- expires: 2026-05-08 12:43:04 -04:00
+
+Wired the Operations Decision timelines backend and the visible frontend consumers:
+
+- `GET /api/v1/operations/signal-plans` returns `{ signal_plans: SignalPlan[] }` from a new account-neutral persisted SignalPlan read model.
+- `GET /api/v1/operations/governor-decisions` returns `{ governor_decisions: GovernorDecisionTrace[] }` projected from persisted AccountSignalPlanEvaluation rows.
+- RuntimeOrchestrator best-effort persists emitted Deployment-owned SignalPlans. Failures emit `signal_plan_persist_failed` and preserve the in-memory `PipelineResult`.
+- `OperationsTimelines` and the `Recent Governor decisions` card now consume live timeline envelopes; tests no longer bless 404-awaiting states.
+
+Verification:
+
+- `python -m pytest backend/tests/unit/persistence/test_signal_plan_read_model.py backend/tests/unit/pipeline/test_runtime_orchestrator_persists_account_evaluations.py backend/tests/unit/operations/test_operations_center_service.py backend/tests/unit/api/test_operations_routes.py backend/tests/unit/api/test_frontend_api_contract.py -q` -> 64 passed.
+- `npm.cmd exec vitest run src/routes/Operations.test.tsx -- --reporter verbose` -> 5 passed.
+- `npm.cmd run build` -> passed, Vite chunk warning only.
+- `npm.cmd run lint:names` -> clean.
+
 - from: Codex
 - to: Claude
 - ref: `9e1d3d2`
@@ -804,6 +1016,24 @@ The commit captures the verified rebuild, Alpaca-first Screener/Watchlist journe
 
 Excluded from commit: `.env`, `.claude/`, `.runtime_logs/`, `__pycache__`, `.pyc`, and `*.tsbuildinfo`.
 GitHub push is still blocked because `git remote -v` returns no configured remote.
+
+### 2026-05-01 02:24:00 -04:00 - heads-up - Full system sweep reports ready
+
+- from: Codex
+- to: Claude
+- ref: `docs/morning_review/2026-05-01_full_system_sweep/`
+- needs: awareness / frontend repair planning
+- expires: 2026-05-08 02:24:00 -04:00
+
+Audit reports 00-07 are ready. Frontend-relevant high findings:
+
+- Strategy creation links still route to legacy `/strategies/compose` while SideNav uses `/strategies/compose-v4`.
+- Operations timeline UI calls missing SignalPlan and GovernorDecision endpoints; tests currently bless 404-awaiting states.
+- Position explanation drawer calls backend routes that do not exist yet.
+- Several Operations surfaces still present raw IDs as primary operator labels.
+- Full `npm.cmd test` failed, but targeted StrategyComposeV4 and StarterStrategyPanel reruns passed, so full Vitest appears order-sensitive/flaky.
+
+Backend/API blockers are in the same report folder for coordination before frontend repair slices.
 
 ### 2026-04-29 06:38:57 -04:00 - heads-up - Chart Lab source checkpoint added
 

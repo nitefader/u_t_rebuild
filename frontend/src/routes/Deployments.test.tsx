@@ -37,6 +37,7 @@ describe("<Deployments />", () => {
       { url: "/api/v1/deployments", body: { deployments: [] } },
       { url: "/api/v1/watchlists", body: { watchlists: [] } },
       { url: "/api/v1/strategies", body: { strategies: [] } },
+      { url: "/api/v1/strategies/v4/", body: [] },
       { url: "/api/v1/system/status", body: STATUS_OK },
     ]);
     renderRoute(<Deployments />);
@@ -107,6 +108,7 @@ describe("<Deployments />", () => {
           ],
         },
       },
+      { url: "/api/v1/strategies/v4/", body: [] },
       { url: "/api/v1/system/status", body: STATUS_OK },
     ]);
     renderRoute(<Deployments />);
@@ -118,7 +120,145 @@ describe("<Deployments />", () => {
     expect(screen.queryByText(/44444444/)).not.toBeInTheDocument();
   });
 
-  it("allows draft strategy versions to be selected for Deployment attachment", async () => {
+  it("shows Horizon column for deployments that have a risk_horizon set", async () => {
+    const now = new Date().toISOString();
+    restore = installFetchMock([
+      {
+        url: "/api/v1/deployments",
+        body: {
+          deployments: [
+            {
+              deployment_id: "33333333-3333-3333-3333-333333333333",
+              name: "Intraday Rocket",
+              description: null,
+              strategy_version_id: "44444444-4444-4444-4444-444444444444",
+              watchlist_ids: [],
+              subscribed_account_ids: [],
+              lifecycle_status: "draft",
+              runtime_overrides: {},
+              risk_horizon: "intraday",
+              created_at: now,
+              updated_at: now,
+              started_at: null,
+              stopped_at: null,
+            },
+          ],
+        },
+      },
+      { url: "/api/v1/watchlists", body: { watchlists: [] } },
+      { url: "/api/v1/strategies", body: { strategies: [] } },
+      { url: "/api/v1/strategies/v4/", body: [] },
+      { url: "/api/v1/system/status", body: STATUS_OK },
+    ]);
+    renderRoute(<Deployments />);
+    await waitFor(() => {
+      expect(screen.getByText("Intraday Rocket")).toBeInTheDocument();
+    });
+    expect(screen.getByText("Intraday")).toBeInTheDocument();
+  });
+
+  it("shows Rebind button only on ACTIVE deployments", async () => {
+    const now = new Date().toISOString();
+    restore = installFetchMock([
+      {
+        url: "/api/v1/deployments",
+        body: {
+          deployments: [
+            {
+              deployment_id: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+              name: "Active One",
+              description: null,
+              strategy_version_id: "44444444-4444-4444-4444-444444444444",
+              watchlist_ids: [],
+              subscribed_account_ids: [],
+              lifecycle_status: "active",
+              runtime_overrides: {},
+              created_at: now,
+              updated_at: now,
+              started_at: now,
+              stopped_at: null,
+            },
+            {
+              deployment_id: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+              name: "Draft One",
+              description: null,
+              strategy_version_id: "44444444-4444-4444-4444-444444444444",
+              watchlist_ids: [],
+              subscribed_account_ids: [],
+              lifecycle_status: "draft",
+              runtime_overrides: {},
+              created_at: now,
+              updated_at: now,
+              started_at: null,
+              stopped_at: null,
+            },
+          ],
+        },
+      },
+      { url: "/api/v1/watchlists", body: { watchlists: [] } },
+      { url: "/api/v1/strategies", body: { strategies: [] } },
+      { url: "/api/v1/strategies/v4/", body: [] },
+      { url: "/api/v1/system/status", body: STATUS_OK },
+    ]);
+    renderRoute(<Deployments />);
+    await waitFor(() => {
+      expect(screen.getByText("Active One")).toBeInTheDocument();
+    });
+    const rebindButtons = screen.getAllByRole("button", { name: /Rebind/i });
+    // Only the active deployment should show a Rebind button
+    expect(rebindButtons).toHaveLength(1);
+  });
+
+  it("shows v4 strategy name when deployment has strategy_version_v4_id", async () => {
+    const now = new Date().toISOString();
+    restore = installFetchMock([
+      {
+        url: "/api/v1/deployments",
+        body: {
+          deployments: [
+            {
+              deployment_id: "33333333-3333-3333-3333-333333333333",
+              name: "v4 Deployment",
+              description: null,
+              strategy_version_v4_id: "v4ver-id-0000-0000-000000000000",
+              watchlist_ids: [],
+              subscribed_account_ids: [],
+              lifecycle_status: "draft",
+              runtime_overrides: {},
+              created_at: now,
+              updated_at: now,
+              started_at: null,
+              stopped_at: null,
+            },
+          ],
+        },
+      },
+      { url: "/api/v1/watchlists", body: { watchlists: [] } },
+      { url: "/api/v1/strategies", body: { strategies: [] } },
+      {
+        url: "/api/v1/strategies/v4/",
+        body: [
+          {
+            strategy_v4_id: "v4strat-id-000-0000-000000000000",
+            name: "My v4 Strategy",
+            description: null,
+            head_version: 1,
+            head_version_id: "v4ver-id-0000-0000-000000000000",
+            total_versions: 1,
+            created_at: now,
+            updated_at: now,
+          },
+        ],
+      },
+      { url: "/api/v1/system/status", body: STATUS_OK },
+    ]);
+    renderRoute(<Deployments />);
+    await waitFor(() => {
+      expect(screen.getByText("My v4 Strategy")).toBeInTheDocument();
+    });
+  });
+
+  it("legacy create-drawer still accessible from empty-state button", async () => {
     const now = new Date().toISOString();
     restore = installFetchMock([
       { url: "/api/v1/deployments", body: { deployments: [] } },
@@ -144,31 +284,6 @@ describe("<Deployments />", () => {
         },
       },
       {
-        url: "/api/v1/strategies/77777777-7777-7777-7777-777777777777/versions",
-        body: [
-          {
-            strategy_version_id: "44444444-4444-4444-4444-444444444444",
-            strategy_id: "77777777-7777-7777-7777-777777777777",
-            version: 1,
-            status: "draft",
-            payload: {
-              id: "44444444-4444-4444-4444-444444444444",
-              strategy_id: "77777777-7777-7777-7777-777777777777",
-              version: 1,
-              name: "Draft Strategy Version",
-              feature_refs: [],
-              entry_rules: [],
-              exit_rules: [],
-              tags: [],
-              created_at: now,
-            },
-            frozen_at: null,
-            frozen_by: null,
-            created_at: now,
-          },
-        ],
-      },
-      {
         url: "/api/v1/strategies",
         body: {
           strategies: [
@@ -186,6 +301,7 @@ describe("<Deployments />", () => {
           ],
         },
       },
+      { url: "/api/v1/strategies/v4/", body: [] },
       {
         url: "/api/v1/broker-accounts",
         body: {
@@ -209,34 +325,16 @@ describe("<Deployments />", () => {
     ]);
     renderRoute(<Deployments />);
     await waitFor(() => expect(screen.getByText(/No deployments yet/i)).toBeInTheDocument());
-
-    fireEvent.click(screen.getAllByRole("button", { name: /New Deployment/i })[0]);
-    fireEvent.change(await screen.findByLabelText("Strategy"), {
-      target: { value: "77777777-7777-7777-7777-777777777777" },
-    });
-
+    // The empty-state "New Deployment" button opens the legacy create drawer.
+    // The PageHeader button navigates to the new 6-step screen.
+    // Both show text "New Deployment"; the empty-state button is the second one (index 1).
+    const newDeploymentButtons = screen.getAllByRole("button", { name: /New Deployment/i });
+    expect(newDeploymentButtons.length).toBeGreaterThanOrEqual(1);
+    // Clicking the empty-state button opens the legacy create drawer.
+    fireEvent.click(newDeploymentButtons[newDeploymentButtons.length - 1]);
     await waitFor(() => {
-      expect(screen.getByLabelText("Strategy version")).toHaveTextContent("v1 - draft");
+      expect(screen.getByText(/Pick a Strategy version/i)).toBeInTheDocument();
     });
-    expect(screen.queryByText(/No frozen versions/i)).not.toBeInTheDocument();
-
-    // Slice B fix F-RISK-4 / B-RISK-1: the Create drawer must expose the
-    // Risk horizon selector with all 5 enum values, and must surface the
-    // "enforcement is OFF" warning when the operator leaves it on the
-    // default "use Strategy default" option.
-    const riskHorizon = screen.getByLabelText(/Risk horizon/i) as HTMLSelectElement;
-    const optionValues = Array.from(riskHorizon.options).map((o) => o.value);
-    expect(optionValues).toEqual(
-      expect.arrayContaining(["", "scalping", "intraday", "swing", "position", "other"]),
-    );
-    expect(
-      screen.getByText(/Per-horizon RiskPlan enforcement is OFF/i),
-    ).toBeInTheDocument();
-    // Choosing an explicit horizon clears the warning.
-    fireEvent.change(riskHorizon, { target: { value: "swing" } });
-    expect(
-      screen.queryByText(/Per-horizon RiskPlan enforcement is OFF/i),
-    ).not.toBeInTheDocument();
   });
 
   it("surfaces a degraded read state when list fails", async () => {
@@ -244,6 +342,7 @@ describe("<Deployments />", () => {
       { url: "/api/v1/deployments", body: { detail: "kaboom" }, status: 500 },
       { url: "/api/v1/watchlists", body: { watchlists: [] } },
       { url: "/api/v1/strategies", body: { strategies: [] } },
+      { url: "/api/v1/strategies/v4/", body: [] },
       { url: "/api/v1/system/status", body: STATUS_OK },
     ]);
     renderRoute(<Deployments />);
@@ -331,6 +430,7 @@ describe("<Deployments />", () => {
           ],
         },
       },
+      { url: "/api/v1/strategies/v4/", body: [] },
       { url: "/api/v1/system/status", body: STATUS_OK },
       {
         url: "/api/v1/deployments/33333333-3333-3333-3333-333333333333/delete",

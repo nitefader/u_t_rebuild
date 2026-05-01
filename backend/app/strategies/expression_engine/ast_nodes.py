@@ -10,6 +10,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Union
 
+VariableValue = float | bool | str
+
 
 @dataclass(frozen=True)
 class NumberLit:
@@ -51,6 +53,14 @@ class TimeframedFeature:
 
 
 @dataclass(frozen=True)
+class TimeframeVarFeature:
+    """Timeframed feature whose timeframe is a strategy variable, e.g. sig_tf.ema(9)."""
+    timeframe_variable: str     # variable name (bound to a canonical TF string at eval)
+    name: str                   # "ema"
+    args: tuple["AstNode", ...]
+
+
+@dataclass(frozen=True)
 class UnaryOp:
     """Unary operator: NOT (logical) or - (arithmetic)."""
     op: str             # "NOT" or "-"
@@ -80,6 +90,7 @@ AstNode = Union[
     VariableRef,
     FeatureRef,
     TimeframedFeature,
+    TimeframeVarFeature,
     UnaryOp,
     BinaryOp,
     FunctionCall,
@@ -117,9 +128,10 @@ class FeatureSnapshot:
     history   — recent bar values for crosses_above/crosses_below and bar[-N]:
                   feature_key -> tuple of floats, index 0 = current, index 1 = previous bar, etc.
                   For bar[-N].field the key is "bar.<field>" e.g. "bar.close".
-    variables — pre-resolved variable values: name -> float | bool
+    variables — pre-resolved variable values: name -> float | bool | str
+                (strings are canonical timeframes like "5m" for timeframe variables).
     """
     timestamp: datetime
     values: dict[str, float | bool]
     history: dict[str, tuple[float, ...]]
-    variables: dict[str, float | bool]
+    variables: dict[str, VariableValue]

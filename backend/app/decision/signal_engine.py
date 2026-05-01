@@ -124,6 +124,9 @@ class SignalEngine:
         features_used: dict[str, float],
         diagnostics: dict[str, Any],
     ) -> CandidateTradeIntent:
+        intent_diagnostics = dict(diagnostics)
+        if rule.logical_exit_rule is not None:
+            intent_diagnostics["logical_exit_rule_payload"] = rule.logical_exit_rule.model_dump(mode="json")
         return CandidateTradeIntent(
             timestamp=snapshot.timestamp,
             symbol=snapshot.symbol,
@@ -134,7 +137,7 @@ class SignalEngine:
             feature_values_used=features_used,
             stop_candidate=self._optional_feature_value(rule.stop_candidate_feature, snapshot, features_used),
             target_candidate=self._optional_feature_value(rule.target_candidate_feature, snapshot, features_used),
-            diagnostics=diagnostics,
+            diagnostics=intent_diagnostics,
         )
 
     def _evaluate_entry_rule(

@@ -66,12 +66,34 @@ from backend.app.domain.strategy_controls import TradingHorizon
 from .models import GovernorPolicy
 
 _LOG = logging.getLogger(__name__)
+_ACCOUNT_FIELD_ALLOWLIST = frozenset(
+    {
+        "max_open_positions",
+        "max_gross_exposure_pct",
+        "max_net_exposure_pct",
+        "max_symbol_concentration_pct",
+        "max_daily_loss_pct",
+        "max_drawdown_pct",
+    }
+)
+_PLAN_FIELD_ALLOWLIST = frozenset(
+    {
+        "max_open_positions",
+        "max_gross_exposure_pct",
+        "max_net_exposure_pct",
+        "max_symbol_exposure_pct",
+        "max_open_risk_pct",
+        "max_daily_loss_pct",
+        "max_drawdown_pct",
+        "cooldown_after_loss_minutes",
+    }
+)
 
 # T-6: composite (account, horizon) → (AccountRiskConfig?, RiskPlanConfig?)
 # lookup. The two halves are read as one snapshot so a concurrent operator
 # PUT to /risk-plan-map cannot interleave between them.
 GovernorPolicyInputsLookup = Callable[
-    [UUID, TradingHorizon],
+    [UUID, "TradingHorizon | None"],
     "tuple[AccountRiskConfig | None, RiskPlanConfig | None]",
 ]
 
@@ -92,7 +114,7 @@ class GovernorPolicyResolver:
         floor: GovernorPolicy,
         account_id: UUID,
         deployment_id: UUID,
-        risk_horizon: TradingHorizon,
+        risk_horizon: TradingHorizon | None,
         enforce_plan_required: bool = False,
     ) -> GovernorPolicy:
         """Resolve a per-(account, deployment-horizon) GovernorPolicy.
@@ -104,10 +126,10 @@ class GovernorPolicyResolver:
         into an immediate rejection.
 
         The orchestrator passes ``enforce_plan_required=True`` only when the
-        Deployment has an explicit ``risk_horizon`` field set (not a fallback
-        from ``StrategyControls.trading_horizon``). Fallback-horizon evaluation
-        is for numeric limits only; it does not enforce the must-have-plan rule,
-        since the deployment did not declare a horizon.
+        Deployment has an explicit ``risk_horizon`` field set. Deployment is the
+        sole source of horizon (Slice 8.7); StrategyControls no longer carries a
+        trading_horizon field. When the Deployment has no horizon, no plan rule
+        is enforced.
 
         ``deployment_id`` is accepted for future use (audit trails,
         per-deployment overrides) but is not consumed today — the doctrine
@@ -163,11 +185,30 @@ class GovernorPolicyResolver:
                 None,
                 _plan_field(plan_config, "max_open_risk_pct"),
             ),
+            # T-7 daily-state guardrails. Both AccountRiskConfig and RiskPlanConfig
+            # carry max_daily_loss_pct / max_drawdown_pct; cooldown_after_loss_minutes
+            # is RiskPlan-only (AccountRiskConfig has no such field). Min-of-present
+            # so operator edits on either source tighten enforcement.
+            max_daily_loss_pct=_min_present(
+                floor.max_daily_loss_pct,
+                _account_field(account_config, "max_daily_loss_pct"),
+                _plan_field(plan_config, "max_daily_loss_pct"),
+            ),
+            max_drawdown_pct=_min_present(
+                floor.max_drawdown_pct,
+                _account_field(account_config, "max_drawdown_pct"),
+                _plan_field(plan_config, "max_drawdown_pct"),
+            ),
+            cooldown_after_loss_minutes=_min_present(
+                floor.cooldown_after_loss_minutes,
+                None,
+                _plan_field(plan_config, "cooldown_after_loss_minutes"),
+            ),
             requires_risk_plan=requires_risk_plan,
         )
 
     def _safe_lookup(
-        self, account_id: UUID, horizon: TradingHorizon
+        self, account_id: UUID, horizon: TradingHorizon | None
     ) -> "tuple[AccountRiskConfig | None, RiskPlanConfig | None, bool]":
         """Return ``(account_config, plan_config, lookup_raised)`` tuple.
 
@@ -203,7 +244,7 @@ class GovernorPolicyResolver:
                 extra={
                     "event": "governor_policy_inputs_lookup_failed",
                     "account_id": str(account_id),
-                    "horizon": horizon.value,
+                    "horizon": horizon.value if horizon is not None else None,
                 },
             )
             return None, None, True
@@ -212,13 +253,17 @@ class GovernorPolicyResolver:
 def _account_field(config: AccountRiskConfig | None, field: str) -> float | int | None:
     if config is None:
         return None
-    return getattr(config, field, None)
+    if field not in _ACCOUNT_FIELD_ALLOWLIST:
+        raise ValueError(f"unsupported account field mapping: {field}")
+    return getattr(config, field)
 
 
 def _plan_field(config: RiskPlanConfig | None, field: str) -> float | int | None:
     if config is None:
         return None
-    return getattr(config, field, None)
+    if field not in _PLAN_FIELD_ALLOWLIST:
+        raise ValueError(f"unsupported plan field mapping: {field}")
+    return getattr(config, field)
 
 
 def _min_present(*values: float | int | None) -> float | int | None:

@@ -87,7 +87,6 @@ def test_wizard_base_timeframe_overrides_request_timeframe() -> None:
     )
 
     assert draft.strategy_controls.timeframe == "1h"
-    assert draft.strategy_controls.trading_horizon == TradingHorizon.SWING
     assert all(".close[0]" in ref or ".open[0]" in ref or ref.startswith("1h.") for ref in draft.strategy.feature_refs)
 
 

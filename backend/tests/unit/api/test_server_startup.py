@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import inspect
+
 from backend.app.api import server
 from backend.app.runtime import runtime_context
 
@@ -21,3 +23,10 @@ def test_startup_wires_broker_sync_before_opening_streams(monkeypatch) -> None:
     server._bootstrap_streams()
 
     assert calls == ["manual_sync", "streams"]
+
+
+def test_startup_runtime_uses_sqlite_order_ledger() -> None:
+    source = inspect.getsource(server)
+
+    assert "SQLiteOrderLedger(sqlite_path)" in source
+    assert "order_manager = OrderManager()" not in source

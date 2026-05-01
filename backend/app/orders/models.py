@@ -43,7 +43,6 @@ class InternalOrderStatus(StrEnum):
 
 
 class OrderOrigin(StrEnum):
-    PROGRAM = "program"
     SIGNAL_PLAN = "signal_plan"
     MANUAL_OPERATOR = "manual_operator"
 
@@ -54,9 +53,8 @@ class InternalOrder(BaseModel):
     order_id: UUID
     client_order_id: str
     account_id: UUID
-    origin: OrderOrigin = OrderOrigin.PROGRAM
+    origin: OrderOrigin
     deployment_id: UUID | None = None
-    program_id: UUID | None = None
     strategy_id: UUID | None = None
     strategy_version_id: UUID | None = None
     signal_plan_id: UUID | None = None
@@ -101,8 +99,6 @@ class InternalOrder(BaseModel):
     def validate_filled_quantity(self) -> "InternalOrder":
         if self.filled_quantity > self.quantity:
             raise ValueError("filled_quantity cannot exceed quantity")
-        if self.origin == OrderOrigin.PROGRAM and (self.deployment_id is None or self.program_id is None):
-            raise ValueError("program orders require deployment_id and program_id")
         if self.origin == OrderOrigin.SIGNAL_PLAN:
             required = {
                 "deployment_id": self.deployment_id,
@@ -116,8 +112,8 @@ class InternalOrder(BaseModel):
             missing = sorted(name for name, value in required.items() if value is None)
             if missing:
                 raise ValueError(f"signal plan orders require lineage fields: {missing}")
-        if self.origin == OrderOrigin.MANUAL_OPERATOR and (self.deployment_id is not None or self.program_id is not None):
-            raise ValueError("manual operator orders cannot carry deployment/program lineage")
+        if self.origin == OrderOrigin.MANUAL_OPERATOR and self.deployment_id is not None:
+            raise ValueError("manual operator orders cannot carry deployment lineage")
         if self.origin == OrderOrigin.MANUAL_OPERATOR and any(
             value is not None
             for value in (

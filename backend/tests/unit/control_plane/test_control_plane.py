@@ -15,20 +15,19 @@ from backend.app.control_plane import (
     ControlPlane,
     DeploymentControlState,
     KillSwitchEvent,
-    build_program_client_order_id,
     hydrate_control_plane,
     parse_order_deployment_id,
     parse_order_intent,
 )
-from backend.app.domain import CandidateSide, IntentType, OrderType, TimeInForce, TradingMode
+from backend.app.control_plane.client_order_id import build_signal_plan_client_order_id
+from backend.app.domain import TradingMode
 from backend.app.orders import InternalOrder, InternalOrderIntent, OrderLedger, OrderManager
-from backend.tests.fixtures.legacy_intent import LegacyExecutionIntent as ExecutionIntent
+from backend.tests.fixtures.modern_order import make_signal_plan_order
 
 
 ACCOUNT_ID = UUID("11111111-2222-3333-4444-555555555555")
 DEPLOYMENT_A = UUID("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
 DEPLOYMENT_B = UUID("bbbbbbbb-cccc-dddd-eeee-ffffffffffff")
-PROGRAM_ID = UUID("99999999-8888-7777-6666-555555555555")
 
 
 class CancellableBroker:
@@ -70,24 +69,6 @@ class CancellableBroker:
         self.canceled.append(client_order_id)
 
 
-def _intent(*, deployment_id: UUID = DEPLOYMENT_A, symbol: str = "SPY", intent_type: IntentType = IntentType.ENTRY) -> ExecutionIntent:
-    return ExecutionIntent(
-        deployment_id=deployment_id,
-        program_version_id=PROGRAM_ID,
-        symbol=symbol,
-        side=CandidateSide.LONG,
-        intent_type=intent_type,
-        qty=10,
-        order_type=OrderType.MARKET,
-        time_in_force=TimeInForce.DAY,
-        timestamp=datetime(2026, 1, 2, 14, 30, tzinfo=timezone.utc),
-        signal_name="entry",
-        reason="signal_condition_true",
-        governor_approved=True,
-        governor_reason="approved",
-    )
-
-
 def _order(
     ledger: OrderLedger,
     *,
@@ -95,9 +76,11 @@ def _order(
     symbol: str = "SPY",
     order_intent: InternalOrderIntent | None = None,
 ) -> InternalOrder:
-    return OrderManager(ledger=ledger).create_order(
+    return make_signal_plan_order(
+        OrderManager(ledger=ledger),
         account_id=ACCOUNT_ID,
-        execution_intent=_intent(deployment_id=deployment_id, symbol=symbol),
+        deployment_id=deployment_id,
+        symbol=symbol,
         order_intent=order_intent,
     )
 
@@ -113,12 +96,18 @@ def _broker_result(order: InternalOrder) -> BrokerOrderResult:
     )
 
 
-def test_client_order_id_intent_encoding_and_parsing() -> None:
-    client_order_id = build_program_client_order_id("My ORB Program", DEPLOYMENT_A, intent="tp")
+def test_signal_plan_client_order_id_intent_encoding_and_parsing() -> None:
+    signal_plan_id = UUID("12345678-1111-2222-3333-444444444444")
+    client_order_id = build_signal_plan_client_order_id(ACCOUNT_ID, DEPLOYMENT_A, signal_plan_id, intent="target")
 
-    assert client_order_id.startswith(f"myorbprogram-{DEPLOYMENT_A.hex[:8]}-tp-")
-    assert parse_order_intent(client_order_id) == "tp"
-    assert parse_order_deployment_id(client_order_id) == DEPLOYMENT_A.hex[:8]
+    assert client_order_id.startswith(f"sigplan-{ACCOUNT_ID.hex[:8]}-{signal_plan_id.hex[:8]}-target-")
+    assert parse_order_intent(client_order_id) == "target"
+    assert parse_order_deployment_id(client_order_id) is None
+
+    breakeven_id = build_signal_plan_client_order_id(ACCOUNT_ID, DEPLOYMENT_A, signal_plan_id, intent="breakeven")
+    logical_exit_id = build_signal_plan_client_order_id(ACCOUNT_ID, DEPLOYMENT_A, signal_plan_id, intent="logical_exit")
+    assert parse_order_intent(breakeven_id) == "breakeven"
+    assert parse_order_intent(logical_exit_id) == "logical_exit"
 
 
 def test_legacy_client_order_id_parses_as_unknown() -> None:

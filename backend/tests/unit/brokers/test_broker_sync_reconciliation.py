@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+import threading
 from datetime import datetime, timedelta, timezone
 from uuid import UUID, uuid4
 
@@ -20,9 +22,10 @@ from backend.app.brokers import (
 )
 from backend.app.domain import CandidateSide, IntentType, OrderType, TimeInForce, TradingMode
 from backend.app.governor import BrokerSyncFreshness, GovernorRequest, PortfolioGovernor, PortfolioSnapshot
-from backend.app.orders import InternalOrder, InternalOrderStatus, OrderManager
+from backend.app.orders import InternalOrder, InternalOrderIntent, InternalOrderStatus, OrderManager, OrderOrigin
 from backend.app.runtime import RuntimeState
 from backend.tests.fixtures.legacy_intent import LegacyExecutionIntent as ExecutionIntent
+from backend.tests.fixtures.modern_order import make_signal_plan_order
 
 
 ACCOUNT_ID = UUID("11111111-2222-3333-4444-555555555555")
@@ -102,7 +105,7 @@ def _intent() -> ExecutionIntent:
 
 def _manager_and_order() -> tuple[OrderManager, InternalOrder]:
     manager = OrderManager()
-    return manager, manager.create_order(account_id=ACCOUNT_ID, execution_intent=_intent())
+    return manager, make_signal_plan_order(manager, account_id=ACCOUNT_ID, deployment_id=DEPLOYMENT_ID)
 
 
 def _result(order: InternalOrder, status: BrokerOrderStatus) -> BrokerOrderResult:
@@ -119,6 +122,47 @@ def _result(order: InternalOrder, status: BrokerOrderStatus) -> BrokerOrderResul
         remaining_quantity=order.quantity - filled_quantity,
         reason=reason,
         raw_status=status.value,
+    )
+
+
+def _filled_signal_plan_order(
+    *,
+    deployment_id: UUID = DEPLOYMENT_ID,
+    symbol: str = "SPY",
+    qty: float = 3,
+    side: CandidateSide = CandidateSide.LONG,
+    opening_signal_plan_id: UUID | None = None,
+    position_lineage_id: UUID | None = None,
+    strategy_id: UUID | None = None,
+    strategy_version_id: UUID | None = None,
+) -> InternalOrder:
+    opening_id = opening_signal_plan_id or uuid4()
+    lineage_id = position_lineage_id or opening_id
+    created_at = datetime(2026, 1, 2, 14, 30, tzinfo=timezone.utc)
+    return InternalOrder(
+        order_id=uuid4(),
+        client_order_id=f"sp-{uuid4()}",
+        account_id=ACCOUNT_ID,
+        origin=OrderOrigin.SIGNAL_PLAN,
+        deployment_id=deployment_id,
+        strategy_id=strategy_id or uuid4(),
+        strategy_version_id=strategy_version_id or uuid4(),
+        signal_plan_id=opening_id,
+        opening_signal_plan_id=opening_id,
+        current_signal_plan_id=opening_id,
+        position_lineage_id=lineage_id,
+        account_evaluation_id=uuid4(),
+        governor_decision_id=uuid4(),
+        symbol=symbol,
+        side=side,
+        quantity=abs(qty),
+        filled_quantity=abs(qty),
+        order_type=OrderType.MARKET,
+        time_in_force=TimeInForce.DAY,
+        intent=InternalOrderIntent.OPEN,
+        status=InternalOrderStatus.FILLED,
+        created_at=created_at,
+        updated_at=created_at,
     )
 
 
@@ -184,6 +228,11 @@ class RecordingRuntimeStore:
         return snapshot
 
 
+class FailingDailyStateRuntimeStore(RecordingRuntimeStore):
+    def save_daily_account_state(self, _state) -> None:  # type: ignore[no-untyped-def]
+        raise RuntimeError("disk full")
+
+
 def test_missing_local_order_flagged() -> None:
     manager = OrderManager()
     adapter = ReconciliationAdapter(open_orders=(_external_snapshot(),))
@@ -220,6 +269,100 @@ def test_reconcile_persists_current_open_broker_order_snapshots_for_operations_v
 
     assert store.open_order_replacements == [(ACCOUNT_ID, (snapshot,))]
     assert store.position_replacements == [(ACCOUNT_ID, (position,))]
+
+
+def test_reconcile_enriches_position_snapshot_with_signal_plan_lineage() -> None:
+    manager = OrderManager()
+    opening_signal_plan_id = uuid4()
+    position_lineage_id = uuid4()
+    strategy_id = uuid4()
+    order = _filled_signal_plan_order(
+        opening_signal_plan_id=opening_signal_plan_id,
+        position_lineage_id=position_lineage_id,
+        strategy_id=strategy_id,
+    )
+    manager.ledger.add(order)
+    position = BrokerPositionSnapshot(
+        account_id=ACCOUNT_ID,
+        symbol="SPY",
+        quantity=3,
+        side=BrokerPositionSide.LONG,
+        avg_entry_price=100,
+        market_value=300,
+    )
+    store = RecordingRuntimeStore()
+    adapter = ReconciliationAdapter(positions=(position,))
+
+    BrokerSyncService(
+        adapter=adapter,
+        broker_sync=BrokerSync(ledger=manager.ledger, adapter=adapter, runtime_store=store),
+        order_ledger=manager.ledger,
+        runtime_store=store,
+    ).reconcile(ACCOUNT_ID)
+
+    enriched = store.position_replacements[-1][1][0]
+    assert enriched.deployment_id == DEPLOYMENT_ID
+    assert enriched.strategy_id == strategy_id
+    assert enriched.opening_signal_plan_id == opening_signal_plan_id
+    assert enriched.position_lineage_id == position_lineage_id
+
+
+def test_reconcile_does_not_guess_lineage_when_position_ownership_is_ambiguous() -> None:
+    manager = OrderManager()
+    other_deployment_id = UUID("bbbbbbbb-cccc-dddd-eeee-ffffffffffff")
+    manager.ledger.add(_filled_signal_plan_order(deployment_id=DEPLOYMENT_ID, qty=3))
+    manager.ledger.add(_filled_signal_plan_order(deployment_id=other_deployment_id, qty=3))
+    position = BrokerPositionSnapshot(
+        account_id=ACCOUNT_ID,
+        symbol="SPY",
+        quantity=3,
+        side=BrokerPositionSide.LONG,
+        avg_entry_price=100,
+        market_value=300,
+    )
+    store = RecordingRuntimeStore()
+    adapter = ReconciliationAdapter(positions=(position,))
+
+    BrokerSyncService(
+        adapter=adapter,
+        broker_sync=BrokerSync(ledger=manager.ledger, adapter=adapter, runtime_store=store),
+        order_ledger=manager.ledger,
+        runtime_store=store,
+    ).reconcile(ACCOUNT_ID)
+
+    enriched = store.position_replacements[-1][1][0]
+    assert enriched.deployment_id is None
+    assert enriched.opening_signal_plan_id is None
+    assert enriched.position_lineage_id is None
+
+
+def test_reconcile_stamps_deployment_only_when_single_deployment_has_multiple_lineages() -> None:
+    manager = OrderManager()
+    manager.ledger.add(_filled_signal_plan_order(deployment_id=DEPLOYMENT_ID, qty=1))
+    manager.ledger.add(_filled_signal_plan_order(deployment_id=DEPLOYMENT_ID, qty=2))
+    position = BrokerPositionSnapshot(
+        account_id=ACCOUNT_ID,
+        symbol="SPY",
+        quantity=3,
+        side=BrokerPositionSide.LONG,
+        avg_entry_price=100,
+        market_value=300,
+    )
+    store = RecordingRuntimeStore()
+    adapter = ReconciliationAdapter(positions=(position,))
+
+    BrokerSyncService(
+        adapter=adapter,
+        broker_sync=BrokerSync(ledger=manager.ledger, adapter=adapter, runtime_store=store),
+        order_ledger=manager.ledger,
+        runtime_store=store,
+    ).reconcile(ACCOUNT_ID)
+
+    enriched = store.position_replacements[-1][1][0]
+    assert enriched.deployment_id == DEPLOYMENT_ID
+    assert enriched.strategy_id is not None
+    assert enriched.opening_signal_plan_id is None
+    assert enriched.position_lineage_id is None
 
 
 def test_stream_position_update_persists_position_snapshot_for_operations_visibility() -> None:
@@ -274,10 +417,7 @@ def test_reconcile_skips_terminal_internal_orders_during_quiet_polling() -> None
         order_id=active_order.order_id,
         status=InternalOrderStatus.FILLED,
     )
-    second_order = manager.create_order(
-        account_id=ACCOUNT_ID,
-        execution_intent=_intent().model_copy(update={"signal_name": "entry-2"}),
-    )
+    second_order = make_signal_plan_order(manager, account_id=ACCOUNT_ID, deployment_id=DEPLOYMENT_ID)
     adapter = ReconciliationAdapter(
         order_results_by_client_id={second_order.client_order_id: _result(second_order, BrokerOrderStatus.ACCEPTED)}
     )
@@ -550,6 +690,100 @@ def test_streaming_fill_update_updates_trade_ledger() -> None:
 
     assert service.fills() == (fill,)
     assert trade_ledger.fills == [fill]
+
+
+def test_save_daily_account_state_failure_logs_warning(caplog) -> None:
+    class _PassthroughAggregator:
+        def apply_fill(self, _current, fill, *, equity):  # type: ignore[no-untyped-def]
+            from backend.app.runtime.daily_account_state import DailyAccountStateAggregator
+
+            return DailyAccountStateAggregator().apply_fill(None, fill, equity=equity)
+
+    store = FailingDailyStateRuntimeStore()
+    service = BrokerSyncService(
+        adapter=ReconciliationAdapter(),
+        broker_sync=BrokerSync(ledger=OrderManager().ledger),
+        order_ledger=OrderManager().ledger,
+        runtime_store=store,
+        daily_state_aggregator=_PassthroughAggregator(),
+        daily_states={},
+    )
+    fill = BrokerFillUpdateEvent(
+        account_id=ACCOUNT_ID,
+        client_order_id="client-1",
+        symbol="SPY",
+        qty=1,
+        price=100,
+        side="buy",
+    )
+
+    with caplog.at_level(logging.WARNING, logger="backend.app.brokers.sync"):
+        service.handle_fill_update(fill)
+
+    state = service.daily_state_for(ACCOUNT_ID)
+    assert state is not None
+    assert state.account_id == ACCOUNT_ID
+    assert any(
+        record.__dict__.get("event") == "broker_sync_daily_state_persist_failed"
+        and record.__dict__.get("account_id") == str(ACCOUNT_ID)
+        and record.__dict__.get("market_day") == state.market_day
+        for record in caplog.records
+    )
+
+
+def test_daily_state_fill_updates_are_serialized_per_account() -> None:
+    class _CounterAggregator:
+        def __init__(self) -> None:
+            self._guard = threading.Lock()
+            self.in_flight = 0
+            self.max_in_flight = 0
+
+        def apply_fill(self, current, _fill, *, equity):  # type: ignore[no-untyped-def]
+            import time
+
+            with self._guard:
+                self.in_flight += 1
+                self.max_in_flight = max(self.max_in_flight, self.in_flight)
+            time.sleep(0.02)
+            base = int(current) if current is not None else 0
+            with self._guard:
+                self.in_flight -= 1
+            return base + 1
+
+    aggregator = _CounterAggregator()
+    service = BrokerSyncService(
+        adapter=ReconciliationAdapter(),
+        broker_sync=BrokerSync(ledger=OrderManager().ledger),
+        order_ledger=OrderManager().ledger,
+        daily_state_aggregator=aggregator,
+        daily_states={},
+    )
+    fill_a = BrokerFillUpdateEvent(
+        account_id=ACCOUNT_ID,
+        client_order_id="client-a",
+        symbol="SPY",
+        qty=1,
+        price=100,
+        side="buy",
+    )
+    fill_b = BrokerFillUpdateEvent(
+        account_id=ACCOUNT_ID,
+        client_order_id="client-b",
+        symbol="SPY",
+        qty=1,
+        price=100,
+        side="buy",
+    )
+    t1 = threading.Thread(target=lambda: service.handle_fill_update(fill_a))
+    t2 = threading.Thread(target=lambda: service.handle_fill_update(fill_b))
+    t1.start()
+    t2.start()
+    t1.join()
+    t2.join()
+
+    assert service.daily_state_for(ACCOUNT_ID) == 2
+    assert aggregator.max_in_flight == 1
+
 
 
 def test_streaming_position_update_updates_snapshot() -> None:

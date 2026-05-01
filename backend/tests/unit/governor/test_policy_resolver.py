@@ -20,6 +20,7 @@ from backend.app.broker_accounts.models import AccountRiskConfig
 from backend.app.domain.risk_plan import RiskPlanConfig, RiskPlanSizingMethod
 from backend.app.domain.strategy_controls import TradingHorizon
 from backend.app.governor import GovernorPolicy, GovernorPolicyResolver
+import backend.app.governor.policy_resolver as policy_resolver_module
 
 ACCOUNT_ID = UUID("11111111-1111-1111-1111-111111111111")
 DEPLOYMENT_ID = UUID("22222222-2222-2222-2222-222222222222")
@@ -513,6 +514,152 @@ def test_requires_risk_plan_set_for_all_horizons(horizon: TradingHorizon):
     assert policy.requires_risk_plan is True
 
 
+# ---------------------------------------------------------------------------
+# T-7: daily-state guardrails — max_daily_loss_pct / max_drawdown_pct /
+# cooldown_after_loss_minutes must flow from AccountRiskConfig + RiskPlanConfig
+# into GovernorPolicy. Without these mappings, operator edits to the Risk Card
+# or Risk Plan are silent no-ops at evaluation time.
+# ---------------------------------------------------------------------------
+
+
+def test_account_only_contributes_max_daily_loss_pct():
+    account = _account_config(max_daily_loss_pct=2.5)
+    policy = _resolver(account_lookup=lambda _aid: account).resolve(
+        floor=GovernorPolicy(),
+        account_id=ACCOUNT_ID,
+        deployment_id=DEPLOYMENT_ID,
+        risk_horizon=TradingHorizon.INTRADAY,
+    )
+    assert policy.max_daily_loss_pct == 2.5
+
+
+def test_plan_only_contributes_max_daily_loss_pct():
+    plan = _plan_config(max_daily_loss_pct=3.0)
+    policy = _resolver(plan_lookup=lambda _aid, _h: plan).resolve(
+        floor=GovernorPolicy(),
+        account_id=ACCOUNT_ID,
+        deployment_id=DEPLOYMENT_ID,
+        risk_horizon=TradingHorizon.SWING,
+    )
+    assert policy.max_daily_loss_pct == 3.0
+
+
+def test_both_set_min_wins_for_max_daily_loss_pct():
+    account = _account_config(max_daily_loss_pct=5.0)
+    plan = _plan_config(max_daily_loss_pct=2.0)
+    policy = _resolver(
+        account_lookup=lambda _aid: account,
+        plan_lookup=lambda _aid, _h: plan,
+    ).resolve(
+        floor=GovernorPolicy(),
+        account_id=ACCOUNT_ID,
+        deployment_id=DEPLOYMENT_ID,
+        risk_horizon=TradingHorizon.INTRADAY,
+    )
+    assert policy.max_daily_loss_pct == 2.0
+
+
+def test_account_only_contributes_max_drawdown_pct():
+    account = _account_config(max_drawdown_pct=8.0)
+    policy = _resolver(account_lookup=lambda _aid: account).resolve(
+        floor=GovernorPolicy(),
+        account_id=ACCOUNT_ID,
+        deployment_id=DEPLOYMENT_ID,
+        risk_horizon=TradingHorizon.SWING,
+    )
+    assert policy.max_drawdown_pct == 8.0
+
+
+def test_plan_only_contributes_max_drawdown_pct():
+    plan = _plan_config(max_drawdown_pct=10.0)
+    policy = _resolver(plan_lookup=lambda _aid, _h: plan).resolve(
+        floor=GovernorPolicy(),
+        account_id=ACCOUNT_ID,
+        deployment_id=DEPLOYMENT_ID,
+        risk_horizon=TradingHorizon.POSITION,
+    )
+    assert policy.max_drawdown_pct == 10.0
+
+
+def test_both_set_min_wins_for_max_drawdown_pct():
+    account = _account_config(max_drawdown_pct=15.0)
+    plan = _plan_config(max_drawdown_pct=6.0)
+    policy = _resolver(
+        account_lookup=lambda _aid: account,
+        plan_lookup=lambda _aid, _h: plan,
+    ).resolve(
+        floor=GovernorPolicy(),
+        account_id=ACCOUNT_ID,
+        deployment_id=DEPLOYMENT_ID,
+        risk_horizon=TradingHorizon.SWING,
+    )
+    assert policy.max_drawdown_pct == 6.0
+
+
+def test_plan_only_contributes_cooldown_after_loss_minutes():
+    # cooldown_after_loss_minutes is RiskPlan-only (AccountRiskConfig has no
+    # such field). Plan-only contribution must work.
+    plan = _plan_config(cooldown_after_loss_minutes=30)
+    policy = _resolver(plan_lookup=lambda _aid, _h: plan).resolve(
+        floor=GovernorPolicy(),
+        account_id=ACCOUNT_ID,
+        deployment_id=DEPLOYMENT_ID,
+        risk_horizon=TradingHorizon.INTRADAY,
+    )
+    assert policy.cooldown_after_loss_minutes == 30
+
+
+def test_floor_min_combines_with_per_eval_daily_loss():
+    floor = GovernorPolicy(max_daily_loss_pct=1.0)
+    account = _account_config(max_daily_loss_pct=4.0)
+    plan = _plan_config(max_daily_loss_pct=3.0)
+    policy = _resolver(
+        account_lookup=lambda _aid: account,
+        plan_lookup=lambda _aid, _h: plan,
+    ).resolve(
+        floor=floor,
+        account_id=ACCOUNT_ID,
+        deployment_id=DEPLOYMENT_ID,
+        risk_horizon=TradingHorizon.SCALPING,
+    )
+    assert policy.max_daily_loss_pct == 1.0  # floor is tightest
+
+
+def test_floor_cooldown_passes_through_when_no_plan():
+    floor = GovernorPolicy(cooldown_after_loss_minutes=15)
+    policy = _resolver().resolve(
+        floor=floor,
+        account_id=ACCOUNT_ID,
+        deployment_id=DEPLOYMENT_ID,
+        risk_horizon=TradingHorizon.INTRADAY,
+    )
+    assert policy.cooldown_after_loss_minutes == 15
+
+
+def test_floor_cooldown_min_with_plan():
+    floor = GovernorPolicy(cooldown_after_loss_minutes=60)
+    plan = _plan_config(cooldown_after_loss_minutes=20)
+    policy = _resolver(plan_lookup=lambda _aid, _h: plan).resolve(
+        floor=floor,
+        account_id=ACCOUNT_ID,
+        deployment_id=DEPLOYMENT_ID,
+        risk_horizon=TradingHorizon.SWING,
+    )
+    assert policy.cooldown_after_loss_minutes == 20  # plan tighter than floor
+
+
+def test_daily_state_fields_default_none_when_no_source_sets_them():
+    policy = _resolver().resolve(
+        floor=GovernorPolicy(),
+        account_id=ACCOUNT_ID,
+        deployment_id=DEPLOYMENT_ID,
+        risk_horizon=TradingHorizon.INTRADAY,
+    )
+    assert policy.max_daily_loss_pct is None
+    assert policy.max_drawdown_pct is None
+    assert policy.cooldown_after_loss_minutes is None
+
+
 def test_requires_risk_plan_not_set_on_floor_when_floor_has_no_plan():
     """Floor policy's requires_risk_plan is not inherited to the resolved policy."""
     floor = GovernorPolicy(requires_risk_plan=False)
@@ -525,3 +672,15 @@ def test_requires_risk_plan_not_set_on_floor_when_floor_has_no_plan():
         enforce_plan_required=True,
     )
     assert policy.requires_risk_plan is False
+
+
+def test_account_field_rejects_unknown_mapping_name() -> None:
+    account = _account_config(max_open_positions=3)
+    with pytest.raises(ValueError, match="unsupported account field mapping"):
+        policy_resolver_module._account_field(account, "max_open_postions")  # intentional typo
+
+
+def test_plan_field_rejects_unknown_mapping_name() -> None:
+    plan = _plan_config(max_open_positions=2)
+    with pytest.raises(ValueError, match="unsupported plan field mapping"):
+        policy_resolver_module._plan_field(plan, "max_symbol_concentrtion_pct")  # intentional typo
