@@ -71,6 +71,43 @@ def _default_expression_loader(text: str, blob: bytes | None) -> CompiledExpr:
     return load_compiled(text, blob)
 
 
+def _strategy_scoped_loader(
+    base_loader: "ExpressionLoader",
+    strategy: "StrategyVersionV4",
+) -> "ExpressionLoader":
+    """Wrap *base_loader* so the text-fallback path knows the strategy's variables.
+
+    The domain model does not carry compiled bytes today, so every call into
+    ``load_compiled`` re-parses text. The re-parse needs the strategy's
+    variable names, otherwise ``var_ref`` references like ``bull_bar`` raise
+    ``ValidationError: Unknown identifier``. Without this scoping, a
+    perfectly-saved strategy that uses a variable cannot fire a signal at
+    runtime.
+
+    When a base_loader was injected (tests passing a stub) we honor it as-is
+    only when the text contains no variable refs — we cannot retroactively
+    teach an arbitrary loader about variables. For the production
+    ``_default_expression_loader`` path, we route through ``load_compiled``
+    directly with the variable-name kwargs.
+    """
+    expr_var_names = tuple(v.name for v in strategy.variables if v.kind == "expression")
+    tf_var_names = tuple(v.name for v in strategy.variables if v.kind == "timeframe")
+
+    if base_loader is _default_expression_loader:
+        def _scoped(text: str, blob: bytes | None) -> CompiledExpr:
+            return load_compiled(
+                text,
+                blob,
+                expression_variable_names=expr_var_names,
+                timeframe_variable_names=tf_var_names,
+            )
+        return _scoped
+
+    # Test-injected loader: pass through. Test stubs typically build CompiledExpr
+    # by hand and don't need variable scoping.
+    return base_loader
+
+
 # ---------------------------------------------------------------------------
 # Bridge: runtime FeatureSnapshot → expression engine FeatureSnapshot
 # ---------------------------------------------------------------------------
@@ -353,13 +390,19 @@ def build_signal_plan_from_v4(
     if entry is None:
         return None
 
+    # Wrap the loader so the text-fallback re-parse (used until persisted
+    # compiled bytes are plumbed onto the domain model) knows the strategy's
+    # variable names. Without this, an entry like ``bull_bar`` raises
+    # ValidationError: Unknown identifier.
+    scoped_loader = _strategy_scoped_loader(expression_loader, strategy)
+
     # Build a base expression snapshot with no variables yet so variable
     # resolution can start accumulating.
     base_expr_snap = _build_expr_snapshot(snapshot, timestamp=timestamp, variables={})
 
     # Resolve variables in topological order.
     try:
-        resolved_vars = _resolve_variables(strategy, base_expr_snap, expression_loader)
+        resolved_vars = _resolve_variables(strategy, base_expr_snap, scoped_loader)
     except EvalError:
         return None
 
@@ -373,7 +416,7 @@ def build_signal_plan_from_v4(
 
     # Evaluate the entry expression.
     try:
-        compiled_entry = expression_loader(entry.expression_text, None)
+        compiled_entry = scoped_loader(entry.expression_text, None)
         entry_result = engine_evaluate(compiled_entry, full_expr_snap)
     except EvalError:
         return None
@@ -389,7 +432,7 @@ def build_signal_plan_from_v4(
         stop = _build_stop_from_v4(
             strategy.stops[0],
             expr_snapshot=full_expr_snap,
-            expression_loader=expression_loader,
+            expression_loader=scoped_loader,
         )
 
     # Build targets and runner from legs.

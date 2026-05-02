@@ -18,6 +18,14 @@ from .calendar import (
     regular_session,
 )
 from .frames import FeatureAvailability, FeatureFrame, FeatureFrameSet, FeatureSnapshot, FeatureValue, NormalizedBar
+from .hydration import (
+    FeatureHydrationBarsRequest,
+    FeatureHydrationBarsSource,
+    FeatureHydrationBlocker,
+    FeatureHydrationRequest,
+    FeatureHydrationResult,
+    FeatureHydrationService,
+)
 from .incremental import (
     FeatureCache,
     IncrementalFeatureEngine,
@@ -32,6 +40,7 @@ from .planner import (
     FeaturePlan,
     FeaturePlanError,
     ResolvedDeploymentComponents,
+    build_feature_refs_plan,
     build_feature_plan,
     build_strategy_only_feature_plan,
     collect_feature_refs,
@@ -67,6 +76,12 @@ __all__ = [
     "FeatureDataRequirement",
     "FeatureFrame",
     "FeatureFrameSet",
+    "FeatureHydrationBarsRequest",
+    "FeatureHydrationBarsSource",
+    "FeatureHydrationBlocker",
+    "FeatureHydrationRequest",
+    "FeatureHydrationResult",
+    "FeatureHydrationService",
     "FeatureNamespace",
     "FeatureParseError",
     "FeaturePlan",
@@ -89,6 +104,7 @@ __all__ = [
     "SubscriptionEntry",
     "SubscriptionManager",
     "UnsupportedBatchFeatureError",
+    "build_feature_refs_plan",
     "build_feature_plan",
     "build_strategy_only_feature_plan",
     "canonical_params_json",

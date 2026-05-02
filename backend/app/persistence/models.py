@@ -219,6 +219,24 @@ CREATE INDEX IF NOT EXISTS ix_research_evidence_type
 CREATE INDEX IF NOT EXISTS ix_research_evidence_created_at
     ON research_evidence(created_at);
 
+CREATE TABLE IF NOT EXISTS research_run_artifacts (
+    artifact_id TEXT PRIMARY KEY,
+    run_id TEXT NOT NULL,
+    run_kind TEXT NOT NULL,
+    strategy_id TEXT NOT NULL,
+    strategy_version_id TEXT NOT NULL,
+    deployment_snapshot_id TEXT NOT NULL,
+    source_deployment_id TEXT,
+    created_at TEXT NOT NULL,
+    payload TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ix_research_run_artifacts_run
+    ON research_run_artifacts(run_id, run_kind);
+CREATE INDEX IF NOT EXISTS ix_research_run_artifacts_strategy
+    ON research_run_artifacts(strategy_id, strategy_version_id);
+CREATE INDEX IF NOT EXISTS ix_research_run_artifacts_snapshot
+    ON research_run_artifacts(deployment_snapshot_id);
+
 CREATE TABLE IF NOT EXISTS risk_decision_cards (
     risk_decision_id TEXT PRIMARY KEY,
     mode TEXT NOT NULL,

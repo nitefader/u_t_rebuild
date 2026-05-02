@@ -227,15 +227,6 @@ def _strategy_v4_feature_refs(strategy: StrategyVersionV4) -> Iterable[str]:
             if stop.mode == "expression" and stop.expression_text:
                 yield from _keys_from_text(stop.expression_text)
 
-    # Simple ATR stops/targets are not expression text, but they still need the
-    # deployment-time ATR feature so post-fill protection can price sell legs.
-    for stop in strategy.stops:
-        if stop.mode == "simple" and stop.simple_type == "ATR":
-            yield "atr:length=14[0]"
-    for leg in strategy.legs:
-        if leg.target_type in {"ATR", "trail-ATR"} or leg.on_fill_action.kind == "tighten_atr":
-            yield "atr:length=14[0]"
-
 
 def collect_feature_refs(components: ResolvedDeploymentComponents) -> list[str]:
     refs: list[str] = []
@@ -304,6 +295,32 @@ def build_strategy_only_feature_plan(
     )
 
 
+def build_feature_refs_plan(
+    *,
+    strategy_version_id: UUID,
+    feature_refs: Iterable[str],
+    symbols: tuple[str, ...],
+    default_timeframe: str,
+    consumer: str = "chart_lab",
+    feature_registry: FeatureRegistry = registry,
+) -> FeaturePlan:
+    """Build a FeaturePlan from explicit feature refs.
+
+    Chart Lab's feature-exploration mode has no StrategyVersion. The caller
+    still passes an opaque UUID so the canonical FeatureEngine can keep using
+    one immutable FeaturePlan shape without adding a second computation path.
+    """
+
+    return _build_plan(
+        strategy_version_id=strategy_version_id,
+        feature_refs=feature_refs,
+        symbols=symbols,
+        default_timeframe=default_timeframe,
+        consumer=consumer,
+        feature_registry=feature_registry,
+    )
+
+
 def _build_plan(
     *,
     strategy_version_id: UUID,
@@ -335,10 +352,13 @@ def _build_plan(
     feature_specs = tuple(specs_by_key[key] for key in feature_keys)
     timeframes = tuple(sorted({spec.timeframe for spec in feature_specs}))
     warmup_by_timeframe: dict[str, int] = {}
+    warmup_by_key: dict[str, int] = {}
     for spec in feature_specs:
+        feature_key = make_feature_key(spec)
+        warmup_by_key[feature_key] = _runtime_warmup_bars(spec, feature_registry)
         warmup_by_timeframe[spec.timeframe] = max(
             warmup_by_timeframe.get(spec.timeframe, 0),
-            feature_registry.warmup_bars(spec),
+            warmup_by_key[feature_key],
         )
 
     data_requirements = tuple(
@@ -347,7 +367,7 @@ def _build_plan(
             spec=feature_specs[index],
             consumer=consumer,
             entry=feature_registry.get(feature_specs[index].kind),
-            warmup_bars=feature_registry.warmup_bars(feature_specs[index]),
+            warmup_bars=warmup_by_key[feature_keys[index]],
         )
         for index in range(len(feature_keys))
     )
@@ -362,6 +382,10 @@ def _build_plan(
         warmup_by_timeframe=warmup_by_timeframe,
         data_requirements=data_requirements,
     )
+
+
+def _runtime_warmup_bars(spec: FeatureSpec, feature_registry: FeatureRegistry) -> int:
+    return max(feature_registry.warmup_bars(spec), 1) + spec.lookback + spec.shift
 
 
 def _build_data_requirement(

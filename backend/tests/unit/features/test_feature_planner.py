@@ -143,7 +143,7 @@ def _v4_components() -> ResolvedDeploymentComponents:
                 on_fill_action=OnFillActionV4(kind="leave"),
             ),
         ),
-        feature_requirements=("1m.close", "1m.open"),
+        feature_requirements=("1m.close", "1m.open", "atr:length=14[0]"),
     )
     return components.model_copy(
         update={
@@ -168,6 +168,17 @@ def test_feature_plan_deduplicates_by_feature_key() -> None:
     assert plan.symbols == ("QQQ", "SPY")
 
 
+def test_feature_plan_serializes_immutable_feature_params_to_json() -> None:
+    components = _components(strategy_feature_refs=["5m.ema:length=20[0]"])
+
+    plan = build_feature_plan(components, consumer="chart_lab")
+
+    payload = plan.model_dump(mode="json")
+    ema_spec = next(spec for spec in payload["feature_specs"] if spec["kind"] == "ema")
+    assert ema_spec["params"] == {"length": 20}
+    assert '"params":{"length":20}' in plan.model_dump_json()
+
+
 def test_feature_plan_defaults_bare_bar_refs_to_strategy_controls_timeframe() -> None:
     components = _components(strategy_feature_refs=["close", "open"])
 
@@ -178,7 +189,7 @@ def test_feature_plan_defaults_bare_bar_refs_to_strategy_controls_timeframe() ->
     assert ("5m", "open") in specs
 
 
-def test_v4_atr_stop_and_target_add_deployment_timeframe_atr_requirement() -> None:
+def test_v4_atr_stop_and_target_use_declared_deployment_timeframe_atr_requirement() -> None:
     plan = build_feature_plan(_v4_components(), consumer="runtime")
 
     specs = {(spec.timeframe, spec.kind) for spec in plan.feature_specs}

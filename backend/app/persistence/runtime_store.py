@@ -36,6 +36,7 @@ from backend.app.domain import (
     OptimizationRun,
     PromotionEvidenceBundle,
     ResearchJob,
+    ResearchRunArtifact,
     RiskDecisionCard,
     RiskPlan,
     RiskPlanVersion,
@@ -1350,6 +1351,59 @@ class SQLiteRuntimeStore:
             )
         return evidence
 
+    def save_research_run_artifact(self, artifact: ResearchRunArtifact) -> ResearchRunArtifact:
+        snapshot = artifact.deployment_snapshot
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO research_run_artifacts
+                    (
+                        artifact_id, run_id, run_kind, strategy_id, strategy_version_id,
+                        deployment_snapshot_id, source_deployment_id, created_at, payload
+                    )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(artifact_id) DO UPDATE SET
+                    run_id = excluded.run_id,
+                    run_kind = excluded.run_kind,
+                    strategy_id = excluded.strategy_id,
+                    strategy_version_id = excluded.strategy_version_id,
+                    deployment_snapshot_id = excluded.deployment_snapshot_id,
+                    source_deployment_id = excluded.source_deployment_id,
+                    created_at = excluded.created_at,
+                    payload = excluded.payload
+                """,
+                (
+                    str(artifact.artifact_id),
+                    str(artifact.run_id),
+                    artifact.run_kind.value,
+                    str(artifact.strategy_id),
+                    str(artifact.strategy_version_id),
+                    str(snapshot.snapshot_id),
+                    str(snapshot.source_deployment_id) if snapshot.source_deployment_id else None,
+                    artifact.created_at.isoformat(),
+                    _dump_model(artifact),
+                ),
+            )
+        return artifact
+
+    def load_research_run_artifact(self, artifact_id: UUID) -> ResearchRunArtifact:
+        row = self._fetch_one(
+            "SELECT payload FROM research_run_artifacts WHERE artifact_id = ?",
+            (str(artifact_id),),
+        )
+        if row is None:
+            raise KeyError(f"unknown research run artifact: {artifact_id}")
+        return _load_model_strict(ResearchRunArtifact, row["payload"])
+
+    def load_research_run_artifact_for_run(self, run_id: UUID) -> ResearchRunArtifact:
+        row = self._fetch_one(
+            "SELECT payload FROM research_run_artifacts WHERE run_id = ? ORDER BY created_at DESC LIMIT 1",
+            (str(run_id),),
+        )
+        if row is None:
+            raise KeyError(f"unknown research run artifact for run: {run_id}")
+        return _load_model_strict(ResearchRunArtifact, row["payload"])
+
     def load_research_evidence(self, evidence_id: UUID) -> ResearchEvidence:
         row = self._fetch_one(
             "SELECT evidence_type, payload FROM research_evidence WHERE evidence_id = ?",
@@ -2171,6 +2225,10 @@ def _load_model(model_type: type[ModelT], payload: str) -> ModelT:
         raise
 
 
+def _load_model_strict(model_type: type[ModelT], payload: str) -> ModelT:
+    return model_type.model_validate_json(payload)
+
+
 def _research_evidence_id(evidence: ResearchEvidence) -> UUID:
     for field_name in ("evidence_id", "run_id", "bundle_id"):
         value = getattr(evidence, field_name, None)
@@ -2191,4 +2249,4 @@ def _load_research_evidence_row(row: sqlite3.Row) -> ResearchEvidence:
     model_type = _RESEARCH_EVIDENCE_TYPES.get(evidence_type)
     if model_type is None:
         raise KeyError(f"unsupported research evidence type: {evidence_type}")
-    return _load_model(model_type, row["payload"])  # type: ignore[return-value]
+    return _load_model_strict(model_type, row["payload"])  # type: ignore[return-value]
