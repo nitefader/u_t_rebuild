@@ -131,7 +131,15 @@ def test_router_routes_position_and_account_updates() -> None:
     router.route(position)
     router.route(snapshot)
 
-    assert service.latest_positions(ACCOUNT_ID) == (position,)
+    # M2 (HARD.MD P0-2): a router-routed position with no matching
+    # SignalPlan lineage is classified as unmanaged before reaching the
+    # service's persisted view. The non-classification fields round-trip
+    # unchanged.
+    assert service.latest_positions(ACCOUNT_ID) == (
+        position.model_copy(
+            update={"unmanaged_broker_position": True, "adoption_status": "unmanaged"}
+        ),
+    )
     assert service.latest_account_snapshot(ACCOUNT_ID) is snapshot
 
 

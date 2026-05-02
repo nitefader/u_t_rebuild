@@ -8,6 +8,7 @@ from .models import (
     PendingOpenSummary,
     PortfolioSnapshot,
     PositionSummary,
+    UnmanagedPositionSummary,
 )
 from .policy_resolver import (
     GovernorPolicyInputsLookup,
@@ -26,4 +27,5 @@ __all__ = [
     "PortfolioGovernor",
     "PortfolioSnapshot",
     "PositionSummary",
+    "UnmanagedPositionSummary",
 ]

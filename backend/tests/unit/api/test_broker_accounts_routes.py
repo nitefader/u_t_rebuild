@@ -89,6 +89,21 @@ class RecordingBrokerAccountService:
             validation_status=BrokerAccountValidationStatus.VALID,
         )
 
+    def set_guardian_deployment(
+        self, *, account_id: UUID, guardian_deployment_id: UUID | None
+    ) -> BrokerAccount:
+        self.calls.append(("guardian", account_id, guardian_deployment_id))
+        return BrokerAccount(
+            id=account_id,
+            display_name="acct",
+            provider="alpaca",
+            mode=TradingMode.BROKER_PAPER,
+            external_account_id="ext-1",
+            credentials_ref="alpaca-broker_paper:ref",
+            validation_status=BrokerAccountValidationStatus.VALID,
+            guardian_deployment_id=guardian_deployment_id,
+        )
+
 
 class RuntimeStoreBackedService:
     def __init__(self, store: SQLiteRuntimeStore) -> None:
@@ -106,9 +121,36 @@ def test_broker_account_routes_registered_with_unified_paths() -> None:
     assert registered[("PUT", "/api/v1/broker-accounts/{account_id}/risk-config")] is AccountRiskConfig
     assert registered[("GET", "/api/v1/broker-accounts/{account_id}/restrictions")] is AccountRestrictions
     assert registered[("PUT", "/api/v1/broker-accounts/{account_id}/restrictions")] is AccountRestrictions
+    # M11 Guardian Assignment route.
+    assert registered[("PUT", "/api/v1/broker-accounts/{account_id}/guardian")] is broker_accounts.BrokerAccountResponse
     # Paper-specific URLs must not exist.
     assert ("POST", "/api/v1/broker-accounts/alpaca-paper") not in registered
     assert ("PUT", "/api/v1/broker-accounts/{account_id}/alpaca-paper/credentials") not in registered
+
+
+def test_put_guardian_route_delegates_with_id() -> None:
+    from uuid import uuid4
+
+    service = RecordingBrokerAccountService()
+    deployment_id = uuid4()
+    request = broker_accounts.SetAccountGuardianRequest(
+        guardian_deployment_id=deployment_id,
+    )
+
+    response = broker_accounts.put_account_guardian(ACCOUNT_ID, request, service=service)
+
+    assert response.account.guardian_deployment_id == deployment_id
+    assert service.calls[-1] == ("guardian", ACCOUNT_ID, deployment_id)
+
+
+def test_put_guardian_route_clears_when_passed_null() -> None:
+    service = RecordingBrokerAccountService()
+    request = broker_accounts.SetAccountGuardianRequest(guardian_deployment_id=None)
+
+    response = broker_accounts.put_account_guardian(ACCOUNT_ID, request, service=service)
+
+    assert response.account.guardian_deployment_id is None
+    assert service.calls[-1] == ("guardian", ACCOUNT_ID, None)
 
 
 @pytest.mark.parametrize("mode", [TradingMode.BROKER_PAPER, TradingMode.BROKER_LIVE])
@@ -515,3 +557,77 @@ def test_put_risk_plan_map_rejects_unknown_risk_plan_version_id(tmp_path) -> Non
     # And no row was written.
     result = broker_accounts.get_account_risk_plan_map(ACCOUNT_ID, service=service)
     assert result.entries == ()
+
+
+# ---------------------------------------------------------------------------
+# M9 Refresh Sync route tests
+# ---------------------------------------------------------------------------
+
+
+def test_refresh_sync_route_is_registered() -> None:
+    """M9: POST /api/v1/broker-accounts/{account_id}/refresh-sync is registered."""
+    registered = {(route.method, route.path) for route in broker_accounts.router.routes}
+    assert ("POST", "/api/v1/broker-accounts/{account_id}/refresh-sync") in registered
+
+
+def test_refresh_sync_route_calls_reconcile_returns_sync_state(monkeypatch) -> None:
+    """M9: refresh_sync calls BrokerSyncService.reconcile and returns BrokerSyncState."""
+    from datetime import datetime, timezone
+    from backend.app.brokers.models import BrokerReconciliationReport, BrokerSyncState
+
+    account_id = ACCOUNT_ID
+    now = datetime.now(timezone.utc)
+    expected_sync_state = BrokerSyncState(
+        account_id=account_id,
+        last_sync_at=now,
+        last_successful_sync_at=now,
+        is_stale=False,
+    )
+    expected_report = BrokerReconciliationReport(
+        account_id=account_id,
+        sync_status=expected_sync_state,
+    )
+
+    reconcile_calls: list[UUID] = []
+
+    class _FakeSyncService:
+        def reconcile(self, aid: UUID) -> BrokerReconciliationReport:
+            reconcile_calls.append(aid)
+            return expected_report
+
+    class _FakeRegistry:
+        def broker_sync_service(self, aid: UUID) -> _FakeSyncService | None:
+            return _FakeSyncService()
+
+    # The route imports `manual_trade_registry` from runtime_context inside
+    # its body, so we patch the source module — that's where the lookup
+    # happens at call time.
+    import backend.app.runtime.runtime_context as _ctx_module
+
+    monkeypatch.setattr(_ctx_module, "manual_trade_registry", lambda: _FakeRegistry())
+
+    service = RecordingBrokerAccountService()
+    result = broker_accounts.refresh_sync(account_id, service=service)
+
+    assert reconcile_calls == [account_id]
+    assert result.account_id == account_id
+    assert result.is_stale is False
+
+
+def test_refresh_sync_route_returns_503_when_service_not_registered(monkeypatch) -> None:
+    """M9: refresh_sync returns 503 when no BrokerSyncService is registered."""
+    import pytest
+    from fastapi import HTTPException
+    import backend.app.runtime.runtime_context as _ctx_module
+
+    class _EmptyRegistry:
+        def broker_sync_service(self, aid: UUID) -> None:
+            return None
+
+    monkeypatch.setattr(_ctx_module, "manual_trade_registry", lambda: _EmptyRegistry())
+
+    service = RecordingBrokerAccountService()
+    with pytest.raises(HTTPException) as exc_info:
+        broker_accounts.refresh_sync(ACCOUNT_ID, service=service)
+
+    assert exc_info.value.status_code == 503

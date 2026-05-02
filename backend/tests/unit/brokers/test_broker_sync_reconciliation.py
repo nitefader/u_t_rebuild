@@ -268,7 +268,21 @@ def test_reconcile_persists_current_open_broker_order_snapshots_for_operations_v
     ).reconcile(ACCOUNT_ID)
 
     assert store.open_order_replacements == [(ACCOUNT_ID, (snapshot,))]
-    assert store.position_replacements == [(ACCOUNT_ID, (position,))]
+    # M2 (HARD.MD P0-2): unmatched lineage → position is classified as
+    # unmanaged before persistence so Governor concentration sees it.
+    assert store.position_replacements == [
+        (
+            ACCOUNT_ID,
+            (
+                position.model_copy(
+                    update={
+                        "unmanaged_broker_position": True,
+                        "adoption_status": "unmanaged",
+                    }
+                ),
+            ),
+        )
+    ]
 
 
 def test_reconcile_enriches_position_snapshot_with_signal_plan_lineage() -> None:
@@ -386,7 +400,14 @@ def test_stream_position_update_persists_position_snapshot_for_operations_visibi
 
     service.handle_position_update(position)
 
-    assert store.position_saves == [position]
+    # M2: stream-emitted position with no lineage gets the unmanaged
+    # classification before persistence so the saved snapshot already
+    # carries the operator-visible flag.
+    assert store.position_saves == [
+        position.model_copy(
+            update={"unmanaged_broker_position": True, "adoption_status": "unmanaged"}
+        )
+    ]
 
 
 def test_missing_broker_order_flagged() -> None:
@@ -803,7 +824,18 @@ def test_streaming_position_update_updates_snapshot() -> None:
 
     service.handle_position_update(position)
 
-    assert service.latest_positions(ACCOUNT_ID) == (position,)
+    # M2 (HARD.MD P0-2): a stream-emitted position with no SignalPlan
+    # lineage is classified as `unmanaged_broker_position=True` /
+    # `adoption_status="unmanaged"` by `_enrich_position_snapshot_with_lineage`
+    # so Governor concentration sees the exposure and the operator UI
+    # surfaces the Unmanaged badge. The classification is the only
+    # delta from the input; everything else round-trips.
+    persisted = service.latest_positions(ACCOUNT_ID)
+    assert persisted == (
+        position.model_copy(
+            update={"unmanaged_broker_position": True, "adoption_status": "unmanaged"}
+        ),
+    )
 
 
 def test_streaming_account_update_updates_buying_power() -> None:

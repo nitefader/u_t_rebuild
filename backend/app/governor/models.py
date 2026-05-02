@@ -54,6 +54,23 @@ class PositionSummary(BaseModel):
     open_risk: float = Field(default=0, ge=0)
 
 
+class UnmanagedPositionSummary(BaseModel):
+    """M2 (HARD.MD P0-2) — broker-only position the Governor must still see.
+
+    Manual or unknown-origin positions don't have a SignalPlan lineage,
+    so they cannot be expressed as ``PositionSummary`` (which requires
+    ``deployment_id``). The Governor's per-Account concentration gates
+    must still account for them or they silently bypass the cap.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    account_id: UUID
+    symbol: str
+    quantity: float
+    market_value: float = 0
+
+
 class PendingOpenSummary(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -70,33 +87,61 @@ class PortfolioSnapshot(BaseModel):
 
     equity: float | None = Field(default=None, gt=0)
     positions: tuple[PositionSummary, ...] = ()
+    # M2 — unmanaged broker positions classified by BrokerSync. Included in
+    # concentration / gross / net evaluations alongside managed positions
+    # so silent broker-side exposure cannot bypass per-Account caps.
+    unmanaged_positions: tuple[UnmanagedPositionSummary, ...] = ()
     pending_opens: tuple[PendingOpenSummary, ...] = ()
 
     def open_position_count(self) -> int:
-        return sum(1 for position in self.positions if position.quantity != 0)
+        managed = sum(1 for position in self.positions if position.quantity != 0)
+        unmanaged = sum(1 for position in self.unmanaged_positions if position.quantity != 0)
+        return managed + unmanaged
 
     def symbol_market_value(self, symbol: str) -> float:
         normalized_symbol = symbol.upper()
-        return sum(abs(position.market_value) for position in self.positions if position.symbol.upper() == normalized_symbol)
+        managed = sum(
+            abs(position.market_value)
+            for position in self.positions
+            if position.symbol.upper() == normalized_symbol
+        )
+        unmanaged = sum(
+            abs(position.market_value)
+            for position in self.unmanaged_positions
+            if position.symbol.upper() == normalized_symbol
+        )
+        return managed + unmanaged
 
     def pending_symbol_market_value(self, symbol: str) -> float:
         normalized_symbol = symbol.upper()
         return sum(open_order.market_value for open_order in self.pending_opens if open_order.symbol.upper() == normalized_symbol)
 
     def gross_market_value(self) -> float:
-        return sum(abs(position.market_value) for position in self.positions)
+        managed = sum(abs(position.market_value) for position in self.positions)
+        unmanaged = sum(abs(position.market_value) for position in self.unmanaged_positions)
+        return managed + unmanaged
 
     def net_market_value(self) -> float:
-        return sum(position.market_value for position in self.positions)
+        managed = sum(position.market_value for position in self.positions)
+        unmanaged = sum(position.market_value for position in self.unmanaged_positions)
+        return managed + unmanaged
 
     def pending_market_value(self) -> float:
         return sum(open_order.market_value for open_order in self.pending_opens)
 
     def open_risk(self) -> float:
+        # Unmanaged positions don't carry open_risk — they predate any
+        # SignalPlan and have no risk-resolver lineage.
         return sum(position.open_risk for position in self.positions)
 
     def pending_open_risk(self) -> float:
         return sum(open_order.open_risk for open_order in self.pending_opens)
+
+    def unmanaged_position_count(self) -> int:
+        return sum(1 for position in self.unmanaged_positions if position.quantity != 0)
+
+    def unmanaged_gross_market_value(self) -> float:
+        return sum(abs(position.market_value) for position in self.unmanaged_positions)
 
 
 class GovernorRequest(BaseModel):

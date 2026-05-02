@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import StrEnum
+from typing import Literal
 from uuid import UUID
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
@@ -164,6 +165,10 @@ class BrokerAccountSnapshot(BaseModel):
         return self
 
 
+_AdoptionStatus = Literal["managed", "unmanaged", "adopted_by_guardian"]
+_AdoptionReason = Literal["owner_unknown", "owner_deployment_down_unprotected"]
+
+
 class BrokerPositionSnapshot(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid", populate_by_name=True)
 
@@ -178,6 +183,27 @@ class BrokerPositionSnapshot(BaseModel):
     strategy_id: UUID | None = None
     opening_signal_plan_id: UUID | None = None
     position_lineage_id: UUID | None = None
+    # M2 (HARD.MD P0-2) — true when the position has no matched lineage AND
+    # no Guardian adopted it. Surfaced to the operator as an "Unmanaged"
+    # badge and included in Governor concentration evaluation so silent
+    # broker-side positions cannot bypass per-Account caps.
+    unmanaged_broker_position: bool = False
+    # M11 Guardian Assignment — adoption lineage. All None on a normal
+    # managed position; populated by ``BrokerSync._enrich_position_snapshot_with_lineage``
+    # when the Account's Guardian Deployment adopts an orphan or
+    # owner-down-unprotected position. One-way: never auto-cleared.
+    adoption_status: _AdoptionStatus | None = None
+    adoption_reason: _AdoptionReason | None = None
+    original_owner_deployment_id: UUID | None = None
+    original_owner_deployment_name: str | None = None
+    deployment_name: str | None = None
+    # M11 FR11.4 case 4 — set when the position has a matched lineage but
+    # the owner Deployment is not healthy. ``owner_self_protected=True``
+    # means the broker has stop/stop-limit/trailing-stop orders open that
+    # cover the full position quantity in the closing direction; in that
+    # case Guardian intentionally does NOT adopt (operator pause case).
+    owner_deployment_healthy: bool | None = None
+    owner_self_protected: bool | None = None
     status: str | None = None
     timestamp: datetime = Field(default_factory=utc_now, validation_alias=AliasChoices("timestamp", "last_synced_at"))
 
@@ -329,3 +355,26 @@ class BrokerReconciliationReport(BaseModel):
         if self.sync_status is not None:
             return self.sync_status.is_stale
         return any(issue.issue_type == BrokerReconciliationIssueType.STALE_SYNC for issue in self.issues)
+
+
+class BrokerErrorEvent(BaseModel):
+    """Structured broker error event per Playbook §17 error taxonomy.
+
+    Every broker error that crosses a subsystem boundary (preflight rejection,
+    order submission failure, stream disruption, reconciliation mismatch,
+    credentials problem) is emitted as a ``BrokerErrorEvent``.  The fields map
+    directly to the §17 schema so the Operations API can surface them with
+    operator-readable next steps rather than raw exceptions.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    family: Literal["preflight", "submit", "stream", "reconcile", "credentials"]
+    severity: Literal["info", "warning", "error", "critical"]
+    source: str  # e.g. "alpaca_adapter" / "broker_sync" / "order_manager"
+    operator_advisory: str  # human-readable next step for the operator
+    raw_broker_code: str | None = None
+    raw_broker_message: str | None = None
+    account_id: UUID | None = None
+    symbol: str | None = None
+    occurred_at: datetime = Field(default_factory=utc_now)

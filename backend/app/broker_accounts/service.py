@@ -207,6 +207,54 @@ class BrokerAccountService:
             raise BrokerAccountCreationError("display_name cannot be empty")
         return self._runtime_store.save_broker_account(account.model_copy(update={"display_name": new_name}))
 
+    def set_guardian_deployment(
+        self,
+        *,
+        account_id: UUID,
+        guardian_deployment_id: UUID | None,
+    ) -> BrokerAccount:
+        """Assign or clear an Account's Guardian Deployment (M11).
+
+        Pre-authorizes one Deployment to adopt orphaned positions or
+        positions whose owner Deployment is unhealthy AND unprotected.
+        Adoption is one-way; clearing the Guardian does NOT release any
+        positions already adopted (their lineage tags
+        ``adopted_by_guardian`` until the operator explicitly transfers
+        them back via Operations).
+        """
+        try:
+            account = self._runtime_store.load_broker_account(account_id)
+        except KeyError as exc:
+            raise BrokerAccountCreationError("unknown broker account") from exc
+        if guardian_deployment_id is not None and guardian_deployment_id == account.id:
+            # Defensive — operator typed the Account id by mistake.
+            raise BrokerAccountCreationError(
+                "guardian_deployment_id must be a Deployment id, not an Account id"
+            )
+        return self._runtime_store.save_broker_account(
+            account.model_copy(update={"guardian_deployment_id": guardian_deployment_id})
+        )
+
+    def set_allow_live(
+        self,
+        *,
+        account_id: UUID,
+        allow_live: bool,
+    ) -> BrokerAccount:
+        """Toggle the per-Account live-trading allow flag (M10).
+
+        Combined with the env ``TRADING_LIVE_ENABLED=true`` gate at
+        ``AlpacaBrokerCapabilities`` init time. Both must be true before
+        a live broker adapter can construct.
+        """
+        try:
+            account = self._runtime_store.load_broker_account(account_id)
+        except KeyError as exc:
+            raise BrokerAccountCreationError("unknown broker account") from exc
+        return self._runtime_store.save_broker_account(
+            account.model_copy(update={"allow_live": bool(allow_live)})
+        )
+
     # ------------------------------------------------------------------
     # Replace credentials
     # ------------------------------------------------------------------

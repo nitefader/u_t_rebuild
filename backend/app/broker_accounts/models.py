@@ -56,6 +56,16 @@ class BrokerAccount(BaseModel):
     validation_status: BrokerAccountValidationStatus
     last_account_snapshot: BrokerAccountSnapshot | None = None
     broker_sync_freshness: BrokerSyncState | None = None
+    # M11 Guardian Assignment — Account-scoped pointer to one Deployment
+    # that is pre-authorized to adopt orphaned positions or positions whose
+    # owner Deployment is unhealthy AND unprotected. Account-level, NOT
+    # Deployment-level: the same Deployment can be Guardian on Account B
+    # while being a regular Deployment on Account A. Loose-coupled (no FK).
+    guardian_deployment_id: UUID | None = None
+    # M10 live-mode init guard — operator-set per-Account opt-in. Combined
+    # with the env var TRADING_LIVE_ENABLED gate at AlpacaBrokerCapabilities
+    # init time. Default False = paper-only safe.
+    allow_live: bool = False
     created_at: datetime = Field(default_factory=utc_now)
     is_archived: bool = False
     archived_at: datetime | None = None
@@ -123,6 +133,35 @@ class DeleteBrokerAccountRequest(BaseModel):
 
     confirm_display_name: str = Field(min_length=1)
     confirm_mode: TradingMode
+
+
+class SetAccountGuardianRequest(BaseModel):
+    """Assign or clear an Account's Guardian Deployment (M11).
+
+    Pass `guardian_deployment_id=null` to clear; pass a Deployment id to
+    assign. Adoption is one-way per the operator decision (plan file
+    `strategy-builder-must-only-abundant-allen.md` Q-Recovery): once a
+    position is adopted by Guardian, it stays with Guardian until the
+    operator explicitly transfers ownership back. There is no
+    auto-revert when the original owner returns to healthy.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    guardian_deployment_id: UUID | None = None
+
+
+class SetAccountAllowLiveRequest(BaseModel):
+    """Toggle the per-Account live-trading allow flag (M10).
+
+    Combined with the env ``TRADING_LIVE_ENABLED=true`` gate at
+    ``AlpacaBrokerAdapter`` init time. Both must be true before a live
+    broker adapter can construct.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    allow_live: bool = False
 
 
 class BrokerAccountDeletionResponse(BaseModel):

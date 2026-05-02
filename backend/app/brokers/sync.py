@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import threading
+from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
@@ -19,6 +20,7 @@ from .adapter import BrokerAdapter
 from .models import (
     BrokerAccountSnapshot,
     BrokerAdapterError,
+    BrokerErrorEvent,
     BrokerFillUpdateEvent,
     BrokerOpenOrderSnapshot,
     BrokerOrderMapping,
@@ -57,15 +59,37 @@ class BrokerSync:
         runtime_store: object | None = None,
         mapping_store: object | None = None,
         provider: str = "broker",
+        guardian_context_provider: "Callable[[UUID, BrokerPositionSnapshot], dict | None] | None" = None,
     ) -> None:
         self._ledger = ledger
         self._adapter = adapter
         self._runtime_store = runtime_store
         self._mapping_store = mapping_store
         self._provider = provider
+        # M11 Guardian Assignment — optional callable that returns the
+        # adoption kwargs for `apply_guardian_adoption` given (account_id,
+        # post-lineage-enrichment-snapshot). When None (back-compat), no
+        # Guardian behavior fires; production wires it via the runtime
+        # composition root once the deployment registry + runtime state
+        # store are available. Returning None from the provider also
+        # skips Guardian adoption (e.g. account has no Guardian).
+        self._guardian_context_provider = guardian_context_provider
 
     def apply_result(self, result: BrokerOrderResult) -> InternalOrder:
         order = self._ledger.get(result.order_id)
+        # M10 client_order_id audit: structured log every mapping so the
+        # internal_order_id → client_order_id → broker_order_id chain is
+        # traceable in the log stream without parsing raw exceptions.
+        _LOG.info(
+            "broker_sync_apply_result",
+            extra={
+                "internal_order_id": str(result.order_id),
+                "client_order_id": result.client_order_id,
+                "broker_order_id": result.broker_order_id,
+                "broker_status": result.status.value,
+                "provider": self._provider,
+            },
+        )
         if order.client_order_id != result.client_order_id:
             raise OrderManagerError("broker result client_order_id does not match internal order")
         status = self._map_status(result.status)
@@ -165,9 +189,37 @@ class BrokerSync:
             self._require_adapter().get_positions(account_id),
             self._ledger,
         )
+        # M11 Guardian Assignment — apply adoption pathway after lineage
+        # enrichment so the operator sees Guardian state in persisted truth.
+        positions = tuple(self._apply_guardian_to_position(account_id, p) for p in positions)
         for position in positions:
             self.record_position_snapshot(position)
         return positions
+
+    def _apply_guardian_to_position(
+        self,
+        account_id: UUID,
+        position: BrokerPositionSnapshot,
+    ) -> BrokerPositionSnapshot:
+        """Apply M11 Guardian adoption to a lineage-enriched snapshot.
+
+        Returns the snapshot unchanged when no Guardian context provider is
+        wired (back-compat) or the provider returns None for this account
+        (no Guardian assigned).
+        """
+        if self._guardian_context_provider is None:
+            return position
+        try:
+            ctx = self._guardian_context_provider(account_id, position)
+        except Exception as exc:  # noqa: BLE001 - fail-closed: skip Guardian on lookup error
+            _LOG.warning(
+                "guardian_context_lookup_failed",
+                extra={"account_id": str(account_id), "error": str(exc)},
+            )
+            return position
+        if ctx is None:
+            return position
+        return apply_guardian_adoption(position, **ctx)
 
     def sync_account(self, account_id: UUID) -> BrokerAccountSnapshot:
         snapshot = self._require_adapter().get_account_snapshot(account_id)
@@ -261,6 +313,9 @@ class BrokerSync:
             snapshot,
             self._ledger.by_account(snapshot.account_id),
         )
+        # M11 Guardian — apply adoption pathway on every persisted snapshot
+        # so stream-driven updates also surface Guardian state.
+        snapshot = self._apply_guardian_to_position(snapshot.account_id, snapshot)
         if self._runtime_store is not None and hasattr(self._runtime_store, "save_broker_position_snapshot"):
             self._runtime_store.save_broker_position_snapshot(snapshot)
         return snapshot
@@ -587,6 +642,67 @@ class BrokerSyncService:
             self._stale_reason_by_account[account_id] = "stream_disconnect_poll_failed"
             return None
 
+    def reconcile_open_orders(self, account_id: UUID) -> tuple[BrokerOpenOrderSnapshot, ...]:
+        """Refresh only open orders from the broker.
+
+        This is the cadence-scheduler entry point for the orders track
+        (faster cadence: 30s healthy / 5s degraded).  It does NOT touch
+        positions or the account snapshot so the two tracks remain
+        independent.
+
+        On success: updates ``last_poll_sync_at`` and
+        ``last_successful_sync_at`` for *account_id* and clears any
+        stale-reason recorded by a previous failure.
+
+        On exception: records ``stale_reason_by_account`` in the form
+        ``"reconcile_failed:<exc>"`` and re-raises so the caller can
+        log + continue the loop without crashing.
+        """
+        checked_at = datetime.now(timezone.utc)
+        try:
+            open_orders = self.fetch_open_orders(account_id)
+            self._persist_open_order_snapshots(account_id, open_orders)
+            self._last_poll_sync_at_by_account[account_id] = checked_at
+            self._last_successful_sync_at_by_account[account_id] = checked_at
+            self._stale_reason_by_account.pop(account_id, None)
+            return open_orders
+        except Exception as exc:
+            self._stale_reason_by_account[account_id] = f"reconcile_failed:{exc}"
+            raise
+
+    def reconcile_positions_and_account(self, account_id: UUID) -> None:
+        """Refresh positions and account snapshot from the broker.
+
+        This is the cadence-scheduler entry point for the positions+account
+        track (slower cadence: 60s healthy).  It does NOT touch open orders
+        so the two tracks remain independent.
+
+        On success: updates ``last_poll_sync_at`` and
+        ``last_successful_sync_at`` and clears any stale-reason from a
+        previous failure.
+
+        On exception: records ``stale_reason_by_account`` in the form
+        ``"reconcile_failed:<exc>"`` and re-raises so the caller can
+        log + continue the loop without crashing.
+        """
+        checked_at = datetime.now(timezone.utc)
+        try:
+            account_snapshot = self.fetch_account_snapshot(account_id)
+            positions = self.fetch_positions(account_id)
+            self._account_snapshots_by_account[account_id] = account_snapshot
+            self._persist_account_snapshot(account_snapshot)
+            positions = _enrich_position_snapshots_with_lineage(account_id, positions, self._order_ledger)
+            self._persist_position_snapshots(account_id, positions)
+            self._positions_by_account[account_id] = {
+                position.symbol.upper(): position for position in positions
+            }
+            self._last_poll_sync_at_by_account[account_id] = checked_at
+            self._last_successful_sync_at_by_account[account_id] = checked_at
+            self._stale_reason_by_account.pop(account_id, None)
+        except Exception as exc:
+            self._stale_reason_by_account[account_id] = f"reconcile_failed:{exc}"
+            raise
+
     def reconcile(
         self,
         account_id: UUID,
@@ -630,7 +746,7 @@ class BrokerSyncService:
         for order in active_local_orders:
             try:
                 broker_result = self._adapter.get_order(order)
-            except BrokerAdapterError:
+            except BrokerAdapterError as exc:
                 unmatched_internal_orders.append(order.client_order_id)
                 issues.append(
                     BrokerReconciliationIssue(
@@ -641,6 +757,26 @@ class BrokerSyncService:
                         client_order_id=order.client_order_id,
                         message="local internal order was not found at broker",
                     )
+                )
+                # M10 structured error taxonomy: emit BrokerErrorEvent so the
+                # Operations API can surface family/severity/advisory rather than
+                # a raw exception (Playbook §17).
+                _LOG.warning(
+                    "broker_sync_reconcile_error",
+                    extra={
+                        "event": BrokerErrorEvent(
+                            family="reconcile",
+                            severity="warning",
+                            source="broker_sync",
+                            operator_advisory=(
+                                "Internal order not found at broker during reconcile. "
+                                "Check for manual broker cancellations or stale order ledger."
+                            ),
+                            raw_broker_message=str(exc),
+                            account_id=account_id,
+                            symbol=order.symbol,
+                        ).model_dump(mode="json"),
+                    },
                 )
                 continue
 
@@ -895,6 +1031,11 @@ def _enrich_position_snapshot_with_lineage(
         and snapshot.opening_signal_plan_id is not None
         and snapshot.position_lineage_id is not None
     ):
+        # Already fully lineaged. Stamp adoption_status="managed" so the
+        # operator UI can reliably distinguish managed/unmanaged/adopted
+        # without inspecting the FK columns.
+        if snapshot.adoption_status is None:
+            return snapshot.model_copy(update={"adoption_status": "managed"})
         return snapshot
 
     symbol = snapshot.symbol.upper()
@@ -909,7 +1050,13 @@ def _enrich_position_snapshot_with_lineage(
         and order.filled_quantity > 0
     )
     if not matching_orders:
-        return snapshot
+        # M2 (HARD.MD P0-2) — no SignalPlan lineage at all. The position
+        # is broker-only / unknown-origin. Classify as unmanaged so
+        # Governor concentration can still see it and the operator UI
+        # can surface an "Unmanaged" badge. Adoption is explicit and
+        # gated (per Playbook §15) — Guardian (M11) is the policy that
+        # may auto-adopt later, but enrichment alone never adopts.
+        return _mark_unmanaged(snapshot)
 
     net_by_lineage: dict[tuple[UUID, UUID], float] = {}
     for order in matching_orders:
@@ -928,8 +1075,14 @@ def _enrich_position_snapshot_with_lineage(
     if len(candidates) != 1:
         deployment_enriched = _deployment_only_position_snapshot(snapshot, matching_orders)
         if deployment_enriched is not None:
+            # Deployment is known but lineage is ambiguous — still
+            # "managed" by that Deployment, just lineage-less.
+            if deployment_enriched.adoption_status is None:
+                return deployment_enriched.model_copy(update={"adoption_status": "managed"})
             return deployment_enriched
-        return snapshot
+        # No clean lineage match. Mark unmanaged so Governor sees the
+        # exposure and the operator UI flags it.
+        return _mark_unmanaged(snapshot)
 
     deployment_id, position_lineage_id = candidates[0]
     anchor = _lineage_anchor_order(
@@ -939,7 +1092,7 @@ def _enrich_position_snapshot_with_lineage(
         position_lineage_id=position_lineage_id,
     )
     if anchor is None:
-        return snapshot
+        return _mark_unmanaged(snapshot)
 
     return snapshot.model_copy(
         update={
@@ -949,6 +1102,176 @@ def _enrich_position_snapshot_with_lineage(
             or anchor.opening_signal_plan_id
             or anchor.signal_plan_id,
             "position_lineage_id": snapshot.position_lineage_id or position_lineage_id,
+            "adoption_status": "managed",
+            "unmanaged_broker_position": False,
+        }
+    )
+
+
+def _mark_unmanaged(snapshot: BrokerPositionSnapshot) -> BrokerPositionSnapshot:
+    """M2 helper — flag a position as unmanaged when no lineage is matched.
+
+    Idempotent: returns the snapshot unchanged when both flags are
+    already correctly set, so repeated enrichments don't churn the
+    persistence write path.
+    """
+    if (
+        snapshot.unmanaged_broker_position
+        and snapshot.adoption_status == "unmanaged"
+    ):
+        return snapshot
+    return snapshot.model_copy(
+        update={"unmanaged_broker_position": True, "adoption_status": "unmanaged"}
+    )
+
+
+def position_has_active_protective_orders(
+    snapshot: BrokerPositionSnapshot,
+    open_orders: tuple[BrokerOpenOrderSnapshot, ...],
+) -> bool:
+    """M11 FR11.4-PRE — does this position already have broker-side protection?
+
+    Returns True iff there is ≥1 OPEN broker order on the same symbol with
+    side opposite the position and an order_type that protects (stop /
+    stop_limit / trailing_stop), and the cumulative qty across all such
+    orders is ≥ the position's qty (full coverage). Bracket OCO child
+    legs that surface as separate stop orders count.
+
+    Used by Guardian adoption (FR11.4 case 4) to skip auto-adoption when
+    the broker's existing protective orders will wind the position down
+    naturally — operator's pause case.
+
+    Reads only from the open-orders cache; no broker round-trips.
+    """
+    if snapshot.qty == 0:
+        return False
+    symbol = snapshot.symbol.upper()
+    position_is_long = snapshot.qty > 0
+    closing_side = "sell" if position_is_long else "buy"
+    protective_types = {"stop", "stop_limit", "stop-limit", "trailing_stop", "trailing-stop"}
+    coverage = 0.0
+    for order in open_orders:
+        if order.symbol.upper() != symbol:
+            continue
+        if (order.side or "").lower() != closing_side:
+            continue
+        order_type = (order.order_type or "").lower()
+        if order_type not in protective_types:
+            continue
+        # Use remaining qty (qty - filled_qty); falls back to qty when
+        # filled isn't tracked.
+        remaining = max(order.qty - order.filled_qty, 0.0)
+        coverage += remaining
+    return coverage >= abs(snapshot.qty)
+
+
+def apply_guardian_adoption(
+    snapshot: BrokerPositionSnapshot,
+    *,
+    guardian_deployment_id: UUID | None,
+    guardian_deployment_name: str | None,
+    is_guardian_healthy: bool,
+    is_owner_healthy: bool | None,
+    open_orders: tuple[BrokerOpenOrderSnapshot, ...],
+) -> BrokerPositionSnapshot:
+    """M11 FR11.4 — Guardian adoption pathway.
+
+    Runs AFTER ``_enrich_position_snapshot_with_lineage``. The four cases
+    from the operator-locked plan:
+
+    1. Healthy owner → no change. (Already stamped ``adoption_status="managed"``.)
+    2. Orphan / unmanaged → if Guardian healthy → adopt with
+       ``reason="owner_unknown"``. Otherwise stay unmanaged.
+    3. Owner unhealthy + position UNPROTECTED + healthy Guardian distinct
+       from owner → adopt with ``reason="owner_deployment_down_unprotected"``.
+       Preserve ``original_owner_deployment_id`` + ``original_owner_deployment_name``.
+    4. Owner unhealthy + position SELF-PROTECTED (existing broker
+       stop/stop-limit/trailing-stop covers full qty) → DO NOT adopt;
+       set ``owner_deployment_healthy=False`` + ``owner_self_protected=True``
+       so the operator UI surfaces "Owner Down (Self-Protected)".
+
+    One-way invariant: a position already in ``adoption_status="adopted_by_guardian"``
+    is never auto-reverted, even if the original owner becomes healthy
+    again. Operator transfers ownership back via Operations.
+
+    All inputs are explicit so this function is pure and trivially testable.
+    The caller (``BrokerSyncService`` or equivalent) resolves the Guardian
+    health + owner health + open orders.
+    """
+    if snapshot.qty == 0:
+        return snapshot
+    # FR11.5 one-way invariant — never re-adopt or revert.
+    if snapshot.adoption_status == "adopted_by_guardian":
+        return snapshot
+
+    # Guardian must exist and be healthy for any adoption to happen.
+    if guardian_deployment_id is None or not is_guardian_healthy:
+        # Still record owner-down state so the operator sees the situation.
+        if (
+            snapshot.position_lineage_id is not None
+            and is_owner_healthy is False
+            and position_has_active_protective_orders(snapshot, open_orders)
+        ):
+            return snapshot.model_copy(
+                update={
+                    "owner_deployment_healthy": False,
+                    "owner_self_protected": True,
+                }
+            )
+        return snapshot
+
+    # Case 2 — Orphan / unmanaged → adopt with owner_unknown.
+    if snapshot.position_lineage_id is None or snapshot.adoption_status == "unmanaged":
+        return snapshot.model_copy(
+            update={
+                "deployment_id": guardian_deployment_id,
+                "deployment_name": guardian_deployment_name,
+                "adoption_status": "adopted_by_guardian",
+                "adoption_reason": "owner_unknown",
+                "original_owner_deployment_id": None,
+                "original_owner_deployment_name": None,
+                "unmanaged_broker_position": False,
+            }
+        )
+
+    # Case 1 — Healthy owner → no change.
+    if is_owner_healthy is True:
+        return snapshot
+
+    # Owner unhealthy at this point.
+    self_protected = position_has_active_protective_orders(snapshot, open_orders)
+    if self_protected:
+        # Case 4 — broker's own protective orders cover the position.
+        # Guardian intentionally does NOT adopt; surface state only.
+        return snapshot.model_copy(
+            update={
+                "owner_deployment_healthy": False,
+                "owner_self_protected": True,
+            }
+        )
+
+    # Case 3 — owner unhealthy + position UNPROTECTED + healthy Guardian
+    # distinct from owner → adopt.
+    if guardian_deployment_id == snapshot.deployment_id:
+        # Guardian is the owner. Don't self-adopt.
+        return snapshot.model_copy(
+            update={
+                "owner_deployment_healthy": False,
+                "owner_self_protected": False,
+            }
+        )
+
+    return snapshot.model_copy(
+        update={
+            "original_owner_deployment_id": snapshot.deployment_id,
+            "original_owner_deployment_name": snapshot.deployment_name,
+            "deployment_id": guardian_deployment_id,
+            "deployment_name": guardian_deployment_name,
+            "adoption_status": "adopted_by_guardian",
+            "adoption_reason": "owner_deployment_down_unprotected",
+            "owner_deployment_healthy": False,
+            "owner_self_protected": False,
+            "unmanaged_broker_position": False,
         }
     )
 

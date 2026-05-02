@@ -27,6 +27,8 @@ from backend.app.broker_accounts.models import (
     CreateBrokerAccountRequest,
     DeleteBrokerAccountRequest,
     ReplaceBrokerAccountCredentialsRequest,
+    SetAccountAllowLiveRequest,
+    SetAccountGuardianRequest,
     UpdateBrokerAccountDetailsRequest,
 )
 from backend.app.broker_accounts.risk_plan_map_models import (
@@ -34,6 +36,7 @@ from backend.app.broker_accounts.risk_plan_map_models import (
     AccountRiskPlanMapUpdateRequest,
 )
 from backend.app.broker_accounts.service import BrokerAccountCreationError
+from backend.app.brokers.models import BrokerSyncState
 from backend.app.domain._base import utc_now
 
 if TYPE_CHECKING:
@@ -173,6 +176,88 @@ def replace_broker_account_credentials(
         _ensure_manual_trade_composition_for_account(service, response.account)
         _ensure_trade_stream_started(service, response.account, restart=True)
     return response
+
+
+@router.put("/{account_id}/guardian", response_model=BrokerAccountResponse)
+def put_account_guardian(
+    account_id: UUID,
+    request: SetAccountGuardianRequest,
+    service: BrokerAccountServiceDependency,
+) -> BrokerAccountResponse:
+    """M11 Guardian Assignment — set or clear the Account's Guardian Deployment.
+
+    Pre-authorizes the chosen Deployment to adopt orphaned positions or
+    positions whose owner Deployment is unhealthy AND unprotected on
+    this Account. Guardian doesn't bypass Governor and only adopts
+    self-protected positions when their owner is unhealthy. Adoption
+    is one-way; this endpoint never auto-revokes adopted lineage —
+    operator transfers ownership back via Operations if desired.
+    """
+    try:
+        account = service.set_guardian_deployment(
+            account_id=account_id,
+            guardian_deployment_id=request.guardian_deployment_id,
+        )
+    except BrokerAccountCreationError as exc:
+        raise _operator_error(str(exc)) from exc
+    return BrokerAccountResponse(account=account, already_exists=False)
+
+
+@router.put("/{account_id}/allow-live", response_model=BrokerAccountResponse)
+def put_account_allow_live(
+    account_id: UUID,
+    request: SetAccountAllowLiveRequest,
+    service: BrokerAccountServiceDependency,
+) -> BrokerAccountResponse:
+    """M10 live-mode per-Account opt-in (HARD.MD P2 tail).
+
+    Combined with the env ``TRADING_LIVE_ENABLED=true`` gate at
+    ``AlpacaBrokerAdapter`` init time. Both must be true before a live
+    broker adapter can construct. Default fail-closed; the operator must
+    explicitly flip both gates before any live order can submit.
+    """
+    try:
+        account = service.set_allow_live(
+            account_id=account_id,
+            allow_live=request.allow_live,
+        )
+    except BrokerAccountCreationError as exc:
+        raise _operator_error(str(exc)) from exc
+    return BrokerAccountResponse(account=account, already_exists=False)
+
+
+@router.post("/{account_id}/refresh-sync", response_model=BrokerSyncState)
+def refresh_sync(
+    account_id: UUID,
+    service: BrokerAccountServiceDependency,
+) -> BrokerSyncState:
+    """M9 Refresh Sync — trigger a full REST reconcile for an Account on demand.
+
+    Calls ``BrokerSyncService.reconcile(account_id)`` for the per-Account
+    service registered in ``manual_trade_registry`` and returns the
+    resulting ``BrokerSyncState``.  The operator uses this when the UI
+    shows stale data after a stream disruption or to confirm recovery.
+    """
+    try:
+        from backend.app.runtime.runtime_context import manual_trade_registry
+        registry = manual_trade_registry()
+        broker_sync_service = registry.broker_sync_service(account_id)
+        if broker_sync_service is None:
+            raise HTTPException(
+                status_code=503,
+                detail=f"broker sync service not available for account {account_id}",
+            )
+        report = broker_sync_service.reconcile(account_id)
+        sync_state = report.sync_status
+        if sync_state is None:
+            # Derive from BrokerSyncService.current_sync_state when reconcile
+            # doesn't attach a state (should not happen in production).
+            sync_state = broker_sync_service.current_sync_state(account_id)
+        return sync_state
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"refresh sync failed: {exc}") from exc
 
 
 @router.post("/{account_id}/delete", response_model=BrokerAccountDeletionResponse)
