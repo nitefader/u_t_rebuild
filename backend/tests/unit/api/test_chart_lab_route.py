@@ -9,6 +9,7 @@ from backend.app.api.routes.chart_lab import (
     ChartLabConfig,
     ChartLabHealthResponse,
     build_market_data_adapter,
+    chart_lab_feature_library,
     chart_lab_health,
     resolve_symbol,
     serialize_bar,
@@ -202,3 +203,17 @@ def test_router_registers_health_endpoint() -> None:
             if path is not None:
                 paths_and_methods.append((path, method))
     assert any(path.endswith("/health") for path, _ in paths_and_methods)
+    assert any(path.endswith("/features") for path, _ in paths_and_methods)
+    assert any(path.endswith("/preview") for path, _ in paths_and_methods)
+
+
+def test_feature_library_returns_manual_feature_engine_descriptors() -> None:
+    response = chart_lab_feature_library(timeframe="5m")
+
+    assert response.timeframe == "5m"
+    assert response.features
+    assert all(feature.origin == "manual" for feature in response.features)
+    assert all(feature.badge == "Manual" for feature in response.features)
+    assert {"Trend", "Momentum", "Volatility", "Volume", "Price"}.intersection(
+        {feature.group for feature in response.features}
+    )

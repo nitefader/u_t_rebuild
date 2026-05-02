@@ -4,7 +4,7 @@ from enum import StrEnum
 from types import MappingProxyType
 from typing import Any, Mapping
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_serializer, field_validator, model_validator
 
 
 class FeatureValidationError(ValueError):
@@ -30,7 +30,11 @@ CANONICAL_TIMEFRAMES = frozenset({"1m", "5m", "15m", "30m", "1h", "4h", "1d", "1
 class FeatureSpec(BaseModel):
     """Immutable canonical request for one feature."""
 
-    model_config = ConfigDict(frozen=True, extra="forbid")
+    model_config = ConfigDict(
+        frozen=True,
+        extra="forbid",
+        json_encoders={MappingProxyType: lambda value: dict(value)},
+    )
 
     kind: str
     namespace: FeatureNamespace
@@ -61,6 +65,10 @@ class FeatureSpec(BaseModel):
     @classmethod
     def freeze_params(cls, value: Mapping[str, Any]) -> Mapping[str, Any]:
         return MappingProxyType(dict(value))
+
+    @field_serializer("params")
+    def serialize_params(self, value: Mapping[str, Any]) -> dict[str, Any]:
+        return dict(value)
 
     @model_validator(mode="after")
     def validate_scope_namespace(self) -> "FeatureSpec":

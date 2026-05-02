@@ -49,6 +49,4 @@ class ChartLabSession(DomainSchema):
             raise ValueError("chart lab start must be before end")
         if self.mode not in CHART_LAB_MODES:
             raise ValueError(f"chart lab session requires CHART_LAB mode, got {self.mode.value}")
-        if self.strategy_version_id is None and self.program_version_id is None:
-            raise ValueError("chart lab session requires strategy_version_id or program_version_id")
         return self

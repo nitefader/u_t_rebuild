@@ -88,6 +88,8 @@ def test_current_frontend_http_api_contract_is_registered() -> None:
         ("POST", "/api/v1/ai/providers/{service_id}/disable"),
         ("POST", "/api/v1/ai/providers/{service_id}/delete"),
         ("GET", "/api/v1/chart-lab/health"),
+        ("GET", "/api/v1/chart-lab/features"),
+        ("POST", "/api/v1/chart-lab/preview"),
         ("GET", "/api/v1/strategies"),
         ("POST", "/api/v1/strategies"),
         ("GET", "/api/v1/strategies/builder/features"),

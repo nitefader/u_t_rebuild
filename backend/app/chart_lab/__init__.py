@@ -2,6 +2,7 @@
 
 from .preview_service import (
     ChartLabBarPreview,
+    ChartLabFeatureDescriptor,
     ChartLabFeatureValue,
     ChartLabPreviewResponse,
     ChartLabPreviewService,
@@ -11,6 +12,7 @@ from .preview_service import (
 
 __all__ = [
     "ChartLabBarPreview",
+    "ChartLabFeatureDescriptor",
     "ChartLabFeatureValue",
     "ChartLabPreviewResponse",
     "ChartLabPreviewService",
