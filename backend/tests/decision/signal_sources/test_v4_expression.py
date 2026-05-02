@@ -9,6 +9,7 @@ import pytest
 from backend.app.decision import signal_plan_builder_v4
 from backend.app.decision.ports import (
     FeatureSnapshot,
+    PositionSignalContext,
     SignalEvaluationContext,
     SignalSourcePort,
 )
@@ -19,11 +20,13 @@ from backend.app.decision.signal_plan_builder_v4 import (
 )
 from backend.app.decision.signal_sources import V4ExpressionSignalSource
 from backend.app.decision.signal_sources import v4_expression
-from backend.app.domain import StrategyVersion
+from backend.app.domain import CandidateSide, CandidateTradeIntent, IntentType, StrategyVersion
 from backend.app.domain.signal_plan import SignalPlan
 from backend.app.domain.strategy_v4 import (
     StrategyEntriesV4,
     StrategyEntryV4,
+    StrategyLogicalExitV4,
+    StrategyLogicalExitsV4,
     StrategyStopV4,
     StrategyVersionV4,
 )
@@ -55,19 +58,23 @@ def _strategy(expression_text: str) -> StrategyVersionV4:
 def _context(
     strategy: StrategyVersionV4,
     *,
+    evaluation_type: Literal["entry", "logical_exit"] = "entry",
     symbol: str | None = "SPY",
     side: Literal["long", "short"] | None = "long",
     timestamp: datetime | None = datetime(2026, 5, 2, tzinfo=timezone.utc),
     deployment_id: UUID | None = uuid4(),
     watchlist_snapshot_id: UUID | None = None,
+    position_contexts: dict[str, PositionSignalContext] | None = None,
 ) -> SignalEvaluationContext:
     return SignalEvaluationContext(
         strategy=strategy,
+        evaluation_type=evaluation_type,
         symbol=symbol,
         side=side,
         timestamp=timestamp,
         deployment_id=deployment_id,
         watchlist_snapshot_id=watchlist_snapshot_id,
+        position_contexts=position_contexts or {},
     )
 
 
@@ -124,6 +131,123 @@ def test_evaluate_returns_no_signal_when_builder_returns_none() -> None:
     assert result.decision == "no_signal"
     assert result.source == "v4_expression"
     assert result.signal_plan is None
+
+
+def test_entry_evaluation_type_routes_to_existing_builder(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+
+    def fail_exit_evaluator(**_kwargs):  # type: ignore[no-untyped-def]
+        raise AssertionError("logical-exit evaluator should not run for entry")
+
+    def fake_builder(
+        *,
+        strategy: StrategyVersionV4,
+        snapshot: FeatureSnapshot,
+        symbol: str,
+        side: Literal["long", "short"],
+        timestamp: datetime,
+        deployment_id: UUID,
+        watchlist_snapshot_id: UUID | None = None,
+        expression_loader: ExpressionLoader = _default_expression_loader,
+    ) -> None:
+        calls.append(symbol)
+        return None
+
+    monkeypatch.setattr(v4_expression, "evaluate_v4_logical_exits", fail_exit_evaluator)
+    monkeypatch.setattr(v4_expression, "build_signal_plan_from_v4", fake_builder)
+
+    result = V4ExpressionSignalSource().evaluate(
+        _snapshot(),
+        _context(_strategy("false"), evaluation_type="entry"),
+    )
+
+    assert result.decision == "no_signal"
+    assert calls == ["SPY"]
+
+
+def test_logical_exit_evaluation_type_routes_to_v4_evaluator(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[dict[str, object]] = []
+    timestamp = datetime(2026, 5, 2, tzinfo=timezone.utc)
+    intent = CandidateTradeIntent(
+        timestamp=timestamp,
+        symbol="SPY",
+        side=CandidateSide.LONG,
+        intent_type=IntentType.EXIT,
+        signal_name="v4_bars_since_long",
+        feature_values_used={},
+    )
+
+    def fake_evaluator(**kwargs):  # type: ignore[no-untyped-def]
+        calls.append(kwargs)
+        return (intent,), {"bars_since": "diagnostic"}
+
+    monkeypatch.setattr(v4_expression, "evaluate_v4_logical_exits", fake_evaluator)
+
+    result = V4ExpressionSignalSource().evaluate(
+        _snapshot(),
+        _context(
+            _strategy("false"),
+            evaluation_type="logical_exit",
+            timestamp=timestamp,
+            position_contexts={"SPY": PositionSignalContext(has_position=True)},
+        ),
+    )
+
+    assert result.decision == "emitted"
+    assert result.source == "v4_expression"
+    assert result.signal_plan is None
+    assert result.candidate_intents == (intent,)
+    assert result.diagnostics == {"bars_since": "diagnostic"}
+    assert calls[0]["symbol"] == "SPY"
+
+
+def test_logical_exit_missing_symbol_side_timestamp_raises() -> None:
+    contexts = SignalEvaluationContext(
+        strategy=_strategy("false"),
+        evaluation_type="logical_exit",
+        deployment_id=uuid4(),
+    )
+
+    with pytest.raises(ValueError) as exc_info:
+        V4ExpressionSignalSource().evaluate(_snapshot(), contexts)
+
+    message = str(exc_info.value)
+    assert "symbol" in message
+    assert "side" in message
+    assert "timestamp" in message
+    assert "deployment_id" not in message
+
+
+def test_logical_exit_result_shape_populates_candidate_intents() -> None:
+    strategy = _strategy("false").model_copy(
+        update={
+            "logical_exits": StrategyLogicalExitsV4(
+                long=(StrategyLogicalExitV4(template_id="bars_since", params={"bars": 1}),),
+            )
+        }
+    )
+    result = V4ExpressionSignalSource().evaluate(
+        _snapshot(),
+        _context(
+            strategy,
+            evaluation_type="logical_exit",
+            position_contexts={
+                "SPY": PositionSignalContext(
+                    has_position=True,
+                    entry_bar_index=0,
+                    current_bar_index=1,
+                )
+            },
+        ),
+    )
+
+    assert result.decision == "emitted"
+    assert result.signal_plan is None
+    assert len(result.candidate_intents) == 1
 
 
 def test_rejects_non_v4_strategy() -> None:

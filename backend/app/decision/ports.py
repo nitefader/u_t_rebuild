@@ -51,6 +51,7 @@ class SignalEvaluationContext:
     """Union input envelope for v4 expression and legacy rule evaluators."""
 
     strategy: StrategyVersion | StrategyVersionV4
+    evaluation_type: Literal["entry", "logical_exit"] = "entry"
     position_contexts: Mapping[str, PositionSignalContext] = field(default_factory=dict)
     symbol: str | None = None
     side: Literal["long", "short"] | None = None

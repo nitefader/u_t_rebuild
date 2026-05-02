@@ -31,6 +31,7 @@ from uuid import UUID, uuid4
 import pytest
 
 from backend.app.broker_accounts import BrokerAccount, BrokerAccountValidationStatus
+from backend.app.brokers import BrokerPositionSide, BrokerPositionSnapshot
 from backend.app.brokers.fake import FakeBrokerAdapter
 from backend.app.composition import build_strategy_artifact_resolver
 from backend.app.config import runtime_paths
@@ -39,12 +40,14 @@ from backend.app.deployments.models import Deployment, DeploymentLifecycleStatus
 from backend.app.deployments.persistence import DeploymentRepository
 from backend.app.deployments.service import DeploymentService
 from backend.app.domain import (
+    CandidateSide,
     OrderType,
     SignalPlanIntent,
     SignalPlanSide,
     TimeInForce,
     TradingMode,
 )
+from backend.app.orders import InternalOrder, InternalOrderIntent, InternalOrderStatus, OrderOrigin
 from backend.app.execution_plans.persistence import ExecutionPlanRepository
 from backend.app.execution_plans.registry import ExecutionPlanRegistry
 from backend.app.execution_plans.service import ExecutionPlanService
@@ -58,6 +61,8 @@ from backend.app.strategies_v4.models import (
     StrategyEntriesV4Draft,
     StrategyEntryV4Draft,
     StrategyLegV4Draft,
+    StrategyLogicalExitV4Draft,
+    StrategyLogicalExitsV4Draft,
     StrategyStopV4Draft,
     StrategyVariableV4Draft,
     StrategyVersionV4Draft,
@@ -84,7 +89,7 @@ def runtime_db(tmp_path, monkeypatch):
     return db_path
 
 
-def _save_strategy_v4(db_path) -> UUID:
+def _save_strategy_v4(db_path, *, logical_exit_bars: int | None = None) -> UUID:
     """Save a v4 strategy with one variable + entry that proves compiled-AST eval."""
     repo = StrategyV4Repository(db_path)
     service = StrategyV4Service(repository=repo)
@@ -123,6 +128,16 @@ def _save_strategy_v4(db_path) -> UUID:
                 on_fill_action=OnFillActionV4Draft(kind="leave"),
             ),
         ],
+        logical_exits=StrategyLogicalExitsV4Draft(
+            long=[
+                StrategyLogicalExitV4Draft(
+                    template_id="bars_since",
+                    params={"bars": logical_exit_bars},
+                )
+            ]
+            if logical_exit_bars is not None
+            else [],
+        ),
     )
 
     saved = service.save(draft)
@@ -380,7 +395,7 @@ def test_v4_runtime_does_not_take_legacy_signal_engine_branch(runtime_db):
     """
     db_path = runtime_db
 
-    strategy_v4_id = _save_strategy_v4(db_path)
+    strategy_v4_id = _save_strategy_v4(db_path, logical_exit_bars=1)
     controls_id = _save_controls(db_path)
     plan_id = _save_execution_plan(db_path)
     watchlist_id = _save_watchlist(db_path)
@@ -399,6 +414,8 @@ def test_v4_runtime_does_not_take_legacy_signal_engine_branch(runtime_db):
     orchestrator = _build_orchestrator(
         runtime_store=runtime_store, deployment_id=deployment_id
     )
+    sv4 = orchestrator._components.strategy_version_v4
+    assert sv4 is not None
 
     legacy_calls: list[object] = []
     real_evaluate = orchestrator._signal_engine.evaluate
@@ -409,13 +426,62 @@ def test_v4_runtime_does_not_take_legacy_signal_engine_branch(runtime_db):
 
     orchestrator._signal_engine.evaluate = _spy  # type: ignore[method-assign]
 
-    bar = _bar(index=0, open_=99.0, close=101.0)
-    orchestrator.process_bar(bar)
+    opening_signal_plan_id = uuid4()
+    position_lineage_id = uuid4()
+    opened_at = _bar(index=0, open_=99.0, close=101.0).timestamp
+    orchestrator.order_manager.ledger.add(
+        InternalOrder(
+            order_id=uuid4(),
+            client_order_id=f"sp-{uuid4()}",
+            account_id=account_id,
+            origin=OrderOrigin.SIGNAL_PLAN,
+            deployment_id=deployment_id,
+            strategy_id=sv4.strategy_v4_id,
+            strategy_version_id=sv4.id,
+            signal_plan_id=opening_signal_plan_id,
+            opening_signal_plan_id=opening_signal_plan_id,
+            current_signal_plan_id=opening_signal_plan_id,
+            position_lineage_id=position_lineage_id,
+            account_evaluation_id=uuid4(),
+            governor_decision_id=uuid4(),
+            symbol=SYMBOL,
+            side=CandidateSide.LONG,
+            quantity=10,
+            filled_quantity=10,
+            order_type=OrderType.MARKET,
+            time_in_force=TimeInForce.DAY,
+            intent=InternalOrderIntent.OPEN,
+            status=InternalOrderStatus.FILLED,
+            created_at=opened_at,
+            updated_at=opened_at,
+        )
+    )
+    runtime_store.save_broker_position_snapshot(
+        BrokerPositionSnapshot(
+            account_id=account_id,
+            symbol=SYMBOL,
+            qty=10,
+            side=BrokerPositionSide.LONG,
+            avg_entry_price=100,
+            market_value=1_000,
+            unrealized_pl=0,
+            deployment_id=deployment_id,
+            strategy_id=sv4.strategy_v4_id,
+            opening_signal_plan_id=opening_signal_plan_id,
+            position_lineage_id=position_lineage_id,
+        )
+    )
+
+    bar = _bar(index=1, open_=101.0, close=99.0)
+    result = orchestrator.process_bar(bar)
 
     assert legacy_calls == [], (
         f"legacy SignalEngine.evaluate was called for a v4 deployment: "
         f"{legacy_calls!r}"
     )
+    assert any(
+        plan.intent == SignalPlanIntent.LOGICAL_EXIT for plan in result.signal_plans
+    ), f"expected a v4 logical_exit SignalPlan, got {result.signal_plans!r}"
 
 
 def test_v4_runtime_perf_probe_under_budget(runtime_db):

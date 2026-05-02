@@ -1167,10 +1167,16 @@ def test_output_events_include_broker_result_and_ledger_update() -> None:
 
 def test_no_component_bypass() -> None:
     source = inspect.getsource(orchestrator_module)
+    v4_exit_source = inspect.getsource(
+        orchestrator_module.RuntimeOrchestrator._evaluate_v4_logical_exit_intents
+    )
 
     assert ".compute(" not in source
     assert "InternalOrder(" not in source
     assert "build_signal_plan_from_v4(" not in source
+    assert "_signal_engine.evaluate(" not in v4_exit_source
+    assert "StrategyVersion(" not in v4_exit_source
+    assert "SignalRule(" not in v4_exit_source
     assert ".can_open_new_position(" in source
     assert ".create_signal_plan_order(" in source
     assert ".submit_order(" in source
