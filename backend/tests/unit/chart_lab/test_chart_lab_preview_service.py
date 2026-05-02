@@ -9,10 +9,13 @@ from backend.app.chart_lab import ChartLabPreviewService
 from backend.app.domain import (
     ConditionNode,
     ConditionOperator,
+    DeploymentSnapshot,
+    DeploymentSnapshotSource,
     ExecutionStyleVersion,
     OrderType,
     ProgramVersion,
     ResearchDataPolicy,
+    ResearchRunArtifact,
     ResearchRunKind,
     RiskProfileVersion,
     StrategyControlsVersion,
@@ -28,7 +31,6 @@ from backend.app.features import (
     ResolvedDeploymentComponents,
     build_feature_refs_plan,
 )
-from backend.app.research.artifacts import build_research_run_artifact
 
 
 class RecordingResearchEvidenceStore:
@@ -151,6 +153,35 @@ def _bars(close: float) -> list[NormalizedBar]:
     ]
 
 
+def _research_artifact(
+    *,
+    run_id,
+    components: ResolvedDeploymentComponents,
+    data_policy: ResearchDataPolicy,
+) -> ResearchRunArtifact:
+    snapshot = DeploymentSnapshot(
+        source=DeploymentSnapshotSource.RESEARCH_MANUAL,
+        strategy_id=components.strategy.strategy_id,
+        strategy_version_id=components.strategy.id,
+        strategy_controls_version_id=components.strategy_controls.id,
+        execution_plan_version_id=components.execution_style.id,
+        risk_plan_version_id=components.risk_profile.id,
+        symbols=tuple(symbol.symbol for symbol in components.universe.symbols),
+        data_policy=data_policy,
+        strategy=components.strategy,
+        strategy_controls=components.strategy_controls,
+        execution_plan=components.execution_style,
+        risk_plan=components.risk_profile,
+        universe=components.universe,
+    )
+    return ResearchRunArtifact(
+        run_id=run_id,
+        run_kind=ResearchRunKind.CHART_LAB,
+        producer="chart_lab_preview",
+        deployment_snapshot=snapshot,
+    )
+
+
 def _intraday_bars(count: int = 60) -> list[NormalizedBar]:
     start = datetime(2026, 1, 3, 14, 30, tzinfo=timezone.utc)
     bars: list[NormalizedBar] = []
@@ -246,9 +277,8 @@ def test_chart_lab_preview_program_attaches_research_artifact() -> None:
     components = _components()
     bars = _bars(101)
     store = RecordingResearchEvidenceStore()
-    artifact = build_research_run_artifact(
+    artifact = _research_artifact(
         run_id=uuid4(),
-        run_kind=ResearchRunKind.CHART_LAB,
         components=components,
         data_policy=ResearchDataPolicy(
             provider="alpaca",
@@ -256,7 +286,6 @@ def test_chart_lab_preview_program_attaches_research_artifact() -> None:
             start=bars[0].timestamp,
             end=bars[-1].timestamp + timedelta(minutes=5),
         ),
-        producer="chart_lab_preview",
     )
 
     response = ChartLabPreviewService(evidence_recorder=store).preview_program(

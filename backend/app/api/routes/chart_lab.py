@@ -69,7 +69,7 @@ from backend.app.market_data import (
     ServicePurpose,
 )
 from backend.app.persistence import SQLiteRuntimeStore
-from backend.app.research.components import load_strategy_version
+from backend.app.domain import StrategyVersion
 
 
 try:  # pragma: no cover - alpaca-py optional in tests.
@@ -295,6 +295,21 @@ def _strategy_lookup() -> Any:
     from backend.app.api.routes.strategies import get_strategy_service
 
     return get_strategy_service()
+
+
+def load_strategy_version(
+    *,
+    strategy_lookup: Any,
+    strategy_version_id: UUID,
+    purpose: str,
+) -> StrategyVersion:
+    if strategy_lookup is None:
+        raise ValueError(f"{purpose} requires a strategy lookup; configure via runtime")
+    record = strategy_lookup.get_version(strategy_version_id)
+    payload = getattr(record, "payload", record)
+    if not isinstance(payload, StrategyVersion):
+        raise ValueError(f"strategy version {strategy_version_id} is not a StrategyVersion")
+    return payload
 
 
 def _dependency(default: object) -> object:

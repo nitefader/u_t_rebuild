@@ -127,12 +127,6 @@ def test_current_frontend_http_api_contract_is_registered() -> None:
         ("POST", "/api/v1/deployments/{deployment_id}/resume"),
         ("POST", "/api/v1/deployments/{deployment_id}/subscribe"),
         ("POST", "/api/v1/deployments/{deployment_id}/unsubscribe"),
-        ("GET", "/api/v1/research/backtests"),
-        ("POST", "/api/v1/research/backtests"),
-        ("GET", "/api/v1/research/backtests/{run_id}"),
-        ("POST", "/api/v1/research/backtests/{run_id}/cancel"),
-        ("GET", "/api/v1/research/backtests/{run_id}/results"),
-        ("GET", "/api/v1/research/backtests/{run_id}/metrics"),
         ("POST", "/api/v1/data-center/historical-datasets/ingest"),
         ("GET", "/api/v1/screeners"),
         ("POST", "/api/v1/screeners"),
@@ -169,27 +163,6 @@ def test_current_frontend_http_api_contract_is_registered() -> None:
         ("GET", "/api/v1/discovery-schedules/{schedule_id}/executions"),
         ("GET", "/api/v1/risk-decisions/{risk_decision_id}"),
         ("GET", "/api/v1/risk-decisions"),
-        ("POST", "/api/v1/research/sim_lab/runs"),
-        ("GET", "/api/v1/sim-lab/sessions"),
-        ("POST", "/api/v1/sim-lab/sessions"),
-        ("GET", "/api/v1/sim-lab/sessions/{session_id}"),
-        ("DELETE", "/api/v1/sim-lab/sessions/{session_id}"),
-        ("POST", "/api/v1/sim-lab/sessions/{session_id}/run"),
-        ("GET", "/api/v1/sim-lab/sessions/{session_id}/results"),
-        ("GET", "/api/v1/optimization/runs"),
-        ("POST", "/api/v1/optimization/runs"),
-        ("GET", "/api/v1/optimization/runs/{run_id}"),
-        ("DELETE", "/api/v1/optimization/runs/{run_id}"),
-        ("GET", "/api/v1/walk-forward/runs"),
-        ("POST", "/api/v1/walk-forward/runs"),
-        ("GET", "/api/v1/walk-forward/runs/{run_id}"),
-        ("DELETE", "/api/v1/walk-forward/runs/{run_id}"),
-        ("POST", "/api/v1/research/jobs/backtest"),
-        ("POST", "/api/v1/research/jobs/walk-forward"),
-        ("POST", "/api/v1/research/jobs/optimization"),
-        ("GET", "/api/v1/research/jobs"),
-        ("GET", "/api/v1/research/jobs/{job_id}"),
-        ("POST", "/api/v1/research/jobs/{job_id}/cancel"),
         # Risk Plan slice (RISK_PLAN_SIGNALPLAN_BACKTEST_BACKEND_CONTRACT §8.1 + §8.2).
         ("GET", "/api/v1/risk-plans"),
         ("POST", "/api/v1/risk-plans"),
@@ -215,7 +188,6 @@ def test_current_frontend_http_api_contract_is_registered() -> None:
 def test_current_frontend_websocket_api_contract_is_registered() -> None:
     expected = {
         "/api/v1/chart-lab/stream",
-        "/api/v1/research/sim_lab/stream",
     }
 
     assert expected <= _registered_websocket_routes()

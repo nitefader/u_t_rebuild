@@ -24,20 +24,8 @@ from backend.app.broker_accounts.models import (
 )
 from backend.app.control_plane import ControlPlane
 from backend.app.domain import (
-    BacktestRun,
     CandidateSide,
-    ChartLabPreviewEvidence,
-    ConditionNode,
-    ConditionOperator,
-    DeploymentSnapshot,
-    DeploymentSnapshotSource,
-    ExecutionStyleVersion,
-    IntentType,
     OrderType,
-    ResearchDataPolicy,
-    ResearchRunArtifact,
-    ResearchRunKind,
-    RiskProfileVersion,
     RiskPlan,
     RiskPlanConfig,
     RiskPlanSizingMethod,
@@ -45,15 +33,9 @@ from backend.app.domain import (
     RiskPlanTier,
     RiskPlanVersion,
     RiskPlanVersionStatus,
-    SignalRule,
-    StrategyControlsVersion,
-    StrategyVersion,
     TimeInForce,
     TradingMode,
-    UniverseSnapshot,
-    UniverseSymbol,
 )
-from backend.app.domain.risk_profile import PositionSizingMethod
 from backend.app.governor import GovernorPolicy
 from backend.app.governor import PortfolioGovernor
 from backend.app.orders import InternalOrder, InternalOrderIntent, InternalOrderStatus, OrderManager, OrderOrigin
@@ -475,155 +457,28 @@ def test_deployment_runtime_state_persists(tmp_path) -> None:  # type: ignore[no
     assert persisted == state
 
 
-def test_research_evidence_persists_and_queries_by_strategy(tmp_path) -> None:  # type: ignore[no-untyped-def]
+def test_research_orchestration_tables_are_dropped_on_boot(tmp_path) -> None:  # type: ignore[no-untyped-def]
     db_path = tmp_path / "utos.db"
-    strategy_id = uuid4()
-    strategy_version_id = uuid4()
-    chart_evidence = ChartLabPreviewEvidence(
-        evidence_id=uuid4(),
-        strategy_id=strategy_id,
-        strategy_version_id=strategy_version_id,
-        symbol="SPY",
-        timeframe="5m",
-        start=datetime(2026, 1, 2, 14, 30, tzinfo=timezone.utc),
-        end=datetime(2026, 1, 2, 15, 30, tzinfo=timezone.utc),
-        feature_snapshot_count=10,
-        signal_marker_count=2,
-    )
-    backtest = BacktestRun(
-        run_id=uuid4(),
-        strategy_id=strategy_id,
-        strategy_version_id=strategy_version_id,
-        start=datetime(2026, 1, 1, tzinfo=timezone.utc),
-        end=datetime(2026, 2, 1, tzinfo=timezone.utc),
-        bar_count=100,
-        signal_plan_count=5,
-        simulated_trade_count=3,
-    )
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("CREATE TABLE research_jobs (job_id TEXT PRIMARY KEY)")
+        conn.execute("CREATE TABLE research_evidence (evidence_id TEXT PRIMARY KEY)")
+        conn.execute("CREATE TABLE backtest_runs (run_id TEXT PRIMARY KEY)")
+        conn.execute("CREATE TABLE strategy_versions (strategy_version_id TEXT PRIMARY KEY)")
 
-    store = SQLiteRuntimeStore(db_path)
-    store.save_research_evidence(chart_evidence)
-    store.save_research_evidence(backtest)
-    restarted = SQLiteRuntimeStore(db_path)
+    SQLiteRuntimeStore(db_path)
 
-    assert restarted.load_research_evidence(chart_evidence.evidence_id) == chart_evidence
-    assert restarted.list_research_evidence(strategy_id=strategy_id) == (chart_evidence, backtest)
-    assert restarted.list_research_evidence(evidence_type="backtest_run") == (backtest,)
+    with sqlite3.connect(db_path) as conn:
+        tables = {
+            row[0]
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            ).fetchall()
+        }
 
-
-def test_research_run_artifact_and_snapshot_persist_with_evidence(tmp_path) -> None:
-    db_path = tmp_path / "utos.db"
-    strategy_id = uuid4()
-    strategy_version_id = uuid4()
-    controls_version_id = uuid4()
-    execution_plan_version_id = uuid4()
-    risk_plan_version_id = uuid4()
-    universe_snapshot_id = uuid4()
-    run_id = uuid4()
-    start = datetime(2026, 1, 1, tzinfo=timezone.utc)
-    end = datetime(2026, 2, 1, tzinfo=timezone.utc)
-    strategy = StrategyVersion(
-        id=strategy_version_id,
-        strategy_id=strategy_id,
-        version=1,
-        name="Artifact Strategy",
-        entry_rules=[
-            SignalRule(
-                name="green_bar_entry",
-                side=CandidateSide.LONG,
-                intent_type=IntentType.ENTRY,
-                condition=ConditionNode(
-                    left_feature="1d.close[0]",
-                    operator=ConditionOperator.GREATER_THAN,
-                    right_feature="1d.open[0]",
-                ),
-            )
-        ],
-    )
-    strategy_controls = StrategyControlsVersion(
-        id=controls_version_id,
-        strategy_controls_id=uuid4(),
-        version=1,
-        name="Regular Session",
-        timeframe="1d",
-    )
-    execution_plan = ExecutionStyleVersion(
-        id=execution_plan_version_id,
-        execution_style_id=uuid4(),
-        version=1,
-        name="Market Entry",
-        entry_order_type=OrderType.MARKET,
-        time_in_force=TimeInForce.DAY,
-    )
-    risk_plan = RiskProfileVersion(
-        id=risk_plan_version_id,
-        risk_profile_id=uuid4(),
-        version=1,
-        name="Fixed Shares",
-        sizing_method=PositionSizingMethod.FIXED_SHARES,
-        fixed_shares=10,
-    )
-    universe = UniverseSnapshot(
-        id=universe_snapshot_id,
-        universe_id=uuid4(),
-        version=1,
-        name="Research Symbols",
-        symbols=[UniverseSymbol(symbol="SPY"), UniverseSymbol(symbol="QQQ")],
-    )
-    snapshot = DeploymentSnapshot(
-        source=DeploymentSnapshotSource.RESEARCH_MANUAL,
-        strategy_id=strategy_id,
-        strategy_version_id=strategy_version_id,
-        strategy_controls_version_id=controls_version_id,
-        execution_plan_version_id=execution_plan_version_id,
-        risk_plan_version_id=risk_plan_version_id,
-        symbols=("SPY", "QQQ"),
-        data_policy=ResearchDataPolicy(
-            provider="yahoo",
-            timeframe="1d",
-            start=start,
-            end=end,
-        ),
-        historical_dataset_ids=(uuid4(),),
-        strategy=strategy,
-        strategy_controls=strategy_controls,
-        execution_plan=execution_plan,
-        risk_plan=risk_plan,
-        universe=universe,
-    )
-    artifact = ResearchRunArtifact(
-        run_id=run_id,
-        run_kind=ResearchRunKind.BACKTEST,
-        deployment_snapshot=snapshot,
-    )
-    evidence = BacktestRun(
-        run_id=run_id,
-        artifact_id=artifact.artifact_id,
-        deployment_snapshot_id=snapshot.snapshot_id,
-        deployment_snapshot=snapshot,
-        strategy_id=strategy_id,
-        strategy_version_id=strategy_version_id,
-        universe=("SPY", "QQQ"),
-        start=start,
-        end=end,
-        initial_capital=100_000,
-        status="completed",
-        bar_count=20,
-        signal_plan_count=1,
-        simulated_trade_count=1,
-    )
-
-    store = SQLiteRuntimeStore(db_path)
-    store.save_research_run_artifact(artifact)
-    store.save_research_evidence(evidence)
-    restarted = SQLiteRuntimeStore(db_path)
-
-    assert restarted.load_research_run_artifact(artifact.artifact_id) == artifact
-    assert restarted.load_research_run_artifact_for_run(run_id) == artifact
-    loaded_evidence = restarted.load_research_evidence(run_id)
-    assert loaded_evidence.artifact_id == artifact.artifact_id
-    assert loaded_evidence.deployment_snapshot_id == snapshot.snapshot_id
-    assert loaded_evidence.deployment_snapshot.symbols == ("SPY", "QQQ")
+    assert "research_jobs" not in tables
+    assert "research_evidence" not in tables
+    assert "backtest_runs" not in tables
+    assert "strategy_versions" in tables
 
 
 def test_broker_positions_can_be_queried_by_deployment_lineage(tmp_path) -> None:  # type: ignore[no-untyped-def]

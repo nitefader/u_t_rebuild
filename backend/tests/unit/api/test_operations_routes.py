@@ -26,7 +26,7 @@ from backend.app.domain import (
     SignalPlanIntent,
     SignalPlanSide,
 )
-from backend.tests.unit.operations.test_operations_center_service import STRATEGY_VERSION_ID, _backtest_evidence, _order
+from backend.tests.unit.operations.test_operations_center_service import STRATEGY_VERSION_ID, _order
 from backend.app.runtime import RuntimeStatus
 
 
@@ -90,8 +90,6 @@ class RecordingOperationsService:
                 reasons=("approved",),
             ),
         )
-        self.research_evidence = (_backtest_evidence(),)
-
     def get_runtime_overview(self) -> RuntimeOverview:
         self.calls.append(("get_runtime_overview", "global"))
         return self.overview
@@ -153,21 +151,6 @@ class RecordingOperationsService:
         self.calls.append(("signal_plan_id", signal_plan_id or "all"))
         self.calls.append(("limit", str(limit)))
         return self.governor_decisions
-
-    def list_research_evidence(
-        self,
-        *,
-        strategy_id: UUID | None = None,
-        strategy_version_id: UUID | None = None,
-        evidence_type: str | None = None,
-    ) -> tuple[object, ...]:
-        self.calls.append(("list_research_evidence", evidence_type or "all"))
-        _ = strategy_id, strategy_version_id
-        return self.research_evidence
-
-    def get_research_evidence(self, evidence_id: UUID) -> object:
-        self.calls.append(("get_research_evidence", evidence_id))
-        return self.research_evidence[0]
 
     def pause_deployment(self, deployment_id: UUID, reason: str) -> None:
         self.calls.append(("pause_deployment", deployment_id))
@@ -346,26 +329,6 @@ def test_governor_decisions_route_returns_read_model_with_filters() -> None:
         ("deployment_id", DEPLOYMENT_ID),
         ("signal_plan_id", signal_plan_id),
         ("limit", "25"),
-    ]
-
-
-def test_research_evidence_routes_return_list_and_detail_without_trading_authority() -> None:
-    service = RecordingOperationsService()
-    evidence = service.research_evidence[0]
-
-    list_response = operations.list_research_evidence(
-        strategy_id=evidence.strategy_id,
-        strategy_version_id=evidence.strategy_version_id,
-        evidence_type="backtest_run",
-        service=service,
-    )
-    detail_response = operations.get_research_evidence(evidence.run_id, service=service)
-
-    assert list_response.evidence == service.research_evidence
-    assert detail_response == evidence
-    assert service.calls == [
-        ("list_research_evidence", "backtest_run"),
-        ("get_research_evidence", evidence.run_id),
     ]
 
 

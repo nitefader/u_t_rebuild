@@ -31,18 +31,10 @@ from backend.app.domain import (
     AccountEvaluationStatus,
     AccountParticipationDecision,
     AccountSignalPlanEvaluation,
-    BacktestRun,
-    ChartLabPreviewEvidence,
-    OptimizationRun,
-    PromotionEvidenceBundle,
-    ResearchJob,
-    ResearchRunArtifact,
     RiskDecisionCard,
     RiskPlan,
     RiskPlanVersion,
     SignalPlan,
-    SimulationRunEvidence,
-    WalkForwardRun,
 )
 from backend.app.domain._base import utc_now
 from backend.app.governor import GovernorPolicy
@@ -51,33 +43,10 @@ from backend.app.runtime import RuntimeState
 from backend.app.runtime.daily_account_state import DailyAccountState
 from backend.app.simulation import SimulatedTrade
 
-from .models import RUNTIME_SCHEMA
+from .models import RESEARCH_ORCHESTRATION_TABLES, RUNTIME_SCHEMA
 from .session import SQLiteSessionFactory
 
 ModelT = TypeVar("ModelT", bound=BaseModel)
-
-ResearchEvidence = (
-    ChartLabPreviewEvidence
-    | BacktestRun
-    | SimulationRunEvidence
-    | OptimizationRun
-    | WalkForwardRun
-    | PromotionEvidenceBundle
-)
-
-_RESEARCH_EVIDENCE_TYPES: dict[str, type[BaseModel]] = {
-    "chart_lab_preview": ChartLabPreviewEvidence,
-    "backtest_run": BacktestRun,
-    "simulation_run": SimulationRunEvidence,
-    "optimization_run": OptimizationRun,
-    "walk_forward_run": WalkForwardRun,
-    "promotion_bundle": PromotionEvidenceBundle,
-}
-
-_RESEARCH_EVIDENCE_TYPE_BY_MODEL: dict[type[BaseModel], str] = {
-    model: evidence_type for evidence_type, model in _RESEARCH_EVIDENCE_TYPES.items()
-}
-
 
 class SQLiteRuntimeStore:
     """Durable SQLite runtime repository.
@@ -90,6 +59,7 @@ class SQLiteRuntimeStore:
         self._session_factory = SQLiteSessionFactory(path)
         with self._connect() as connection:
             connection.executescript(RUNTIME_SCHEMA)
+            self._drop_research_orchestration_tables(connection)
             self._migrate_legacy_tables(connection)
 
     def save_order(self, order: InternalOrder) -> InternalOrder:
@@ -532,24 +502,6 @@ class SQLiteRuntimeStore:
         )
         accounts = tuple(_load_model(BrokerAccount, row["payload"]) for row in rows)
         return tuple(account for account in accounts if not account.is_archived)
-
-    def list_backtest_runs_for_risk_plan_versions(
-        self,
-        risk_plan_version_ids: tuple[UUID, ...],
-        *,
-        limit: int = 20,
-    ) -> tuple[BacktestRun, ...]:
-        if not risk_plan_version_ids:
-            return ()
-        version_ids = {str(version_id) for version_id in risk_plan_version_ids}
-        runs = [
-            evidence
-            for evidence in self.list_research_evidence(evidence_type="backtest_run")
-            if isinstance(evidence, BacktestRun)
-            and str(evidence.metrics.get("risk_plan_version_id") or "") in version_ids
-        ]
-        runs.sort(key=lambda run: (run.created_at, run.run_id), reverse=True)
-        return tuple(runs[:limit])
 
     def save_broker_account(self, account: BrokerAccount) -> BrokerAccount:
         with self._connect() as connection:
@@ -1324,95 +1276,6 @@ class SQLiteRuntimeStore:
             raise KeyError(f"unknown control plane state: {control_plane_id}")
         return _load_model(ControlPlaneState, row["payload"])
 
-    def save_research_evidence(self, evidence: ResearchEvidence) -> ResearchEvidence:
-        evidence_type = _research_evidence_type(evidence)
-        evidence_id = _research_evidence_id(evidence)
-        with self._connect() as connection:
-            connection.execute(
-                """
-                INSERT INTO research_evidence
-                    (evidence_id, evidence_type, strategy_id, strategy_version_id, created_at, payload)
-                VALUES (?, ?, ?, ?, ?, ?)
-                ON CONFLICT(evidence_id) DO UPDATE SET
-                    evidence_type = excluded.evidence_type,
-                    strategy_id = excluded.strategy_id,
-                    strategy_version_id = excluded.strategy_version_id,
-                    created_at = excluded.created_at,
-                    payload = excluded.payload
-                """,
-                (
-                    str(evidence_id),
-                    evidence_type,
-                    str(evidence.strategy_id),
-                    str(evidence.strategy_version_id),
-                    evidence.created_at.isoformat(),
-                    _dump_model(evidence),
-                ),
-            )
-        return evidence
-
-    def save_research_run_artifact(self, artifact: ResearchRunArtifact) -> ResearchRunArtifact:
-        snapshot = artifact.deployment_snapshot
-        with self._connect() as connection:
-            connection.execute(
-                """
-                INSERT INTO research_run_artifacts
-                    (
-                        artifact_id, run_id, run_kind, strategy_id, strategy_version_id,
-                        deployment_snapshot_id, source_deployment_id, created_at, payload
-                    )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(artifact_id) DO UPDATE SET
-                    run_id = excluded.run_id,
-                    run_kind = excluded.run_kind,
-                    strategy_id = excluded.strategy_id,
-                    strategy_version_id = excluded.strategy_version_id,
-                    deployment_snapshot_id = excluded.deployment_snapshot_id,
-                    source_deployment_id = excluded.source_deployment_id,
-                    created_at = excluded.created_at,
-                    payload = excluded.payload
-                """,
-                (
-                    str(artifact.artifact_id),
-                    str(artifact.run_id),
-                    artifact.run_kind.value,
-                    str(artifact.strategy_id),
-                    str(artifact.strategy_version_id),
-                    str(snapshot.snapshot_id),
-                    str(snapshot.source_deployment_id) if snapshot.source_deployment_id else None,
-                    artifact.created_at.isoformat(),
-                    _dump_model(artifact),
-                ),
-            )
-        return artifact
-
-    def load_research_run_artifact(self, artifact_id: UUID) -> ResearchRunArtifact:
-        row = self._fetch_one(
-            "SELECT payload FROM research_run_artifacts WHERE artifact_id = ?",
-            (str(artifact_id),),
-        )
-        if row is None:
-            raise KeyError(f"unknown research run artifact: {artifact_id}")
-        return _load_model_strict(ResearchRunArtifact, row["payload"])
-
-    def load_research_run_artifact_for_run(self, run_id: UUID) -> ResearchRunArtifact:
-        row = self._fetch_one(
-            "SELECT payload FROM research_run_artifacts WHERE run_id = ? ORDER BY created_at DESC LIMIT 1",
-            (str(run_id),),
-        )
-        if row is None:
-            raise KeyError(f"unknown research run artifact for run: {run_id}")
-        return _load_model_strict(ResearchRunArtifact, row["payload"])
-
-    def load_research_evidence(self, evidence_id: UUID) -> ResearchEvidence:
-        row = self._fetch_one(
-            "SELECT evidence_type, payload FROM research_evidence WHERE evidence_id = ?",
-            (str(evidence_id),),
-        )
-        if row is None:
-            raise KeyError(f"unknown research evidence: {evidence_id}")
-        return _load_research_evidence_row(row)
-
     def save_risk_decision_card(self, card: RiskDecisionCard) -> RiskDecisionCard:
         with self._connect() as connection:
             connection.execute(
@@ -1810,116 +1673,6 @@ class SQLiteRuntimeStore:
         )
         return tuple(json.loads(str(row["payload"])) for row in rows)
 
-    def save_research_job(self, job: ResearchJob) -> ResearchJob:
-        with self._connect() as connection:
-            connection.execute(
-                """
-                INSERT INTO research_jobs
-                    (
-                        job_id, kind, status,
-                        progress_current, progress_total, progress_label,
-                        cancel_requested, result_run_id, error,
-                        created_at, started_at, finished_at,
-                        operator_session_id, payload
-                    )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(job_id) DO UPDATE SET
-                    kind = excluded.kind,
-                    status = excluded.status,
-                    progress_current = excluded.progress_current,
-                    progress_total = excluded.progress_total,
-                    progress_label = excluded.progress_label,
-                    cancel_requested = excluded.cancel_requested,
-                    result_run_id = excluded.result_run_id,
-                    error = excluded.error,
-                    created_at = excluded.created_at,
-                    started_at = excluded.started_at,
-                    finished_at = excluded.finished_at,
-                    operator_session_id = excluded.operator_session_id,
-                    payload = excluded.payload
-                """,
-                (
-                    str(job.job_id),
-                    job.kind.value,
-                    job.status.value,
-                    int(job.progress.current),
-                    int(job.progress.total),
-                    job.progress.label,
-                    int(job.cancel_requested),
-                    str(job.result_run_id) if job.result_run_id else None,
-                    job.error,
-                    job.created_at.isoformat(),
-                    job.started_at.isoformat() if job.started_at else None,
-                    job.finished_at.isoformat() if job.finished_at else None,
-                    job.operator_session_id,
-                    _dump_model(job),
-                ),
-            )
-        return job
-
-    def load_research_job(self, job_id: UUID) -> ResearchJob:
-        row = self._fetch_one(
-            "SELECT payload FROM research_jobs WHERE job_id = ?",
-            (str(job_id),),
-        )
-        if row is None:
-            raise KeyError(f"unknown research job: {job_id}")
-        return _load_model(ResearchJob, row["payload"])
-
-    def list_research_jobs(
-        self,
-        *,
-        status: str | None = None,
-        kind: str | None = None,
-        limit: int = 100,
-    ) -> tuple[ResearchJob, ...]:
-        conditions: list[str] = []
-        params: list[object] = []
-        if status is not None:
-            conditions.append("status = ?")
-            params.append(status)
-        if kind is not None:
-            conditions.append("kind = ?")
-            params.append(kind)
-        where = f" WHERE {' AND '.join(conditions)}" if conditions else ""
-        rows = self._fetch_all(
-            f"SELECT payload FROM research_jobs{where} ORDER BY created_at DESC, job_id LIMIT ?",
-            (*params, int(max(1, min(limit, 500)))),
-        )
-        return tuple(_load_model(ResearchJob, row["payload"]) for row in rows)
-
-    def request_research_job_cancel(self, job_id: UUID) -> ResearchJob:
-        job = self.load_research_job(job_id)
-        if job.status.value in {"completed", "failed", "canceled"}:
-            return job
-        updated = job.model_copy(update={"cancel_requested": True})
-        return self.save_research_job(updated)
-
-    def list_research_evidence(
-        self,
-        *,
-        strategy_id: UUID | None = None,
-        strategy_version_id: UUID | None = None,
-        evidence_type: str | None = None,
-    ) -> tuple[ResearchEvidence, ...]:
-        conditions: list[str] = []
-        params: list[object] = []
-        if strategy_id is not None:
-            conditions.append("strategy_id = ?")
-            params.append(str(strategy_id))
-        if strategy_version_id is not None:
-            conditions.append("strategy_version_id = ?")
-            params.append(str(strategy_version_id))
-        if evidence_type is not None:
-            conditions.append("evidence_type = ?")
-            params.append(evidence_type)
-        where = f" WHERE {' AND '.join(conditions)}" if conditions else ""
-        rows = self._fetch_all(
-            f"SELECT evidence_type, payload FROM research_evidence{where} ORDER BY created_at, evidence_id",
-            tuple(params),
-        )
-        return tuple(_load_research_evidence_row(row) for row in rows)
-
     def _save_trade_payload(
         self,
         *,
@@ -1971,6 +1724,10 @@ class SQLiteRuntimeStore:
 
     def _connect(self) -> sqlite3.Connection:
         return self._session_factory.connect()
+
+    def _drop_research_orchestration_tables(self, connection: sqlite3.Connection) -> None:
+        for table_name in RESEARCH_ORCHESTRATION_TABLES:
+            connection.execute(f"DROP TABLE IF EXISTS {table_name}")
 
     def _migrate_legacy_tables(self, connection: sqlite3.Connection) -> None:
         legacy_deployments = connection.execute(
@@ -2223,30 +1980,3 @@ def _load_model(model_type: type[ModelT], payload: str) -> ModelT:
             if len(trimmed) != len(data):
                 return model_type.model_validate(trimmed)
         raise
-
-
-def _load_model_strict(model_type: type[ModelT], payload: str) -> ModelT:
-    return model_type.model_validate_json(payload)
-
-
-def _research_evidence_id(evidence: ResearchEvidence) -> UUID:
-    for field_name in ("evidence_id", "run_id", "bundle_id"):
-        value = getattr(evidence, field_name, None)
-        if isinstance(value, UUID):
-            return value
-    raise KeyError("research evidence has no canonical id")
-
-
-def _research_evidence_type(evidence: ResearchEvidence) -> str:
-    evidence_type = _RESEARCH_EVIDENCE_TYPE_BY_MODEL.get(type(evidence))
-    if evidence_type is None:
-        raise KeyError(f"unsupported research evidence type: {type(evidence).__name__}")
-    return evidence_type
-
-
-def _load_research_evidence_row(row: sqlite3.Row) -> ResearchEvidence:
-    evidence_type = str(row["evidence_type"])
-    model_type = _RESEARCH_EVIDENCE_TYPES.get(evidence_type)
-    if model_type is None:
-        raise KeyError(f"unsupported research evidence type: {evidence_type}")
-    return _load_model_strict(model_type, row["payload"])  # type: ignore[return-value]

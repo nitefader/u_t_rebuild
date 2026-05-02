@@ -30,8 +30,6 @@ from backend.app.api.routes import (
     market_data,
     operations,
     operations_trade_stream,
-    research_jobs,
-    research_runs,
     risk_decisions,
     risk_plans,
     screener,
@@ -370,8 +368,6 @@ app.include_router(broker_accounts.router)
 app.include_router(manual_trade.router)
 app.include_router(operations.router)
 app.include_router(operations_trade_stream.router)
-app.include_router(research_runs.router)
-app.include_router(research_jobs.router)
 app.include_router(risk_decisions.router)
 app.include_router(risk_plans.router)
 app.include_router(market_data.router)
