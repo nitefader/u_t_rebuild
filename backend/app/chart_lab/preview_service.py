@@ -102,6 +102,18 @@ class ChartLabBarPreview(BaseModel):
     non_fire_reasons: tuple[str, ...] = ()
 
 
+class ChartLabMetadata(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    provider: str
+    adjustment: str
+    total_bars: int
+    active_bars: int
+    warmup_bars: int
+    dataset_count: int
+    warnings: tuple[str, ...] = ()
+
+
 class ChartLabPreviewResponse(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -109,6 +121,7 @@ class ChartLabPreviewResponse(BaseModel):
     feature_plan: FeaturePlan
     features: tuple[ChartLabFeatureDescriptor, ...] = ()
     bars: tuple[ChartLabBarPreview, ...]
+    metadata: ChartLabMetadata | None = None
     evidence: ChartLabPreviewEvidence | None = None
 
 

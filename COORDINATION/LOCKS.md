@@ -3,14 +3,10 @@
 Both agents read this file at the start of every turn. Default TTL is 30 minutes.
 See `COORDINATION/PROTOCOL.md` for full lock semantics.
 
-Last updated: 2026-05-02 16:36:00 -04:00
+Last updated: 2026-05-02 17:30:00 -04:00
 
 | acquired | expires | agent | path | intent |
 | --- | --- | --- | --- | --- |
-| 2026-05-02 12:45:00 -04:00 | 2026-05-02 17:06:00 -04:00 | Codex | `backend/app/{research,simulation,chart_lab}/**`, `backend/app/domain/research_evidence.py`, `backend/app/api/routes/{research_runs,research_jobs,chart_lab}.py`, `backend/tests/unit/{research,simulation,api}/**` | Research Evidence Contract + Shared Research Spine using immutable DeploymentSnapshot artifact; ChartLab verification contract refreshed. |
-| 2026-05-02 12:45:00 -04:00 | 2026-05-02 17:06:00 -04:00 | Codex | `backend/app/domain/risk_plan.py`, `backend/app/api/routes/risk_plans.py`, `backend/app/persistence/{models.py,runtime_store.py}`, `backend/tests/unit/{domain,api,persistence}/**` | Enforce promoted RiskPlan source_run_id/evidence lineage for research-derived plans. |
-| 2026-05-02 12:45:00 -04:00 | 2026-05-02 17:06:00 -04:00 | Codex | `frontend/src/api/{researchRuns,researchJobs,chartLab}.ts`, `frontend/src/api/schemas/{researchRuns,researchJobs,chartLab}.ts`, `frontend/src/routes/{ChartLab,SimLab,Backtests,WalkForward,Optimization}.tsx`, `frontend/src/components/{backtests,charts,jobs,optimization,risk_plans,walkforward}/**` | Research lab frontend contract/UI alignment; ChartLab pure signal/feature verification surface refreshed. |
-| 2026-05-02 12:45:00 -04:00 | 2026-05-02 16:20:00 -04:00 | Codex | `Operations_Turtle_Shell_Artifacts/OPERATION_STATUS.md` | Turtle Shell heartbeat for research evidence/spine slice. |
 
 (Claude lease 2026-05-02 05:17 → 12:35 RELEASED — HARD.MD remediation closed. See LEDGER 2026-05-02 12:30.)
 (Claude lease 2026-05-02 13:00 → 13:35 RELEASED — Strategy IDE v4 Slice 11 closeout. See LEDGER 2026-05-02 13:30.)

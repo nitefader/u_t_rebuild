@@ -38,6 +38,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from backend.app.api.system_settings_store import setting
 from backend.app.chart_lab import (
     ChartLabFeatureDescriptor,
+    ChartLabMetadata,
     ChartLabPreviewResponse,
     ChartLabPreviewService,
 )
@@ -449,8 +450,19 @@ def chart_lab_preview(
             "historical_dataset_ids": [str(dataset_id) for dataset_id in dataset_ids],
             "data_quality_warnings": list(dict.fromkeys(data_quality_warnings)),
         }
+        preview_metadata = _build_preview_metadata(
+            response=response,
+            provider=request.source,
+            adjustment=request.adjustment_policy,
+            dataset_count=len(set(dataset_ids)),
+            warnings=data_quality_warnings,
+            expected_warmup_bars=plan.warmup_by_timeframe.get(request.timeframe, 0),
+        )
         return response.model_copy(
-            update={"session": response.session.model_copy(update={"metadata": metadata})}
+            update={
+                "session": response.session.model_copy(update={"metadata": metadata}),
+                "metadata": preview_metadata,
+            }
         )
     except ChartLabTimeframeMismatchError as exc:
         raise HTTPException(
@@ -462,6 +474,36 @@ def chart_lab_preview(
         ) from exc
     except FeaturePlanError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+def _build_preview_metadata(
+    *,
+    response: ChartLabPreviewResponse,
+    provider: str,
+    adjustment: str,
+    dataset_count: int,
+    warnings: list[str],
+    expected_warmup_bars: int,
+) -> ChartLabMetadata:
+    total_bars = len(response.bars)
+    warmup_bars = sum(1 for bar in response.bars if bar.is_warmup)
+    active_bars = total_bars - warmup_bars
+    visible_warnings = [warning.strip() for warning in warnings if warning.strip()]
+    if total_bars == 0:
+        visible_warnings.append("Missing data: preview returned no bars.")
+    if any(bar.volume is None for bar in response.bars):
+        visible_warnings.append("Partial data: one or more bars are missing volume.")
+    if expected_warmup_bars > 0 and warmup_bars == 0:
+        visible_warnings.append("Missing warm-up: requested warm-up bars were not returned.")
+    return ChartLabMetadata(
+        provider=provider,
+        adjustment=adjustment,
+        total_bars=total_bars,
+        active_bars=active_bars,
+        warmup_bars=warmup_bars,
+        dataset_count=dataset_count,
+        warnings=tuple(dict.fromkeys(visible_warnings)),
+    )
 
 
 def _build_chart_lab_plan(

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from uuid import uuid4
 
 import pytest
 
@@ -8,12 +9,16 @@ from backend.app.api.routes import chart_lab as chart_lab_routes
 from backend.app.api.routes.chart_lab import (
     ChartLabConfig,
     ChartLabHealthResponse,
+    _build_preview_metadata,
     build_market_data_adapter,
     chart_lab_feature_library,
     chart_lab_health,
     resolve_symbol,
     serialize_bar,
 )
+from backend.app.chart_lab import ChartLabBarPreview, ChartLabPreviewResponse
+from backend.app.domain import ChartLabSession, TradingMode
+from backend.app.features import FeaturePlan
 from backend.app.features import NormalizedBar
 from backend.app.market_data import AlpacaMarketDataAdapter
 
@@ -217,3 +222,64 @@ def test_feature_library_returns_manual_feature_engine_descriptors() -> None:
     assert {"Trend", "Momentum", "Volatility", "Volume", "Price"}.intersection(
         {feature.group for feature in response.features}
     )
+
+
+def test_preview_metadata_is_operator_context_without_dataset_ids() -> None:
+    session = ChartLabSession(
+        id=uuid4(),
+        mode=TradingMode.CHART_LAB_BATCH,
+        symbol="SPY",
+        timeframe="5m",
+        start=datetime(2026, 4, 25, 14, 30, tzinfo=timezone.utc),
+        end=datetime(2026, 4, 25, 14, 40, tzinfo=timezone.utc),
+    )
+    plan = FeaturePlan(
+        strategy_version_id=uuid4(),
+        consumer="chart_lab",
+        symbols=("SPY",),
+        timeframes=("5m",),
+        feature_specs=(),
+        feature_keys=(),
+        warmup_by_timeframe={"5m": 3},
+    )
+    response = ChartLabPreviewResponse(
+        session=session,
+        feature_plan=plan,
+        bars=(
+            ChartLabBarPreview(
+                bar_index=0,
+                timestamp=datetime(2026, 4, 25, 14, 30, tzinfo=timezone.utc),
+                symbol="SPY",
+                timeframe="5m",
+                open=100,
+                high=101,
+                low=99,
+                close=100.5,
+                volume=None,
+                is_warmup=False,
+                feature_values=(),
+            ),
+        ),
+    )
+
+    metadata = _build_preview_metadata(
+        response=response,
+        provider="alpaca",
+        adjustment="split_dividend_adjusted",
+        dataset_count=2,
+        warnings=["provider warning", "provider warning"],
+        expected_warmup_bars=3,
+    )
+
+    assert metadata.provider == "alpaca"
+    assert metadata.adjustment == "split_dividend_adjusted"
+    assert metadata.total_bars == 1
+    assert metadata.active_bars == 1
+    assert metadata.warmup_bars == 0
+    assert metadata.dataset_count == 2
+    assert metadata.warnings == (
+        "provider warning",
+        "Partial data: one or more bars are missing volume.",
+        "Missing warm-up: requested warm-up bars were not returned.",
+    )
+    assert "dataset_id" not in metadata.model_dump()

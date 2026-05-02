@@ -1,12 +1,15 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import {
+  AlertTriangle,
   BarChart3,
   Eye,
   EyeOff,
   Layers3,
+  LineChart,
   Play,
   Plus,
+  RotateCcw,
   X,
 } from "lucide-react";
 import { ChartLabApi } from "@/api/chartLab";
@@ -26,6 +29,7 @@ import { StatusBadge } from "@/components/badges/StatusBadge";
 import {
   StrategyPreviewChart,
   type PreviewBarRow,
+  type StrategyPreviewChartMode,
   type StrategyPreviewChartDensity,
 } from "@/components/charts/StrategyPreviewChart";
 import { EmptyState } from "@/components/empty/EmptyState";
@@ -87,6 +91,8 @@ export function ChartLab(): JSX.Element {
   const [featureSearch, setFeatureSearch] = useState("");
   const [lastLoadedSignature, setLastLoadedSignature] = useState<string | null>(null);
   const [showSignalLabels, setShowSignalLabels] = useState(false);
+  const [chartMode, setChartMode] = useState<StrategyPreviewChartMode>("candles");
+  const [resetZoomSignal, setResetZoomSignal] = useState(0);
   const [density, setDensity] = useState<StrategyPreviewChartDensity>({
     showEntries: true,
     showExits: true,
@@ -206,24 +212,25 @@ export function ChartLab(): JSX.Element {
     () => libraryFeatures.filter((feature) => manualRefs.has(feature.feature_ref)),
     [libraryFeatures, manualRefs],
   );
+  const presetFeatures = useMemo(
+    () => commonPresetFeatures(availableLibraryFeatures),
+    [availableLibraryFeatures],
+  );
 
   const selectedBar = response?.bars[selectedIndex] ?? response?.bars[0] ?? null;
   const chartRows = useMemo(() => previewBarsFrom(response), [response]);
-  const warmupCount = response?.bars.filter((bar) => bar.is_warmup).length ?? 0;
-  const activeBarCount =
-    response?.bars.filter((bar) => !bar.is_warmup).length ?? 0;
-  const signalStats = useMemo(() => {
-    let entries = 0;
-    let exits = 0;
-    for (const bar of response?.bars ?? []) {
-      for (const marker of bar.signal_markers) {
-        if (markerIsEntry(marker.marker_type)) entries += 1;
-        else exits += 1;
-      }
-    }
-    return { entries, exits };
-  }, [response]);
+  const previewStats = useMemo(() => summarizePreview(response), [response]);
   const isStale = Boolean(response && lastLoadedSignature && currentSignature !== lastLoadedSignature);
+  const contextWarnings = useMemo(
+    () =>
+      contextWarningsFor({
+        response,
+        stats: previewStats,
+        timeframe,
+        stale: isStale,
+      }),
+    [isStale, previewStats, response, timeframe],
+  );
   const canLoad = Boolean(
     symbol.trim() && startDate && endDate && (!strategyId || versionId) && !preview.isPending,
   );
@@ -395,6 +402,7 @@ export function ChartLab(): JSX.Element {
           manualFeatures={manualFeatures}
           selectedManualFeatures={selectedLibraryManualFeatures}
           libraryFeatures={availableLibraryFeatures}
+          presetFeatures={presetFeatures}
           groupedFeatures={groupFeatures(availableLibraryFeatures)}
           visibleKeys={visibleKeys}
           featureSearch={featureSearch}
@@ -415,16 +423,16 @@ export function ChartLab(): JSX.Element {
             </CardTitle>
             <span className="flex flex-wrap items-center justify-end gap-2">
               <StatusBadge tone="muted">
-                Entry markers: {signalStats.entries}
+                Entry markers: {previewStats.entries}
               </StatusBadge>
               <StatusBadge tone="muted">
-                Exit markers: {signalStats.exits}
+                Exit markers: {previewStats.exits}
               </StatusBadge>
               <StatusBadge tone="ok">
-                Active bars: {activeBarCount}
+                Active bars: {previewStats.activeBars}
               </StatusBadge>
-              <StatusBadge tone={warmupCount ? "warn" : "muted"}>
-                Warm-up bars: {warmupCount}
+              <StatusBadge tone={previewStats.warmupBars ? "warn" : "muted"}>
+                Warm-up bars: {previewStats.warmupBars}
               </StatusBadge>
             </span>
           </CardHeader>
@@ -447,9 +455,17 @@ export function ChartLab(): JSX.Element {
             ) : null}
             {response && chartRows.length > 0 ? (
               <>
+                <DataContextStrip
+                  metadata={response.metadata}
+                  stats={previewStats}
+                  warnings={contextWarnings}
+                />
                 <ChartLabDensityToolbar
                   showSignalLabels={showSignalLabels}
                   onToggleLabels={setShowSignalLabels}
+                  chartMode={chartMode}
+                  onChartMode={setChartMode}
+                  onResetZoom={() => setResetZoomSignal((value) => value + 1)}
                   density={density}
                   onDensity={(patch) => setDensity((d) => ({ ...d, ...patch }))}
                 />
@@ -469,6 +485,8 @@ export function ChartLab(): JSX.Element {
                   manualFeatureKeys={manualFeatures.map((row) => row.feature_key)}
                   visibleFeatureKeys={[...visibleKeys]}
                   density={density}
+                  chartMode={chartMode}
+                  resetZoomSignal={resetZoomSignal}
                   showSignalLabels={showSignalLabels}
                   selectedBarIndex={selectedIndex}
                   onBarClick={setSelectedIndex}
@@ -497,19 +515,113 @@ export function ChartLab(): JSX.Element {
   );
 }
 
+function DataContextStrip({
+  metadata,
+  stats,
+  warnings,
+}: {
+  metadata: ChartLabPreviewResponse["metadata"];
+  stats: PreviewStats;
+  warnings: string[];
+}): JSX.Element {
+  const totalBars = metadata?.total_bars ?? stats.totalBars;
+  const activeBars = metadata?.active_bars ?? stats.activeBars;
+  const warmupBars = metadata?.warmup_bars ?? stats.warmupBars;
+  const datasetCount = metadata?.dataset_count ?? 0;
+  return (
+    <div
+      className="overflow-x-auto border-b border-border/70 bg-bg-inset/70 px-3 py-2 text-[11px]"
+      data-testid="chart-lab-context-strip"
+    >
+      <div className="flex min-w-max items-center gap-3 whitespace-nowrap">
+        <ContextItem label="Provider" value={providerLabel(metadata?.provider)} />
+        <ContextItem label="Adjustment" value={adjustmentLabel(metadata?.adjustment)} />
+        <ContextItem label="Total bars" value={formatNumber(totalBars)} />
+        <ContextItem label="Active bars" value={formatNumber(activeBars)} />
+        <ContextItem label="Warm-up bars" value={formatNumber(warmupBars)} />
+        <ContextItem label="Datasets" value={formatNumber(datasetCount)} />
+        <span
+          className={cn(
+            "inline-flex items-center gap-1 rounded px-2 py-1",
+            warnings.length
+              ? "bg-warn/10 text-warn"
+              : "bg-bg-subtle text-fg-subtle",
+          )}
+          data-testid="chart-lab-context-warnings"
+        >
+          {warnings.length ? (
+            <AlertTriangle className="h-3.5 w-3.5" aria-hidden="true" />
+          ) : null}
+          <span>Warnings: {warnings.length ? warnings.join(" | ") : "none"}</span>
+        </span>
+      </div>
+    </div>
+  );
+}
+
+function ContextItem({
+  label,
+  value,
+}: {
+  label: string;
+  value: string;
+}): JSX.Element {
+  return (
+    <span className="inline-flex items-center gap-1 rounded bg-bg-subtle px-2 py-1">
+      <span className="uppercase text-fg-subtle">{label}</span>
+      <span className="font-medium text-fg">{value}</span>
+    </span>
+  );
+}
+
 function ChartLabDensityToolbar({
   showSignalLabels,
   onToggleLabels,
+  chartMode,
+  onChartMode,
+  onResetZoom,
   density,
   onDensity,
 }: {
   showSignalLabels: boolean;
   onToggleLabels: (value: boolean) => void;
+  chartMode: StrategyPreviewChartMode;
+  onChartMode: (value: StrategyPreviewChartMode) => void;
+  onResetZoom: () => void;
   density: StrategyPreviewChartDensity;
   onDensity: (patch: Partial<StrategyPreviewChartDensity>) => void;
 }): JSX.Element {
   return (
     <div className="flex flex-col gap-2 border-b border-border/70 bg-bg-subtle/50 px-3 py-2 text-[11px]">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div
+          className="inline-flex overflow-hidden rounded border border-border bg-bg-inset"
+          role="group"
+          aria-label="Chart display mode"
+        >
+          <ChartModeButton
+            active={chartMode === "candles"}
+            label="Candles"
+            icon={<BarChart3 className="h-3.5 w-3.5" aria-hidden="true" />}
+            onClick={() => onChartMode("candles")}
+          />
+          <ChartModeButton
+            active={chartMode === "line"}
+            label="Line"
+            icon={<LineChart className="h-3.5 w-3.5" aria-hidden="true" />}
+            onClick={() => onChartMode("line")}
+          />
+        </div>
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          leftIcon={<RotateCcw className="h-3.5 w-3.5" aria-hidden="true" />}
+          onClick={onResetZoom}
+        >
+          Reset Zoom
+        </Button>
+      </div>
       <div className="flex flex-wrap gap-x-4 gap-y-1.5 text-fg-muted">
         <label className="inline-flex cursor-pointer items-center gap-2">
           <input
@@ -548,6 +660,33 @@ function ChartLabDensityToolbar({
         />
       </div>
     </div>
+  );
+}
+
+function ChartModeButton({
+  active,
+  label,
+  icon,
+  onClick,
+}: {
+  active: boolean;
+  label: string;
+  icon: React.ReactNode;
+  onClick: () => void;
+}): JSX.Element {
+  return (
+    <button
+      type="button"
+      className={cn(
+        "inline-flex h-7 items-center gap-1.5 px-2.5 text-xs font-medium transition-colors",
+        active ? "bg-accent text-bg" : "text-fg-muted hover:bg-bg-subtle hover:text-fg",
+      )}
+      aria-pressed={active}
+      onClick={onClick}
+    >
+      {icon}
+      {label}
+    </button>
   );
 }
 
@@ -646,6 +785,7 @@ function FeatureSystem({
   manualFeatures,
   selectedManualFeatures,
   libraryFeatures,
+  presetFeatures,
   groupedFeatures,
   visibleKeys,
   featureSearch,
@@ -660,6 +800,7 @@ function FeatureSystem({
   manualFeatures: ChartLabFeatureDescriptor[];
   selectedManualFeatures: ChartLabFeatureDescriptor[];
   libraryFeatures: ChartLabFeatureDescriptor[];
+  presetFeatures: ChartLabFeatureDescriptor[];
   groupedFeatures: Map<ChartLabFeatureGroup, ChartLabFeatureDescriptor[]>;
   visibleKeys: Set<string>;
   featureSearch: string;
@@ -717,6 +858,32 @@ function FeatureSystem({
           ) : (
             <div className="rounded border border-dashed border-border bg-bg-inset px-3 py-2 text-xs text-fg-subtle">
               No manual overlays added.
+            </div>
+          )}
+        </section>
+
+        <section className="space-y-2 border-t border-border/70 pt-3">
+          <div className="flex items-center justify-between">
+            <h3 className="text-xs font-semibold uppercase text-fg-muted">Common Presets</h3>
+            <StatusBadge tone="muted" size="sm">{presetFeatures.length}</StatusBadge>
+          </div>
+          {presetFeatures.length ? (
+            <div className="flex flex-wrap gap-1.5">
+              {presetFeatures.map((feature) => (
+                <button
+                  key={`preset-${feature.feature_key}`}
+                  type="button"
+                  className="rounded border border-border bg-bg-inset px-2 py-1 text-[11px] font-medium text-fg hover:border-accent/50"
+                  onClick={() => onAddManual(feature)}
+                  aria-label={`Add ${feature.name}`}
+                >
+                  {feature.name}
+                </button>
+              ))}
+            </div>
+          ) : (
+            <div className="rounded border border-dashed border-border bg-bg-inset px-3 py-2 text-xs text-fg-subtle">
+              No registry-backed presets for this timeframe.
             </div>
           )}
         </section>
@@ -1112,8 +1279,144 @@ function previewBarsFrom(response: ChartLabPreviewResponse | undefined): Preview
     high: bar.high,
     low: bar.low,
     close: bar.close,
+    volume: bar.volume,
     isWarmup: bar.is_warmup,
   }));
+}
+
+type PreviewStats = {
+  totalBars: number;
+  activeBars: number;
+  warmupBars: number;
+  entries: number;
+  exits: number;
+  missingVolumeBars: number;
+};
+
+function summarizePreview(response: ChartLabPreviewResponse | undefined): PreviewStats {
+  const stats: PreviewStats = {
+    totalBars: 0,
+    activeBars: 0,
+    warmupBars: 0,
+    entries: 0,
+    exits: 0,
+    missingVolumeBars: 0,
+  };
+  for (const bar of response?.bars ?? []) {
+    stats.totalBars += 1;
+    if (bar.is_warmup) stats.warmupBars += 1;
+    else stats.activeBars += 1;
+    if (typeof bar.volume !== "number" || !Number.isFinite(bar.volume)) {
+      stats.missingVolumeBars += 1;
+    }
+    for (const marker of bar.signal_markers) {
+      if (markerIsEntry(marker.marker_type)) stats.entries += 1;
+      else stats.exits += 1;
+    }
+  }
+  return stats;
+}
+
+function contextWarningsFor({
+  response,
+  stats,
+  timeframe,
+  stale,
+}: {
+  response: ChartLabPreviewResponse | undefined;
+  stats: PreviewStats;
+  timeframe: string;
+  stale: boolean;
+}): string[] {
+  const warnings = [...(response?.metadata?.warnings ?? [])];
+  if (response && !response.metadata) {
+    warnings.push("Missing data context: preview metadata was not returned.");
+  }
+  if (response && stats.totalBars === 0) {
+    warnings.push("Missing data: preview returned no bars.");
+  }
+  if (response && stats.missingVolumeBars > 0) {
+    warnings.push(`Partial data: ${stats.missingVolumeBars} bar(s) missing volume.`);
+  }
+  if (response && expectedWarmupBars(response, timeframe) > 0 && stats.warmupBars === 0) {
+    warnings.push("Missing warm-up: backend returned no warm-up bars.");
+  }
+  if (stale) {
+    warnings.push("Stale data: controls changed after this preview was loaded.");
+  }
+  return uniqueStrings(warnings);
+}
+
+function expectedWarmupBars(response: ChartLabPreviewResponse, timeframe: string): number {
+  const raw = (response.feature_plan as unknown as {
+    warmup_by_timeframe?: Record<string, unknown>;
+  }).warmup_by_timeframe;
+  const value = raw?.[timeframe];
+  return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
+function uniqueStrings(values: string[]): string[] {
+  return [...new Set(values.map((value) => value.trim()).filter(Boolean))];
+}
+
+function providerLabel(value: string | undefined): string {
+  if (!value) return "Unknown";
+  if (value.toLowerCase() === "alpaca") return "Alpaca";
+  if (value.toLowerCase() === "yahoo") return "Yahoo";
+  return value;
+}
+
+function adjustmentLabel(value: string | undefined): string {
+  if (value === "split_dividend_adjusted") return "Split + dividend";
+  if (value === "split_only") return "Split only";
+  if (value === "raw") return "Raw";
+  return value || "Unknown";
+}
+
+const COMMON_PRESET_LENGTHS: Record<string, number[] | null> = {
+  ema: [9, 20, 50, 200],
+  sma: [20, 50, 200],
+  rsi: [3, 14],
+  atr: [14],
+  macd: null,
+};
+
+function commonPresetFeatures(
+  features: ChartLabFeatureDescriptor[],
+): ChartLabFeatureDescriptor[] {
+  return features
+    .filter((feature) => {
+      const kind = featureKind(feature);
+      if (!(kind in COMMON_PRESET_LENGTHS)) return false;
+      const allowed = COMMON_PRESET_LENGTHS[kind];
+      if (allowed === null) return true;
+      const length = featureLength(feature);
+      return typeof length === "number" && allowed.includes(length);
+    })
+    .sort((a, b) => presetSortKey(a).localeCompare(presetSortKey(b)));
+}
+
+function featureKind(feature: ChartLabFeatureDescriptor): string {
+  const raw = feature.indicator_type.split(".").at(-1) ?? "";
+  if (raw.startsWith("macd")) return "macd";
+  return raw.toLowerCase();
+}
+
+function featureLength(feature: ChartLabFeatureDescriptor): number | null {
+  const match =
+    feature.feature_ref.match(/(?:length|period)=([0-9]+)/i) ??
+    feature.name.match(/\b([0-9]+)\b/);
+  if (!match) return null;
+  const value = Number(match[1]);
+  return Number.isFinite(value) ? value : null;
+}
+
+function presetSortKey(feature: ChartLabFeatureDescriptor): string {
+  const kind = featureKind(feature);
+  const length = featureLength(feature) ?? 0;
+  return `${Object.keys(COMMON_PRESET_LENGTHS).indexOf(kind)}-${length
+    .toString()
+    .padStart(3, "0")}-${feature.name}`;
 }
 
 function firstActiveIndex(response: ChartLabPreviewResponse): number {

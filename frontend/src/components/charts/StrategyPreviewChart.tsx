@@ -2,11 +2,13 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   CandlestickSeries,
   ColorType,
+  HistogramSeries,
   LineSeries,
   LineStyle,
   createChart,
   createSeriesMarkers,
   type CandlestickData,
+  type HistogramData,
   type IChartApi,
   type ISeriesApi,
   type ISeriesMarkersPluginApi,
@@ -44,8 +46,11 @@ export interface PreviewBarRow {
   high: number;
   low: number;
   close: number;
+  volume?: number | null;
   isWarmup?: boolean;
 }
+
+export type StrategyPreviewChartMode = "candles" | "line";
 
 export interface StrategyPreviewChartDensity {
   showEntries: boolean;
@@ -64,6 +69,8 @@ export interface StrategyPreviewChartProps {
   manualFeatureKeys: string[];
   visibleFeatureKeys: string[];
   density: StrategyPreviewChartDensity;
+  chartMode: StrategyPreviewChartMode;
+  resetZoomSignal: number;
   /** When true, markers may show compact text only on the hovered or selected bar. */
   showSignalLabels: boolean;
   selectedBarIndex: number | null | undefined;
@@ -115,6 +122,8 @@ const OSCILLATOR_KINDS = new Set([
   "roc",
   "ibs",
   "connors_rsi",
+  "zscore",
+  "z_score",
 ]);
 
 const DERIVED_LINE_COLORS = [
@@ -220,6 +229,32 @@ function candleForDensity(
   };
 }
 
+function closeLinePoint(
+  bar: PreviewBarRow,
+  showWarmupBars: boolean,
+): LineData<Time> | { time: Time } {
+  if (bar.isWarmup && !showWarmupBars) {
+    return { time: toUtcSeconds(bar.timestamp) };
+  }
+  return { time: toUtcSeconds(bar.timestamp), value: bar.close };
+}
+
+function withAlpha(rgbColor: string, alpha: number): string {
+  return rgbColor.replace(/^rgb\((.*)\)$/i, `rgba($1, ${alpha})`);
+}
+
+function volumePoint(
+  bar: PreviewBarRow,
+  tokens: ReturnType<typeof readTokens>,
+): HistogramData<Time> | null {
+  if (typeof bar.volume !== "number" || !Number.isFinite(bar.volume)) return null;
+  return {
+    time: toUtcSeconds(bar.timestamp),
+    value: bar.volume,
+    color: withAlpha(bar.close >= bar.open ? tokens.ok : tokens.danger, 0.34),
+  };
+}
+
 function normalizeBars(bars: PreviewBarRow[]): PreviewBarRow[] {
   const seen = new Map<number, PreviewBarRow>();
   for (const bar of bars) seen.set(toUtcSeconds(bar.timestamp), bar);
@@ -267,6 +302,12 @@ interface FeatureSeriesPoints {
   lineage: "derived" | "manual";
 }
 
+interface OscillatorGuide {
+  key: string;
+  value: number;
+  label: string;
+}
+
 function collectFeatureSeries(params: {
   preview: ChartLabBarPreview[];
   derivedKeys: Set<string>;
@@ -309,6 +350,53 @@ function collectFeatureSeries(params: {
   }));
 }
 
+function guideValuesForKind(kind: string): Array<{ value: number; label: string }> {
+  if (kind === "rsi" || kind === "connors_rsi") {
+    return [
+      { value: 70, label: "RSI 70" },
+      { value: 50, label: "RSI 50" },
+      { value: 30, label: "RSI 30" },
+    ];
+  }
+  if (kind === "stochastic_k" || kind === "stochastic_d") {
+    return [
+      { value: 80, label: "Stochastic 80" },
+      { value: 20, label: "Stochastic 20" },
+    ];
+  }
+  if (kind === "zscore" || kind === "z_score") {
+    return [
+      { value: 2, label: "Z-Score 2" },
+      { value: 0, label: "Z-Score 0" },
+      { value: -2, label: "Z-Score -2" },
+    ];
+  }
+  if (kind === "macd" || kind === "macd_signal" || kind === "macd_histogram") {
+    return [{ value: 0, label: "MACD 0" }];
+  }
+  if (kind === "ibs") {
+    return [
+      { value: 0.8, label: "IBS 0.8" },
+      { value: 0.5, label: "IBS 0.5" },
+      { value: 0.2, label: "IBS 0.2" },
+    ];
+  }
+  return [];
+}
+
+function collectOscillatorGuides(series: FeatureSeriesPoints[]): OscillatorGuide[] {
+  const guides = new Map<string, OscillatorGuide>();
+  for (const entry of series) {
+    const kind = entry.parsed?.kind;
+    if (!kind) continue;
+    for (const guide of guideValuesForKind(kind)) {
+      const key = `${guide.label}:${guide.value}`;
+      guides.set(key, { key, ...guide });
+    }
+  }
+  return [...guides.values()];
+}
+
 function warmupBandLayout(args: {
   chart: IChartApi;
   preview: ChartLabBarPreview[];
@@ -341,6 +429,8 @@ export function StrategyPreviewChart({
   manualFeatureKeys,
   visibleFeatureKeys,
   density,
+  chartMode,
+  resetZoomSignal,
   showSignalLabels,
   selectedBarIndex,
   onBarClick,
@@ -351,9 +441,13 @@ export function StrategyPreviewChart({
   const containerRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const candleRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
-  const markersRef = useRef<ISeriesMarkersPluginApi<Time> | null>(null);
+  const closeLineRef = useRef<ISeriesApi<"Line"> | null>(null);
+  const volumeRef = useRef<ISeriesApi<"Histogram"> | null>(null);
+  const candleMarkersRef = useRef<ISeriesMarkersPluginApi<Time> | null>(null);
+  const lineMarkersRef = useRef<ISeriesMarkersPluginApi<Time> | null>(null);
   const overlaySeriesRef = useRef<Map<string, ISeriesApi<"Line">>>(new Map());
   const oscillatorSeriesRef = useRef<Map<string, ISeriesApi<"Line">>>(new Map());
+  const oscillatorGuideSeriesRef = useRef<Map<string, ISeriesApi<"Line">>>(new Map());
   const tokensRef = useRef(readTokens());
 
   const [warmupBand, setWarmupBand] = useState<{
@@ -370,6 +464,24 @@ export function StrategyPreviewChart({
   previewRef.current = preview;
 
   const sortedBars = useMemo(() => normalizeBars(bars), [bars]);
+  const candleData = useMemo(
+    () =>
+      sortedBars.map((bar) =>
+        candleForDensity(bar, tokensRef.current, density.showWarmupBars),
+      ),
+    [density.showWarmupBars, sortedBars],
+  );
+  const closeLineData = useMemo(
+    () => sortedBars.map((bar) => closeLinePoint(bar, density.showWarmupBars)),
+    [density.showWarmupBars, sortedBars],
+  );
+  const volumeData = useMemo(
+    () =>
+      sortedBars
+        .map((bar) => volumePoint(bar, tokensRef.current))
+        .filter((point): point is HistogramData<Time> => point !== null),
+    [sortedBars],
+  );
   const derivedSet = useMemo(() => new Set(derivedFeatureKeys), [derivedFeatureKeys]);
   const manualSet = useMemo(() => new Set(manualFeatureKeys), [manualFeatureKeys]);
   const visibleKeySet = useMemo(() => new Set(visibleFeatureKeys), [visibleFeatureKeys]);
@@ -401,6 +513,10 @@ export function StrategyPreviewChart({
   const oscillatorSeriesData = useMemo(
     () => series.filter((s) => !isPriceOverlay(s.parsed) && isOscillator(s.parsed)),
     [series],
+  );
+  const oscillatorGuides = useMemo(
+    () => collectOscillatorGuides(oscillatorSeriesData),
+    [oscillatorSeriesData],
   );
 
   const indexByTs = useMemo(() => {
@@ -518,7 +634,31 @@ export function StrategyPreviewChart({
       wickDownColor: tokens.danger,
     });
     candleRef.current = candle;
-    markersRef.current = createSeriesMarkers(candle, []);
+    candleMarkersRef.current = createSeriesMarkers(candle, []);
+
+    const closeLine = chart.addSeries(LineSeries, {
+      color: tokens.accent,
+      lineWidth: 2,
+      lastValueVisible: false,
+      priceLineVisible: false,
+      title: "Close",
+      visible: false,
+    });
+    closeLineRef.current = closeLine;
+    lineMarkersRef.current = createSeriesMarkers(closeLine, []);
+
+    const volume = chart.addSeries(
+      HistogramSeries,
+      {
+        color: withAlpha(tokens.fgMuted, 0.28),
+        lastValueVisible: false,
+        priceFormat: { type: "volume" },
+        priceLineVisible: false,
+        title: "Volume",
+      },
+      1,
+    );
+    volumeRef.current = volume;
 
     const observer = new ResizeObserver(() => {
       if (!containerRef.current || !chartRef.current) return;
@@ -540,24 +680,40 @@ export function StrategyPreviewChart({
       chart.timeScale().unsubscribeVisibleTimeRangeChange(onVisibleRange);
       chart.timeScale().unsubscribeVisibleLogicalRangeChange(onLogicalRange);
       observer.disconnect();
-      markersRef.current?.detach();
-      markersRef.current = null;
+      candleMarkersRef.current?.detach();
+      lineMarkersRef.current?.detach();
+      candleMarkersRef.current = null;
+      lineMarkersRef.current = null;
       overlaySeriesRef.current.clear();
       oscillatorSeriesRef.current.clear();
+      oscillatorGuideSeriesRef.current.clear();
       chart.remove();
       chartRef.current = null;
       candleRef.current = null;
+      closeLineRef.current = null;
+      volumeRef.current = null;
     };
   }, [height]);
 
   useEffect(() => {
-    if (!candleRef.current || !chartRef.current) return;
-    candleRef.current.setData(
-      sortedBars.map((bar) => candleForDensity(bar, tokensRef.current, density.showWarmupBars)),
-    );
+    if (!candleRef.current || !closeLineRef.current || !volumeRef.current || !chartRef.current) {
+      return;
+    }
+    candleRef.current.setData(candleData);
+    closeLineRef.current.setData(closeLineData);
+    volumeRef.current.setData(volumeData);
+    candleRef.current.applyOptions({ visible: chartMode === "candles" });
+    closeLineRef.current.applyOptions({ visible: chartMode === "line" });
+    volumeRef.current.applyOptions({ visible: volumeData.length > 0 });
     chartRef.current.timeScale().fitContent();
     refreshWarmupLayout();
-  }, [density.showWarmupBars, sortedBars]);
+  }, [candleData, chartMode, closeLineData, volumeData]);
+
+  useEffect(() => {
+    if (!chartRef.current) return;
+    chartRef.current.timeScale().fitContent();
+    refreshWarmupLayout();
+  }, [resetZoomSignal]);
 
   useEffect(() => {
     const chart = chartRef.current;
@@ -651,12 +807,56 @@ export function StrategyPreviewChart({
     };
 
     reconcile(overlaySeriesData, overlaySeriesRef.current, 0);
-    reconcile(oscillatorSeriesData, oscillatorSeriesRef.current, 1);
+    reconcile(oscillatorSeriesData, oscillatorSeriesRef.current, 2);
   }, [overlaySeriesData, oscillatorSeriesData]);
 
   useEffect(() => {
-    if (!markersRef.current) return;
-    markersRef.current.setMarkers(markers);
+    const chart = chartRef.current;
+    if (!chart) return;
+
+    const desiredKeys = new Set(oscillatorGuides.map((guide) => guide.key));
+    for (const [key, series] of oscillatorGuideSeriesRef.current.entries()) {
+      if (!desiredKeys.has(key)) {
+        try {
+          chart.removeSeries(series);
+        } catch {
+          //
+        }
+        oscillatorGuideSeriesRef.current.delete(key);
+      }
+    }
+    if (sortedBars.length === 0) return;
+    const firstTime = toUtcSeconds(sortedBars[0].timestamp);
+    const lastTime = toUtcSeconds(sortedBars[sortedBars.length - 1].timestamp);
+    oscillatorGuides.forEach((guide) => {
+      let line = oscillatorGuideSeriesRef.current.get(guide.key);
+      if (!line) {
+        line = chart.addSeries(
+          LineSeries,
+          {
+            color: withAlpha(tokensRef.current.fgMuted, 0.55),
+            lineWidth: 1,
+            lineStyle: LineStyle.Dotted,
+            lastValueVisible: false,
+            priceLineVisible: false,
+            title: guide.label,
+          },
+          2,
+        );
+        oscillatorGuideSeriesRef.current.set(guide.key, line);
+      } else {
+        line.applyOptions({ title: guide.label });
+      }
+      line.setData([
+        { time: firstTime, value: guide.value },
+        { time: lastTime, value: guide.value },
+      ]);
+    });
+  }, [oscillatorGuides, sortedBars]);
+
+  useEffect(() => {
+    candleMarkersRef.current?.setMarkers(markers);
+    lineMarkersRef.current?.setMarkers(markers);
     refreshWarmupLayout();
   }, [markers]);
 
@@ -664,6 +864,7 @@ export function StrategyPreviewChart({
     <div
       className={cn("relative w-full", className)}
       aria-label={`Strategy preview chart for ${symbol}`}
+      data-testid="strategy-preview-chart-real"
     >
       {density.showWarmupBars ? (
         warmupBand?.shadeLeft !== undefined ? (
@@ -701,6 +902,14 @@ export function StrategyPreviewChart({
         {symbol}
         {plan.feature_keys.length ? ` - ${plan.feature_keys.length} plan keys` : ""}
       </div>
+      {volumeData.length ? (
+        <div
+          className="pointer-events-none absolute left-3 bottom-12 z-10 rounded bg-bg-inset/85 px-2 py-0.5 text-[10px] font-semibold uppercase text-fg-muted"
+          data-testid="chart-lab-volume-pane"
+        >
+          Volume
+        </div>
+      ) : null}
       <div ref={containerRef} style={{ height }} className="w-full" />
     </div>
   );

@@ -115,6 +115,28 @@ export const ChartLabBarPreviewSchema = z.object({
 });
 export type ChartLabBarPreview = z.infer<typeof ChartLabBarPreviewSchema>;
 
+export type ChartLabMetadata = {
+  provider: string;
+  adjustment: string;
+  total_bars: number;
+  active_bars: number;
+  warmup_bars: number;
+  dataset_count: number;
+  warnings: string[];
+};
+
+export const ChartLabMetadataSchema: z.ZodType<ChartLabMetadata> = z
+  .object({
+    provider: z.string(),
+    adjustment: z.string(),
+    total_bars: z.number(),
+    active_bars: z.number(),
+    warmup_bars: z.number(),
+    dataset_count: z.number(),
+    warnings: z.array(z.string()),
+  })
+  .strict();
+
 export const ChartLabFeatureSpecSchema = z
   .object({
     kind: z.string(),
@@ -180,6 +202,7 @@ export const ChartLabPreviewResponseSchema = z.object({
   feature_plan: ChartLabFeaturePlanSchema,
   features: z.array(ChartLabFeatureDescriptorSchema).default([]),
   bars: z.array(ChartLabBarPreviewSchema).default([]),
+  metadata: ChartLabMetadataSchema.optional(),
   evidence: ChartLabPreviewEvidenceSchema.nullable().optional(),
 });
 export type ChartLabPreviewResponse = z.infer<typeof ChartLabPreviewResponseSchema>;

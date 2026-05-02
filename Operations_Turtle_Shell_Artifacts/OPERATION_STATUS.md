@@ -1,6 +1,6 @@
 # Operation Turtle Shell Status
 
-Last updated: 2026-05-02 16:36:00 -04:00
+Last updated: 2026-05-02 17:30:00 -04:00
 
 ## Date And Time Syntax
 
@@ -26,17 +26,17 @@ drawer). It does not add trading, broker submit, or a second runtime root.
 
 ## Executive Briefing
 
-Work session status: in_progress
+Work session status: completed
 
 Agent role: Codex - research labs and ChartLab verification spine
 
 Started at: 2026-05-02 08:45:00 -04:00
 
-Last heartbeat: 2026-05-02 16:36:00 -04:00
+Last heartbeat: 2026-05-02 17:30:00 -04:00
 
-Ended at: in progress
+Ended at: 2026-05-02 17:30:00 -04:00
 
-Current: ChartLab signal/feature verification redesign is complete; live-preview hotfix is applied. Chart readability slice shipped: markers default to arrows only (signal labels gated), density toggles, warm-up shaded band **plus** inspector/hover attribution from `/chart-lab/preview` payloads only — no frontend indicator recomputation beyond routing keys to panes/colors/lines.
+Current: ChartLab operator polish shipped and Codex research leases released for commit/merge/push closeout. Next work will start on the new PortLogic abstraction feature branch.
 
 Operator urgency:
 
@@ -72,6 +72,15 @@ Codex
 - Codex doctrine reviewer
 
 ## Latest Completed Action
+
+ChartLab operator polish:
+
+- Completed at: 2026-05-02 17:12:00 -04:00
+- Contract: `POST /api/v1/chart-lab/preview` now returns optional strict `metadata` with provider, adjustment, total/active/warm-up bars, dataset count, and warnings. Dataset UUIDs stay out of the operator-facing strip.
+- Frontend: ChartLab renders a compact data context strip above the chart, warning text for missing/partial/stale/missing-warm-up states, registry-backed common preset chips, candle/close-line toggle, reset zoom, backend-volume pane, and display-only oscillator reference guides.
+- Doctrine: all overlays and feature values still come from `/api/v1/chart-lab/preview`; presets only select backend FeatureRegistry descriptors; no OHLC-derived indicators or trading actions were added.
+- Verification: `npm.cmd run typecheck` passed; `npm.cmd exec vitest run src/routes/ChartLab.test.tsx -- --reporter dot` -> 11 passed; `python -m pytest backend/tests/unit/chart_lab/test_chart_lab_preview_service.py backend/tests/unit/api/test_chart_lab_route.py -q` -> 29 passed, 1 warning.
+- E2E note: `frontend/e2e/chartlab.smoke.ts` added as a real, non-mock smoke. Exact command `npm.cmd exec playwright test chartlab.smoke.ts` currently reports "No tests found" because this repo has no Playwright config and Playwright's default discovery ignores `.smoke.ts` files.
 
 ChartLab live preview hotfix:
 

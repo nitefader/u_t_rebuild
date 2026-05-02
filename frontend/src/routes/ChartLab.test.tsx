@@ -10,6 +10,8 @@ const chartCalls = vi.hoisted(() => ({
     visibleFeatureKeys: string[];
     showSignalLabels: boolean;
     density: { showWarmupBars?: boolean };
+    chartMode: "candles" | "line";
+    resetZoomSignal: number;
     onBarClick?: (index: number) => void;
   }>,
 }));
@@ -21,6 +23,8 @@ vi.mock("@/components/charts/StrategyPreviewChart", () => ({
     visibleFeatureKeys: string[];
     showSignalLabels?: boolean;
     density: { showWarmupBars?: boolean };
+    chartMode: "candles" | "line";
+    resetZoomSignal: number;
     onBarClick?: (index: number) => void;
   }) => {
     chartCalls.props.push(props as never);
@@ -29,6 +33,8 @@ vi.mock("@/components/charts/StrategyPreviewChart", () => ({
         <span data-testid="chart-mock-signal-label-flag">
           {props.showSignalLabels ? "labels-on" : "labels-off"}
         </span>
+        <span data-testid="chart-mock-mode">{props.chartMode}</span>
+        <span data-testid="chart-mock-reset">{props.resetZoomSignal}</span>
         {props.symbol} - {props.bars.filter((bar) => bar.isWarmup).length} warm-up -{" "}
         {props.visibleFeatureKeys.length} overlays
         <button
@@ -276,6 +282,15 @@ function previewResponse(args: { strategy?: boolean } = {}) {
         non_fire_reasons: [],
       },
     ],
+    metadata: {
+      provider: "alpaca",
+      adjustment: "split_dividend_adjusted",
+      total_bars: 2,
+      active_bars: 1,
+      warmup_bars: 1,
+      dataset_count: 1,
+      warnings: strategy ? ["partial data from provider cache"] : [],
+    },
     evidence: strategy
       ? {
           evidence_id: "55555555-5555-5555-5555-555555555555",
@@ -323,7 +338,7 @@ describe("<ChartLab />", () => {
     });
     expect(screen.queryByText(/Features Used by Strategy/i)).not.toBeInTheDocument();
 
-    await userEvent.click(await screen.findByText("RSI 14"));
+    await userEvent.click(await screen.findByRole("button", { name: /Add RSI 14/i }));
     fireEvent.click(screen.getByRole("button", { name: /Load Data/i }));
 
     await waitFor(() => {
@@ -400,6 +415,52 @@ describe("<ChartLab />", () => {
     expect(screen.getAllByText(/warm-up/i).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/active/i).length).toBeGreaterThan(0);
     expect(screen.getAllByText("455.12").length).toBeGreaterThan(0);
+  });
+
+  it("renders the data context strip with human-readable metadata and visible warnings", async () => {
+    mount(previewResponse({ strategy: true }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("option", { name: /Daily Breakout/i })).toBeInTheDocument();
+    });
+    await userEvent.selectOptions(screen.getByLabelText("Strategy"), STRATEGY_ID);
+    fireEvent.click(screen.getByRole("button", { name: /Load Data/i }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("chart-lab-context-strip")).toHaveTextContent("ProviderAlpaca");
+    });
+    const strip = screen.getByTestId("chart-lab-context-strip");
+    expect(strip).toHaveTextContent("AdjustmentSplit + dividend");
+    expect(strip).toHaveTextContent("Total bars2");
+    expect(strip).toHaveTextContent("Active bars1");
+    expect(strip).toHaveTextContent("Warm-up bars1");
+    expect(strip).toHaveTextContent("Datasets1");
+    expect(screen.getByTestId("chart-lab-context-warnings")).toHaveTextContent(
+      "partial data from provider cache",
+    );
+    expect(strip).not.toHaveTextContent("44444444-4444-4444-4444-444444444444");
+  });
+
+  it("switches between candle and close-line modes and exposes reset zoom", async () => {
+    mount(previewResponse({ strategy: true }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("option", { name: /Daily Breakout/i })).toBeInTheDocument();
+    });
+    await userEvent.selectOptions(screen.getByLabelText("Strategy"), STRATEGY_ID);
+    fireEvent.click(screen.getByRole("button", { name: /Load Data/i }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("chart-mock-mode")).toHaveTextContent("candles");
+    });
+    await userEvent.click(screen.getByRole("button", { name: /Line/i }));
+    await waitFor(() => {
+      expect(screen.getByTestId("chart-mock-mode")).toHaveTextContent("line");
+    });
+    await userEvent.click(screen.getByRole("button", { name: /Reset Zoom/i }));
+    await waitFor(() => {
+      expect(screen.getByTestId("chart-mock-reset")).toHaveTextContent("1");
+    });
   });
 
   it("defaults signal labels off so the chart chrome does not imply raw marker text spam", async () => {
