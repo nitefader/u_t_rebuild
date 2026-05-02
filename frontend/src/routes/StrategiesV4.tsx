@@ -18,7 +18,9 @@ import {
   DrawerTitle,
   DrawerDescription,
 } from "@/components/ui/Drawer";
+import { HoldToArmConfirm } from "@/components/ui/HoldToArmConfirm";
 import { TextField } from "@/components/ui/TextField";
+import { useToast } from "@/components/ui/Toast";
 import { StatusBadge } from "@/components/badges/StatusBadge";
 import { LoadingState } from "@/components/empty/LoadingState";
 import { ErrorState } from "@/components/empty/ErrorState";
@@ -87,6 +89,7 @@ export function StrategiesV4(): JSX.Element {
 function StrategyHeadCard({ strategy }: { strategy: StrategyHeadSummary }): JSX.Element {
   const navigate = useNavigate();
   const qc = useQueryClient();
+  const toast = useToast();
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [duplicateOpen, setDuplicateOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -95,10 +98,22 @@ function StrategyHeadCard({ strategy }: { strategy: StrategyHeadSummary }): JSX.
     mutationFn: () => deleteStrategy(strategy.strategy_v4_id),
     onSuccess: () => {
       setDeleteOpen(false);
+      toast.show({
+        severity: "ok",
+        title: `Deleted strategy "${strategy.name}"`,
+        description: `All ${strategy.total_versions} version${strategy.total_versions === 1 ? "" : "s"} removed.`,
+      });
       void qc.invalidateQueries({ queryKey: ["strategies-v4", "heads"] });
     },
-    onError: (e) =>
-      setError(e instanceof ApiError ? e.detail ?? e.message : String(e)),
+    onError: (e) => {
+      const detail = e instanceof ApiError ? e.detail ?? e.message : String(e);
+      setError(detail);
+      toast.show({
+        severity: "danger",
+        title: `Could not delete "${strategy.name}"`,
+        description: detail,
+      });
+    },
   });
 
   return (
@@ -159,36 +174,25 @@ function StrategyHeadCard({ strategy }: { strategy: StrategyHeadSummary }): JSX.
         ) : null}
       </Card>
 
-      {/* Delete confirmation drawer */}
-      <Drawer open={deleteOpen} onOpenChange={setDeleteOpen}>
-        <DrawerContent>
-          <DrawerHeader>
-            <DrawerTitle>Delete strategy</DrawerTitle>
-            <DrawerDescription>
-              This permanently deletes all versions of <strong>{strategy.name}</strong>. This
-              action cannot be undone.
-            </DrawerDescription>
-          </DrawerHeader>
-          <DrawerBody>
-            <p className="text-sm text-fg-muted">
-              All versions of this strategy will be permanently deleted.
-            </p>
-          </DrawerBody>
-          <DrawerFooter>
-            <Button variant="ghost" size="sm" onClick={() => setDeleteOpen(false)}>
-              Cancel
-            </Button>
-            <Button
-              variant="danger"
-              size="sm"
-              loading={deleteMutation.isPending}
-              onClick={() => deleteMutation.mutate()}
-            >
-              Delete permanently
-            </Button>
-          </DrawerFooter>
-        </DrawerContent>
-      </Drawer>
+      <HoldToArmConfirm
+        open={deleteOpen}
+        onOpenChange={setDeleteOpen}
+        title={`Delete "${strategy.name}"?`}
+        message={
+          <span>
+            This permanently deletes all <strong>{strategy.total_versions}</strong> version
+            {strategy.total_versions === 1 ? "" : "s"} of <strong>{strategy.name}</strong>. Active
+            Deployments referencing any version will be unbound. This action cannot be undone.
+          </span>
+        }
+        actionLabel="Delete strategy"
+        tone="danger"
+        busy={deleteMutation.isPending}
+        notePlaceholder="Why are you deleting this strategy?"
+        onConfirm={async () => {
+          await deleteMutation.mutateAsync();
+        }}
+      />
 
       {/* Duplicate drawer */}
       {duplicateOpen ? (
@@ -216,6 +220,7 @@ function DuplicateStrategyDrawer({
 }): JSX.Element {
   const navigate = useNavigate();
   const qc = useQueryClient();
+  const toast = useToast();
   const [newName, setNewName] = useState(`${sourceName} (copy)`);
   const [error, setError] = useState<string | null>(null);
 
@@ -224,10 +229,22 @@ function DuplicateStrategyDrawer({
     onSuccess: (version) => {
       void qc.invalidateQueries({ queryKey: ["strategies-v4", "heads"] });
       onOpenChange(false);
+      toast.show({
+        severity: "ok",
+        title: `Duplicated as "${newName.trim()}"`,
+        description: `Opening the new strategy in the editor.`,
+      });
       navigate(`${ROUTE_STRATEGIES_COMPOSE}?id=${version.id}`);
     },
-    onError: (e) =>
-      setError(e instanceof ApiError ? e.detail ?? e.message : String(e)),
+    onError: (e) => {
+      const detail = e instanceof ApiError ? e.detail ?? e.message : String(e);
+      setError(detail);
+      toast.show({
+        severity: "danger",
+        title: `Could not duplicate "${sourceName}"`,
+        description: detail,
+      });
+    },
   });
 
   return (

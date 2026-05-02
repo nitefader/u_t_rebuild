@@ -4,6 +4,8 @@ import { ArrowLeftRight, Activity, Play } from "lucide-react";
 import { ApiError } from "@/api/client";
 import { SimLabApi } from "@/api/researchRuns";
 import { StrategiesApi } from "@/api/strategies";
+import { StrategyControlsApi } from "@/api/strategyControls";
+import { ExecutionPlansApi } from "@/api/executionPlans";
 import {
   SimLabStreamMessageSchema,
   type SimLabBatchRunRequest,
@@ -35,8 +37,10 @@ import {
 } from "@/components/charts/SimLabReplayChart";
 import { LoadingState } from "@/components/empty/LoadingState";
 import { EmptyState } from "@/components/empty/EmptyState";
+import { StaleState } from "@/components/empty/StaleState";
 import { AwaitingApiOrError } from "@/components/empty/AwaitingApi";
 import { Select } from "@/components/ui/Select";
+import { RiskPlanPicker } from "@/components/risk_plans/RiskPlanPicker";
 import { PageHeader } from "./PageHeader";
 import { formatCurrency, formatTimestamp, formatQuantity, relativeTime } from "@/lib/format";
 
@@ -491,6 +495,9 @@ function dateOnly(iso: string | null | undefined): string {
 interface BatchForm {
   strategyId: string;
   versionId: string;
+  strategyControlsVersionId: string;
+  executionPlanVersionId: string;
+  riskPlanVersionId: string;
   scenarioName: string;
   universe: string;
   timeframe: string;
@@ -506,6 +513,9 @@ function defaultBatchForm(): BatchForm {
   return {
     strategyId: "",
     versionId: "",
+    strategyControlsVersionId: "",
+    executionPlanVersionId: "",
+    riskPlanVersionId: "",
     scenarioName: "",
     universe: "SPY",
     timeframe: "5m",
@@ -542,10 +552,38 @@ function BatchRunDrawer({
     queryFn: () => StrategiesApi.listVersions(form.strategyId),
     enabled: Boolean(form.strategyId),
   });
+  const strategyControls = useQuery({
+    queryKey: ["strategy-controls", "list"],
+    queryFn: () => StrategyControlsApi.list(),
+    enabled: open,
+  });
+  const executionPlans = useQuery({
+    queryKey: ["execution-plans", "list"],
+    queryFn: () => ExecutionPlansApi.list(),
+    enabled: open,
+  });
 
   const allVersions: StrategyVersionRecord[] = useMemo(() => {
     return [...(versions.data ?? [])].sort((a, b) => a.version - b.version);
   }, [versions.data]);
+
+  useEffect(() => {
+    if (!form.strategyControlsVersionId && strategyControls.data?.libraries?.length) {
+      const preferred =
+        strategyControls.data.libraries.find((library) => library.is_default) ??
+        strategyControls.data.libraries[0];
+      setForm((prev) => ({ ...prev, strategyControlsVersionId: preferred.head_version_id ?? "" }));
+    }
+  }, [form.strategyControlsVersionId, strategyControls.data]);
+
+  useEffect(() => {
+    if (!form.executionPlanVersionId && executionPlans.data?.libraries?.length) {
+      const preferred =
+        executionPlans.data.libraries.find((library) => library.is_default) ??
+        executionPlans.data.libraries[0];
+      setForm((prev) => ({ ...prev, executionPlanVersionId: preferred.head_version_id ?? "" }));
+    }
+  }, [form.executionPlanVersionId, executionPlans.data]);
 
   function reset(): void {
     setForm(defaultBatchForm());
@@ -568,10 +606,16 @@ function BatchRunDrawer({
     }
     if (!form.strategyId) throw new Error("Pick a strategy.");
     if (!form.versionId) throw new Error("Pick a version.");
+    if (!form.strategyControlsVersionId) throw new Error("Pick a Strategy Control.");
+    if (!form.executionPlanVersionId) throw new Error("Pick an Execution Plan.");
+    if (!form.riskPlanVersionId) throw new Error("Pick a Risk Plan.");
     if (!form.scenarioName.trim()) throw new Error("Scenario name is required.");
     return {
       strategy_id: form.strategyId,
       strategy_version_id: form.versionId,
+      strategy_controls_version_id: form.strategyControlsVersionId,
+      execution_plan_version_id: form.executionPlanVersionId,
+      risk_plan_version_id: form.riskPlanVersionId,
       scenario_name: form.scenarioName.trim(),
       universe,
       timeframe: form.timeframe.trim() || "5m",
@@ -662,6 +706,59 @@ function BatchRunDrawer({
               </option>
             ))}
           </Select>
+          <Select
+            label="Strategy Control"
+            value={form.strategyControlsVersionId}
+            onChange={(e) => setForm({ ...form, strategyControlsVersionId: e.target.value })}
+            hint="Pins timeframe, sessions, and Strategy Control rules for this replay snapshot."
+          >
+            <option value="">-- pick --</option>
+            {(strategyControls.data?.libraries ?? []).map((library) => (
+              <option
+                key={library.strategy_controls_id}
+                value={library.head_version_id ?? ""}
+                disabled={!library.head_version_id}
+              >
+                {library.name} v{library.head_version_number}
+                {library.is_default ? " · default" : ""}
+              </option>
+            ))}
+          </Select>
+          <Select
+            label="Execution Plan"
+            value={form.executionPlanVersionId}
+            onChange={(e) => setForm({ ...form, executionPlanVersionId: e.target.value })}
+            hint="Pins the exact simulated order and bracket behavior for this replay."
+          >
+            <option value="">-- pick --</option>
+            {(executionPlans.data?.libraries ?? []).map((library) => (
+              <option
+                key={library.execution_plan_id}
+                value={library.head_version_id ?? ""}
+                disabled={!library.head_version_id}
+              >
+                {library.name} v{library.head_version_number}
+                {library.is_default ? " · default" : ""}
+              </option>
+            ))}
+          </Select>
+          <RiskPlanPicker
+            label="Risk Plan"
+            required
+            value={form.riskPlanVersionId || null}
+            onChange={(next) => setForm({ ...form, riskPlanVersionId: next ?? "" })}
+            hint="Required. Sim Lab uses it through RiskResolver exactly like a deployment-like run."
+          />
+          <div className="rounded border border-border bg-bg-subtle px-3 py-2 text-xs text-fg-muted">
+            <div className="mb-1 flex flex-wrap gap-1.5">
+              <StatusBadge tone="muted">Data source: simulated</StatusBadge>
+              <StatusBadge tone="muted">Adjustment: raw</StatusBadge>
+            </div>
+            <span>
+              Sim Lab uses deterministic generated bars for execution-path verification. Use Chart
+              Lab, Backtest, Optimization, or Walk-Forward when provider data policy must vary.
+            </span>
+          </div>
           <TextField
             label="Scenario name"
             value={form.scenarioName}
@@ -861,6 +958,18 @@ function SimLabStreamView({
 
         {visibleError ? (
           <Banner severity="danger" title="Stream warning" message={visibleError} />
+        ) : null}
+
+        {!completed && ws.status !== "open" && totalCount(state.barsBySymbol) > 0 ? (
+          <StaleState
+            title="Replay stream is not connected"
+            message="Showing the bars and fills received so far. Replay will resume when the stream reconnects."
+            detail={
+              ws.lastEventAt
+                ? `last update ${relativeTime(ws.lastEventAt.toISOString())}`
+                : undefined
+            }
+          />
         ) : null}
 
         <ReplayCharts

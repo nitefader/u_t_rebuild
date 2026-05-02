@@ -9,6 +9,7 @@ import { Banner } from "@/components/ui/Banner";
 import { Button } from "@/components/ui/Button";
 import { Card, CardBody, CardHeader, CardTitle } from "@/components/ui/Card";
 import { HoldToArmConfirm } from "@/components/ui/HoldToArmConfirm";
+import { useToast } from "@/components/ui/Toast";
 import {
   Drawer,
   DrawerBody,
@@ -30,6 +31,7 @@ import { relativeTime } from "@/lib/format";
 
 export function Watchlists(): JSX.Element {
   const qc = useQueryClient();
+  const toast = useToast();
   const list = useQuery({
     queryKey: ["watchlists", "list"],
     queryFn: () => WatchlistsApi.list(),
@@ -114,6 +116,23 @@ export function Watchlists(): JSX.Element {
             .map((item) => `${item.watchlist.name}: ${errorText(item.result.reason)}`)
             .join(" ")}`,
     );
+    if (succeeded.length > 0) {
+      toast.show({
+        severity: failed.length > 0 ? "warn" : "ok",
+        title: `${verb} ${succeeded.length} Watchlist${succeeded.length === 1 ? "" : "s"}`,
+        description:
+          failed.length > 0
+            ? `${failed.length} blocked — see banner for detail.`
+            : undefined,
+      });
+    }
+    if (failed.length > 0 && succeeded.length === 0) {
+      toast.show({
+        severity: "danger",
+        title: `${verb === "Deleted" ? "Delete" : "Archive"} blocked`,
+        description: `${failed.length} Watchlist${failed.length === 1 ? "" : "s"} could not be ${verb.toLowerCase()}.`,
+      });
+    }
     void qc.invalidateQueries({ queryKey: ["watchlists", "list"] });
   }
 

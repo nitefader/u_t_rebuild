@@ -1,56 +1,49 @@
-import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { installFetchMock, renderRoute } from "@/test/renderRoute";
 
-// jsdom cannot render lightweight-charts (no canvas / ResizeObserver
-// edge cases). Replace the chart components with placeholders so the
-// surrounding form / checklist / signal-table behavior stays under test.
-vi.mock("@/components/charts/StrategyPreviewChart", () => ({
-  StrategyPreviewChart: (props: { symbol: string }) => (
-    <div data-testid="strategy-preview-chart">{props.symbol}</div>
-  ),
+const chartCalls = vi.hoisted(() => ({
+  props: [] as Array<{
+    symbol: string;
+    bars: Array<{ isWarmup?: boolean }>;
+    visibleFeatureKeys: string[];
+    showSignalLabels: boolean;
+    density: { showWarmupBars?: boolean };
+    onBarClick?: (index: number) => void;
+  }>,
 }));
-vi.mock("@/components/charts/PriceChart", () => ({
-  PriceChart: (props: { symbol: string }) => (
-    <div data-testid="price-chart">{props.symbol}</div>
-  ),
+
+vi.mock("@/components/charts/StrategyPreviewChart", () => ({
+  StrategyPreviewChart: (props: {
+    symbol: string;
+    bars: Array<{ isWarmup?: boolean }>;
+    visibleFeatureKeys: string[];
+    showSignalLabels?: boolean;
+    density: { showWarmupBars?: boolean };
+    onBarClick?: (index: number) => void;
+  }) => {
+    chartCalls.props.push(props as never);
+    return (
+      <div data-testid="strategy-preview-chart">
+        <span data-testid="chart-mock-signal-label-flag">
+          {props.showSignalLabels ? "labels-on" : "labels-off"}
+        </span>
+        {props.symbol} - {props.bars.filter((bar) => bar.isWarmup).length} warm-up -{" "}
+        {props.visibleFeatureKeys.length} overlays
+        <button
+          type="button"
+          data-testid="simulate-chart-bar-click"
+          onClick={() => props.onBarClick?.(1)}
+        >
+          Select bar 1
+        </button>
+      </div>
+    );
+  },
 }));
 
 import { ChartLab } from "./ChartLab";
-
-// jsdom does not implement WebSocket. Chart Lab's stream pane opens one
-// when the operator hits Stream. The stub never delivers messages so the
-// stream pane renders its empty state cleanly during tests.
-class StubWebSocket {
-  static CONNECTING = 0;
-  static OPEN = 1;
-  static CLOSING = 2;
-  static CLOSED = 3;
-  readyState = StubWebSocket.CONNECTING;
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  constructor(_url: string) {}
-  addEventListener(): void {}
-  removeEventListener(): void {}
-  send(): void {}
-  close(): void {
-    this.readyState = StubWebSocket.CLOSED;
-  }
-}
-beforeAll(() => {
-  (globalThis as { WebSocket: typeof WebSocket }).WebSocket =
-    StubWebSocket as unknown as typeof WebSocket;
-});
-
-const STATUS_OK = {
-  alpaca_endpoint: "https://paper-api.alpaca.markets",
-  alpaca_data_feed: "sip",
-  alpaca_credentials_present: true,
-  alpaca_test_stream: false,
-  operator_environment: "paper",
-  operator_environment_source: "explicit",
-  operator_environment_conflict: null,
-};
 
 const STRATEGY_ID = "11111111-1111-1111-1111-111111111111";
 const VERSION_ID = "22222222-2222-2222-2222-222222222222";
@@ -82,7 +75,7 @@ const VERSIONS_LIST = [
       strategy_id: STRATEGY_ID,
       version: 1,
       name: "Daily Breakout",
-      feature_refs: ["5m.close[0]", "1d.high[0]"],
+      feature_refs: ["5m.ema:length=20[0]", "5m.rsi:length=14[0]"],
       entry_rules: [],
       exit_rules: [],
       tags: [],
@@ -94,297 +87,422 @@ const VERSIONS_LIST = [
   },
 ];
 
-const PREVIEW_RESPONSE = {
-  session: {
-    id: "33333333-3333-3333-3333-333333333333",
-    mode: "chart_lab_batch",
-    symbol: "SPY",
-    timeframe: "5m",
-    start: "2026-04-01T00:00:00Z",
-    end: "2026-04-15T23:59:59Z",
-    strategy_version_id: VERSION_ID,
-  },
-  feature_plan: {
-    id: "44444444-4444-4444-4444-444444444444",
-    strategy_version_id: VERSION_ID,
-    consumer: "chart_lab",
-    symbols: ["SPY"],
-    timeframes: ["5m", "1d"],
-    feature_specs: [
-      {
-        kind: "close",
-        namespace: "price",
-        timeframe: "5m",
-        source: "bar",
-        params: {},
-        lookback: 0,
-        shift: 0,
-        scope: "symbol",
-        version: "v1",
-      },
-      {
-        kind: "high",
-        namespace: "price",
-        timeframe: "1d",
-        source: "bar",
-        params: {},
-        lookback: 0,
-        shift: 0,
-        scope: "symbol",
-        version: "v1",
-      },
-    ],
-    feature_keys: [
-      "v1|symbol|5m|price.close|source=bar|params={}|lookback=0|shift=0",
-      "v1|symbol|1d|price.high|source=bar|params={}|lookback=0|shift=0",
-    ],
-  },
-  bars: [
+const EMA_KEY =
+  "v1|symbol|5m|technical.ema|source=close|params={\"length\":20}|lookback=0|shift=0";
+const RSI_KEY =
+  "v1|symbol|5m|technical.rsi|source=close|params={\"length\":14}|lookback=0|shift=0";
+const EMA_REF = "5m.ema:length=20";
+const RSI_REF = "5m.rsi:length=14";
+
+const FEATURE_LIBRARY = {
+  timeframe: "5m",
+  features: [
     {
-      timestamp: "2026-04-15T15:00:00Z",
-      symbol: "SPY",
+      feature_key: EMA_KEY,
+      feature_ref: EMA_REF,
+      name: "EMA 20",
       timeframe: "5m",
-      feature_values: [
-        {
-          feature_key: "v1|symbol|5m|price.close|source=bar|params={}|lookback=0|shift=0",
-          value: 101,
-          availability: "available",
-          source_timeframe: "5m",
-          source_timestamp: "2026-04-15T15:00:00Z",
-        },
-        {
-          feature_key: "v1|symbol|1d|price.high|source=bar|params={}|lookback=0|shift=0",
-          value: 100,
-          availability: "available",
-          source_timeframe: "1d",
-          source_timestamp: "2026-04-14T21:00:00Z",
-        },
-      ],
-      signal_markers: [
-        {
-          timestamp: "2026-04-15T15:00:00Z",
-          symbol: "SPY",
-          marker_type: "candidate_entry",
-          side: "long",
-          reason: "close_above_prior_high",
-          signal_name: "Daily Breakout",
-        },
-      ],
-      condition_truth_tree: { intent_count: 1 },
-      non_fire_reasons: [],
+      indicator_type: "technical.ema",
+      group: "Trend",
+      origin: "manual",
+      badge: "Manual",
+    },
+    {
+      feature_key: RSI_KEY,
+      feature_ref: RSI_REF,
+      name: "RSI 14",
+      timeframe: "5m",
+      indicator_type: "technical.rsi",
+      group: "Momentum",
+      origin: "manual",
+      badge: "Manual",
     },
   ],
-  evidence: {
-    evidence_id: "55555555-5555-5555-5555-555555555555",
-    strategy_id: STRATEGY_ID,
-    strategy_version_id: VERSION_ID,
-    symbol: "SPY",
-    timeframe: "5m",
-    start: "2026-04-01T00:00:00Z",
-    end: "2026-04-15T23:59:59Z",
-    feature_snapshot_count: 2,
-    signal_marker_count: 1,
-  },
 };
 
-describe("<ChartLab /> stream pane", () => {
+function previewResponse(args: { strategy?: boolean } = {}) {
+  const strategy = args.strategy ?? false;
+  return {
+    session: {
+      id: "33333333-3333-3333-3333-333333333333",
+      mode: "chart_lab_batch",
+      symbol: "SPY",
+      timeframe: "5m",
+      start: "2026-04-01T00:00:00Z",
+      end: "2026-04-15T23:59:59Z",
+      strategy_version_id: strategy ? VERSION_ID : null,
+      metadata: {
+        provider: "alpaca",
+        adjustment_policy: "split_dividend_adjusted",
+      },
+    },
+    feature_plan: {
+      id: "44444444-4444-4444-4444-444444444444",
+      strategy_version_id: strategy
+        ? VERSION_ID
+        : "00000000-0000-0000-0000-000000000000",
+      consumer: "chart_lab",
+      symbols: ["SPY"],
+      timeframes: ["5m"],
+      feature_specs: [],
+      feature_keys: strategy ? [EMA_KEY, RSI_KEY] : [RSI_KEY],
+      warmup_by_timeframe: { "5m": 3 },
+      data_requirements: [],
+    },
+    features: strategy
+      ? [
+          {
+            feature_key: EMA_KEY,
+            feature_ref: EMA_REF,
+            name: "EMA 20",
+            timeframe: "5m",
+            indicator_type: "technical.ema",
+            group: "Trend",
+            origin: "derived",
+            badge: "Derived from Strategy",
+          },
+          {
+            feature_key: RSI_KEY,
+            feature_ref: RSI_REF,
+            name: "RSI 14",
+            timeframe: "5m",
+            indicator_type: "technical.rsi",
+            group: "Momentum",
+            origin: "manual",
+            badge: "Manual",
+          },
+        ]
+      : [
+          {
+            feature_key: RSI_KEY,
+            feature_ref: RSI_REF,
+            name: "RSI 14",
+            timeframe: "5m",
+            indicator_type: "technical.rsi",
+            group: "Momentum",
+            origin: "manual",
+            badge: "Manual",
+          },
+        ],
+    bars: [
+      {
+        bar_index: 0,
+        timestamp: "2026-04-15T14:30:00Z",
+        symbol: "SPY",
+        timeframe: "5m",
+        open: 450,
+        high: 451,
+        low: 449,
+        close: 450.5,
+        volume: 1000,
+        is_warmup: true,
+        feature_values: [
+          {
+            feature_key: strategy ? EMA_KEY : RSI_KEY,
+            value: null,
+            availability: "warmup",
+            source_timeframe: "5m",
+            source_timestamp: "2026-04-15T14:30:00Z",
+          },
+        ],
+        signal_markers: [],
+        condition_truth_tree: {},
+        non_fire_reasons: strategy ? ["warmup_bar"] : [],
+      },
+      {
+        bar_index: 1,
+        timestamp: "2026-04-15T14:35:00Z",
+        symbol: "SPY",
+        timeframe: "5m",
+        open: 451,
+        high: 456,
+        low: 450,
+        close: 455.1234,
+        volume: 2000,
+        is_warmup: false,
+        feature_values: strategy
+          ? [
+              {
+                feature_key: EMA_KEY,
+                value: 452.25,
+                availability: "available",
+                source_timeframe: "5m",
+                source_timestamp: "2026-04-15T14:35:00Z",
+              },
+              {
+                feature_key: RSI_KEY,
+                value: 61.5,
+                availability: "available",
+                source_timeframe: "5m",
+                source_timestamp: "2026-04-15T14:35:00Z",
+              },
+            ]
+          : [
+              {
+                feature_key: RSI_KEY,
+                value: 61.5,
+                availability: "available",
+                source_timeframe: "5m",
+                source_timestamp: "2026-04-15T14:35:00Z",
+              },
+            ],
+        signal_markers: strategy
+          ? [
+              {
+                timestamp: "2026-04-15T14:35:00Z",
+                symbol: "SPY",
+                marker_type: "candidate_entry",
+                side: "long",
+                reason: "close_above_ema",
+                signal_name: "Daily Breakout",
+              },
+            ]
+          : [],
+        condition_truth_tree: strategy
+          ? {
+              rules: [
+                {
+                  name: "close_above_ema",
+                  condition: {
+                    left_feature: "5m.close[0]",
+                    operator: ">",
+                    right_feature: "5m.ema:length=20[0]",
+                    result: true,
+                  },
+                },
+              ],
+            }
+          : {},
+        non_fire_reasons: [],
+      },
+    ],
+    evidence: strategy
+      ? {
+          evidence_id: "55555555-5555-5555-5555-555555555555",
+          strategy_id: STRATEGY_ID,
+          strategy_version_id: VERSION_ID,
+          symbol: "SPY",
+          timeframe: "5m",
+          start: "2026-04-01T00:00:00Z",
+          end: "2026-04-15T23:59:59Z",
+          feature_snapshot_count: 4,
+          signal_marker_count: 1,
+        }
+      : null,
+  };
+}
+
+describe("<ChartLab />", () => {
   let restore: (() => void) | null = null;
+
   afterEach(() => {
     restore?.();
     restore = null;
+    chartCalls.props.length = 0;
   });
 
-  it("renders the streaming-disabled banner when health says streaming is off", async () => {
+  function mount(previewBody: unknown = previewResponse()) {
     restore = installFetchMock([
-      {
-        url: "/api/v1/chart-lab/health",
-        body: {
-          streaming_enabled: false,
-          test_stream: false,
-          default_symbol: "SPY",
-          data_feed: "sip",
-          websocket_path: "/api/v1/chart-lab/stream",
-          routing_note: "",
-        },
-      },
-      { url: "/api/v1/system/status", body: STATUS_OK },
       { url: "/api/v1/strategies", body: STRATEGIES_LIST },
-    ]);
-    renderRoute(<ChartLab />);
-    await waitFor(() => {
-      expect(screen.getByText(/Streaming disabled/i)).toBeInTheDocument();
-    });
-  });
-
-  it("renders the stream card when health is happy", async () => {
-    restore = installFetchMock([
-      {
-        url: "/api/v1/chart-lab/health",
-        body: {
-          streaming_enabled: true,
-          test_stream: false,
-          default_symbol: "SPY",
-          data_feed: "sip",
-          websocket_path: "/api/v1/chart-lab/stream",
-          routing_note: "",
-        },
-      },
-      { url: "/api/v1/system/status", body: STATUS_OK },
-      { url: "/api/v1/strategies", body: STRATEGIES_LIST },
-    ]);
-    renderRoute(<ChartLab />);
-    await waitFor(() => {
-      expect(screen.getAllByText(/Stream/i).length).toBeGreaterThan(0);
-    });
-  });
-
-  it("surfaces a degraded read state when health fails", async () => {
-    restore = installFetchMock([
-      { url: "/api/v1/chart-lab/health", body: { detail: "kaboom" }, status: 500 },
-      { url: "/api/v1/system/status", body: STATUS_OK },
-      { url: "/api/v1/strategies", body: STRATEGIES_LIST },
-    ]);
-    renderRoute(<ChartLab />);
-    await waitFor(() => {
-      expect(screen.getByText(/Chart Lab not configured/i)).toBeInTheDocument();
-    });
-  });
-});
-
-describe("<ChartLab /> strategy preview pane", () => {
-  let restore: (() => void) | null = null;
-  afterEach(() => {
-    restore?.();
-    restore = null;
-  });
-
-  function mountWithPreview(overrides: { previewBody?: unknown; previewStatus?: number } = {}) {
-    restore = installFetchMock([
-      {
-        url: "/api/v1/chart-lab/health",
-        body: {
-          streaming_enabled: true,
-          test_stream: false,
-          default_symbol: "SPY",
-          data_feed: "sip",
-          websocket_path: "/api/v1/chart-lab/stream",
-          routing_note: "",
-        },
-      },
-      { url: "/api/v1/system/status", body: STATUS_OK },
       { url: `/api/v1/strategies/${STRATEGY_ID}/versions`, body: VERSIONS_LIST },
-      { url: "/api/v1/strategies", body: STRATEGIES_LIST },
+      { url: "/api/v1/chart-lab/features", body: FEATURE_LIBRARY },
       {
         url: "/api/v1/chart-lab/preview",
         method: "POST",
-        body: overrides.previewBody ?? PREVIEW_RESPONSE,
-        status: overrides.previewStatus ?? 200,
+        body: previewBody,
       },
     ]);
     return renderRoute(<ChartLab />);
   }
 
-  async function switchToPreviewTab(): Promise<void> {
-    const user = userEvent.setup();
-    await user.click(screen.getByRole("tab", { name: /Strategy preview/i }));
-  }
-
-  it("loads strategies after switching to the preview tab", async () => {
-    mountWithPreview();
-    await switchToPreviewTab();
-    await waitFor(() => {
-      expect(screen.getByRole("option", { name: /Daily Breakout/i })).toBeInTheDocument();
-    });
-  });
-
-  it("posts a preview request and renders the chart-first surface", async () => {
-    mountWithPreview();
-    await switchToPreviewTab();
-    await waitFor(() => {
-      expect(screen.getByRole("option", { name: /Daily Breakout/i })).toBeInTheDocument();
-    });
-
-    await userEvent.selectOptions(screen.getByLabelText("Strategy"), STRATEGY_ID);
-    await waitFor(() => {
-      expect(
-        screen.getByRole("option", { name: /v1 - draft/i }),
-      ).toBeInTheDocument();
-    });
-
-    const runButton = screen.getByRole("button", { name: /Run preview/i });
-    fireEvent.click(runButton);
+  it("runs without a strategy as Feature Explorer and posts only manual feature refs", async () => {
+    mount(previewResponse({ strategy: false }));
 
     await waitFor(() => {
-      expect(screen.getByText(/1 signals/i)).toBeInTheDocument();
+      expect(screen.getByText(/Feature Explorer/i)).toBeInTheDocument();
     });
-    // Feature checklist exposes both feature_keys (default-selected).
+    expect(screen.queryByText(/Features Used by Strategy/i)).not.toBeInTheDocument();
+
+    await userEvent.click(await screen.findByText("RSI 14"));
+    fireEvent.click(screen.getByRole("button", { name: /Load Data/i }));
+
     await waitFor(() => {
-      expect(
-        screen.getByLabelText(/Toggle v1\|symbol\|5m\|price\.close/i),
-      ).toBeChecked();
-      expect(
-        screen.getByLabelText(/Toggle v1\|symbol\|1d\|price\.high/i),
-      ).toBeChecked();
+      expect(screen.getByTestId("strategy-preview-chart")).toHaveTextContent("1 warm-up");
     });
-    // Signal-markers table shows the candidate_entry row.
-    expect(screen.getByText(/candidate_entry/i)).toBeInTheDocument();
-    expect(screen.getAllByText(/Daily Breakout/).length).toBeGreaterThan(0);
+    expect(screen.getByRole("heading", { name: /Manual Overlays/i })).toBeInTheDocument();
+    expect(screen.getAllByText(/Manual/i).length).toBeGreaterThan(0);
+    expect(screen.getByText("61.5000")).toBeInTheDocument();
 
     const previewCalls = (
       globalThis.fetch as unknown as { mock: { calls: unknown[][] } }
     ).mock.calls.filter(([url]) => String(url).includes("/api/v1/chart-lab/preview"));
-    expect(previewCalls.length).toBe(1);
     const [, init] = previewCalls[0] as [unknown, RequestInit];
-    expect(init.method).toBe("POST");
-    expect(typeof init.body).toBe("string");
+    const parsed = JSON.parse(init.body as string);
+    expect(parsed.strategy_version_id).toBeNull();
+    expect(parsed.manual_feature_refs).toEqual([RSI_REF]);
+    expect(parsed.symbol).toBe("SPY");
+  });
+
+  it("separates derived Strategy features from manual overlays", async () => {
+    mount(previewResponse({ strategy: true }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("option", { name: /Daily Breakout/i })).toBeInTheDocument();
+    });
+    await userEvent.selectOptions(screen.getByLabelText("Strategy"), STRATEGY_ID);
+    await waitFor(() => {
+      expect(screen.getByRole("option", { name: /v1 - draft/i })).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByRole("button", { name: /Load Data/i }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("strategy-preview-chart")).toBeInTheDocument();
+    });
+    await waitFor(() => {
+      expect(screen.getByText("61.5000")).toBeInTheDocument();
+    });
+    expect(screen.getByText(/Features Used by Strategy/i)).toBeInTheDocument();
+    expect(screen.getByText(/Derived from Strategy/i)).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /Manual Overlays/i })).toBeInTheDocument();
+    expect(screen.getAllByText("EMA 20").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("RSI 14").length).toBeGreaterThan(0);
+    expect(screen.getByText(/close_above_ema/i)).toBeInTheDocument();
+    expect(screen.getByText(/Entry signal/i)).toBeInTheDocument();
+
+    const previewCalls = (
+      globalThis.fetch as unknown as { mock: { calls: unknown[][] } }
+    ).mock.calls.filter(([url]) => String(url).includes("/api/v1/chart-lab/preview"));
+    const [, init] = previewCalls[0] as [unknown, RequestInit];
     const parsed = JSON.parse(init.body as string);
     expect(parsed.strategy_version_id).toBe(VERSION_ID);
-    expect(parsed.symbol).toBe("SPY");
-    expect(parsed.timeframe).toBe("5m");
-    expect(parsed.source).toBe("alpaca");
-  });
-
-  it("toggling a feature_key off removes it from the selected count", async () => {
-    mountWithPreview();
-    await switchToPreviewTab();
-    await waitFor(() => {
-      expect(screen.getByRole("option", { name: /Daily Breakout/i })).toBeInTheDocument();
-    });
-    await userEvent.selectOptions(screen.getByLabelText("Strategy"), STRATEGY_ID);
-    await waitFor(() => {
-      expect(
-        screen.getByRole("option", { name: /v1 - draft/i }),
-      ).toBeInTheDocument();
-    });
-    fireEvent.click(screen.getByRole("button", { name: /Run preview/i }));
-
-    const closeCheckbox = await screen.findByLabelText(
-      /Toggle v1\|symbol\|5m\|price\.close/i,
+    expect(parsed.manual_feature_refs).toEqual(
+      expect.arrayContaining([EMA_REF, RSI_REF]),
     );
-    expect(screen.getByText(/2\/2 on chart/)).toBeInTheDocument();
-    fireEvent.click(closeCheckbox);
-    expect(screen.getByText(/1\/2 on chart/)).toBeInTheDocument();
+    expect(parsed.manual_feature_refs).toHaveLength(2);
   });
 
-  it("surfaces a banner when the preview request fails", async () => {
-    mountWithPreview({
-      previewBody: { detail: "no bars available for SPY 5m in window" },
-      previewStatus: 422,
-    });
-    await switchToPreviewTab();
+  it("renders warm-up bars distinctly through the chart contract and timeline", async () => {
+    mount(previewResponse({ strategy: true }));
+
     await waitFor(() => {
       expect(screen.getByRole("option", { name: /Daily Breakout/i })).toBeInTheDocument();
     });
     await userEvent.selectOptions(screen.getByLabelText("Strategy"), STRATEGY_ID);
     await waitFor(() => {
-      expect(
-        screen.getByRole("option", { name: /v1 - draft/i }),
-      ).toBeInTheDocument();
+      expect(screen.getByRole("option", { name: /v1 - draft/i })).toBeInTheDocument();
     });
-    fireEvent.click(screen.getByRole("button", { name: /Run preview/i }));
+    fireEvent.click(screen.getByRole("button", { name: /Load Data/i }));
 
     await waitFor(() => {
-      expect(screen.getAllByText(/Preview failed/i).length).toBeGreaterThan(0);
+      expect(chartCalls.props.at(-1)?.bars.some((bar) => bar.isWarmup)).toBe(true);
+    });
+    expect(screen.getByTestId("strategy-preview-chart")).toHaveTextContent("1 warm-up");
+    expect(screen.getAllByText(/warm-up/i).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/active/i).length).toBeGreaterThan(0);
+    expect(screen.getAllByText("455.12").length).toBeGreaterThan(0);
+  });
+
+  it("defaults signal labels off so the chart chrome does not imply raw marker text spam", async () => {
+    mount(previewResponse({ strategy: true }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("option", { name: /Daily Breakout/i })).toBeInTheDocument();
+    });
+    await userEvent.selectOptions(screen.getByLabelText("Strategy"), STRATEGY_ID);
+    fireEvent.click(screen.getByRole("button", { name: /Load Data/i }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("chart-mock-signal-label-flag")).toHaveTextContent("labels-off");
+    });
+    expect(screen.getByLabelText("Show signal labels")).not.toBeChecked();
+    expect(screen.queryByText(/draft_entry_short/i)).not.toBeInTheDocument();
+  });
+
+  it("toggles Show signal labels and forwards the preference to the chart", async () => {
+    mount(previewResponse({ strategy: true }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("option", { name: /Daily Breakout/i })).toBeInTheDocument();
+    });
+    await userEvent.selectOptions(screen.getByLabelText("Strategy"), STRATEGY_ID);
+    fireEvent.click(screen.getByRole("button", { name: /Load Data/i }));
+
+    await waitFor(() =>
+      expect(screen.getByLabelText("Show signal labels")).not.toBeChecked(),
+    );
+    await userEvent.click(screen.getByLabelText("Show signal labels"));
+    await waitFor(() =>
+      expect(screen.getByTestId("chart-mock-signal-label-flag")).toHaveTextContent("labels-on"),
+    );
+  });
+
+  it("routes chart clicks to Bar Inspector selection", async () => {
+    mount(previewResponse({ strategy: true }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("option", { name: /Daily Breakout/i })).toBeInTheDocument();
+    });
+    await userEvent.selectOptions(screen.getByLabelText("Strategy"), STRATEGY_ID);
+    fireEvent.click(screen.getByRole("button", { name: /Load Data/i }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("simulate-chart-bar-click")).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByTestId("simulate-chart-bar-click"));
+
+    await waitFor(() => {
+      const panel = screen.getByText(/Signals \(verification\)/i).closest("section");
+      expect(panel?.textContent ?? "").toMatch(/Entry signal/);
+      expect(panel?.textContent ?? "").toMatch(/true/);
+    });
+  });
+
+  it("renders Bar Inspector derived feature values separately from manual overlays", async () => {
+    mount(previewResponse({ strategy: true }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("option", { name: /Daily Breakout/i })).toBeInTheDocument();
+    });
+    await userEvent.selectOptions(screen.getByLabelText("Strategy"), STRATEGY_ID);
+    fireEvent.click(screen.getByRole("button", { name: /Load Data/i }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("bar-inspector-derived-features")).toHaveTextContent("EMA 20");
+    });
+    expect(screen.getByTestId("bar-inspector-manual-features")).toHaveTextContent("RSI 14");
+  });
+
+  it("requests warm-up density defaults that keep warm-up candles addressable in the chart", async () => {
+    mount(previewResponse({ strategy: true }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("option", { name: /Daily Breakout/i })).toBeInTheDocument();
+    });
+    await userEvent.selectOptions(screen.getByLabelText("Strategy"), STRATEGY_ID);
+    fireEvent.click(screen.getByRole("button", { name: /Load Data/i }));
+
+    await waitFor(() => {
+      expect(chartCalls.props.at(-1)?.density?.showWarmupBars).toBe(true);
+    });
+  });
+
+  it("surfaces an error state when the backend rejects the load", async () => {
+    restore = installFetchMock([
+      { url: "/api/v1/strategies", body: STRATEGIES_LIST },
+      { url: "/api/v1/chart-lab/features", body: FEATURE_LIBRARY },
+      {
+        url: "/api/v1/chart-lab/preview",
+        method: "POST",
+        status: 422,
+        body: { detail: "no bars available for SPY 5m in window" },
+      },
+    ]);
+    renderRoute(<ChartLab />);
+
+    fireEvent.click(await screen.findByRole("button", { name: /Load Data/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/ChartLab load failed/i)).toBeInTheDocument();
     });
   });
 });

@@ -19,6 +19,7 @@ import { Button } from "@/components/ui/Button";
 import { Card, CardBody, CardHeader, CardTitle } from "@/components/ui/Card";
 import { DangerConfirm } from "@/components/ui/DangerConfirm";
 import { TextField } from "@/components/ui/TextField";
+import { useToast } from "@/components/ui/Toast";
 import { LoadingState } from "@/components/empty/LoadingState";
 import { ErrorState } from "@/components/empty/ErrorState";
 import { EmptyState } from "@/components/empty/EmptyState";
@@ -103,16 +104,44 @@ export function Operations(): JSX.Element {
 
 function GlobalControls({ overview }: { overview: RuntimeOverview | null }): JSX.Element {
   const qc = useQueryClient();
+  const toast = useToast();
   const killActive = overview?.global_kill_active ?? false;
   const [killOpen, setKillOpen] = useState(false);
   const [resumeOpen, setResumeOpen] = useState(false);
 
   const kill = useMutation({
     mutationFn: (reason: string) => OperationsApi.globalKill(reason),
+    onSuccess: (_data, reason) => {
+      toast.show({
+        severity: "danger",
+        title: "Global kill activated",
+        description: `Reason: ${reason}. New opens blocked across every Account.`,
+        durationMs: 12_000,
+      });
+    },
+    onError: (e, reason) =>
+      toast.show({
+        severity: "danger",
+        title: "Global kill failed",
+        description: `${reason} — ${(e as Error)?.message ?? String(e)}`,
+      }),
     onSettled: () => qc.invalidateQueries({ queryKey: ["operations", "overview"] }),
   });
   const resume = useMutation({
     mutationFn: (reason: string) => OperationsApi.globalResume(reason),
+    onSuccess: (_data, reason) => {
+      toast.show({
+        severity: "ok",
+        title: "Global trading resumed",
+        description: `Reason: ${reason}. Account-level pause states still in effect.`,
+      });
+    },
+    onError: (e, reason) =>
+      toast.show({
+        severity: "danger",
+        title: "Global resume failed",
+        description: `${reason} — ${(e as Error)?.message ?? String(e)}`,
+      }),
     onSettled: () => qc.invalidateQueries({ queryKey: ["operations", "overview"] }),
   });
 
@@ -477,20 +506,59 @@ function AccountSummaryCard({
   tradeStream: TradeStreamStatus | undefined;
 }): JSX.Element {
   const qc = useQueryClient();
+  const toast = useToast();
   const [pauseOpen, setPauseOpen] = useState(false);
   const [resumeOpen, setResumeOpen] = useState(false);
   const [flattenOpen, setFlattenOpen] = useState(false);
+  const idShortLabel = account.account_id.slice(0, 8);
 
   const pause = useMutation({
     mutationFn: (reason: string) => OperationsApi.pauseAccount(account.account_id, reason),
+    onSuccess: (_data, reason) =>
+      toast.show({
+        severity: "warn",
+        title: `Account ${idShortLabel} paused`,
+        description: `Reason: ${reason}. New opens blocked on this Account.`,
+      }),
+    onError: (e, reason) =>
+      toast.show({
+        severity: "danger",
+        title: `Pause failed for ${idShortLabel}`,
+        description: `${reason} — ${(e as Error)?.message ?? String(e)}`,
+      }),
     onSettled: () => qc.invalidateQueries({ queryKey: ["operations", "overview"] }),
   });
   const resume = useMutation({
     mutationFn: (reason: string) => OperationsApi.resumeAccount(account.account_id, reason),
+    onSuccess: (_data, reason) =>
+      toast.show({
+        severity: "ok",
+        title: `Account ${idShortLabel} resumed`,
+        description: `Reason: ${reason}.`,
+      }),
+    onError: (e, reason) =>
+      toast.show({
+        severity: "danger",
+        title: `Resume failed for ${idShortLabel}`,
+        description: `${reason} — ${(e as Error)?.message ?? String(e)}`,
+      }),
     onSettled: () => qc.invalidateQueries({ queryKey: ["operations", "overview"] }),
   });
   const flatten = useMutation({
     mutationFn: (reason: string) => OperationsApi.flattenAccount(account.account_id, reason),
+    onSuccess: (_data, reason) =>
+      toast.show({
+        severity: "danger",
+        title: `Account ${idShortLabel} flatten requested`,
+        description: `Reason: ${reason}. Close orders submitted for every open position on this Account.`,
+        durationMs: 12_000,
+      }),
+    onError: (e, reason) =>
+      toast.show({
+        severity: "danger",
+        title: `Flatten failed for ${idShortLabel}`,
+        description: `${reason} — ${(e as Error)?.message ?? String(e)}`,
+      }),
     onSettled: () => qc.invalidateQueries({ queryKey: ["operations", "overview"] }),
   });
 
@@ -702,20 +770,59 @@ function DeploymentsSection({ overview }: { overview: RuntimeOverview }): JSX.El
 
 function DeploymentSummaryCard({ d }: { d: DeploymentSummary }): JSX.Element {
   const qc = useQueryClient();
+  const toast = useToast();
   const [pauseOpen, setPauseOpen] = useState(false);
   const [resumeOpen, setResumeOpen] = useState(false);
   const [flattenOpen, setFlattenOpen] = useState(false);
+  const idShortLabel = d.deployment_id.slice(0, 8);
 
   const pause = useMutation({
     mutationFn: (reason: string) => OperationsApi.pauseDeployment(d.deployment_id, reason),
+    onSuccess: (_data, reason) =>
+      toast.show({
+        severity: "warn",
+        title: `Deployment ${idShortLabel} paused`,
+        description: `Reason: ${reason}.`,
+      }),
+    onError: (e, reason) =>
+      toast.show({
+        severity: "danger",
+        title: `Pause failed for Deployment ${idShortLabel}`,
+        description: `${reason} — ${(e as Error)?.message ?? String(e)}`,
+      }),
     onSettled: () => qc.invalidateQueries({ queryKey: ["operations", "overview"] }),
   });
   const resume = useMutation({
     mutationFn: (reason: string) => OperationsApi.resumeDeployment(d.deployment_id, reason),
+    onSuccess: (_data, reason) =>
+      toast.show({
+        severity: "ok",
+        title: `Deployment ${idShortLabel} resumed`,
+        description: `Reason: ${reason}.`,
+      }),
+    onError: (e, reason) =>
+      toast.show({
+        severity: "danger",
+        title: `Resume failed for Deployment ${idShortLabel}`,
+        description: `${reason} — ${(e as Error)?.message ?? String(e)}`,
+      }),
     onSettled: () => qc.invalidateQueries({ queryKey: ["operations", "overview"] }),
   });
   const flatten = useMutation({
     mutationFn: (reason: string) => OperationsApi.flattenDeployment(d.deployment_id, reason),
+    onSuccess: (_data, reason) =>
+      toast.show({
+        severity: "danger",
+        title: `Deployment ${idShortLabel} flatten requested`,
+        description: `Reason: ${reason}. Close orders submitted for every position owned by this Deployment.`,
+        durationMs: 12_000,
+      }),
+    onError: (e, reason) =>
+      toast.show({
+        severity: "danger",
+        title: `Flatten failed for Deployment ${idShortLabel}`,
+        description: `${reason} — ${(e as Error)?.message ?? String(e)}`,
+      }),
     onSettled: () => qc.invalidateQueries({ queryKey: ["operations", "overview"] }),
   });
 

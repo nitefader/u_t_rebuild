@@ -13,6 +13,7 @@ import { Banner } from "@/components/ui/Banner";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { DangerConfirm } from "@/components/ui/DangerConfirm";
+import { useToast } from "@/components/ui/Toast";
 import {
   Drawer,
   DrawerBody,
@@ -31,6 +32,7 @@ import { ErrorState } from "@/components/empty/ErrorState";
 import { EmptyState } from "@/components/empty/EmptyState";
 import { tradeSyncToState } from "./Dashboard";
 import { PageHeader } from "./PageHeader";
+import { AccountGuardianRow } from "@/components/cards/AccountGuardianRow";
 import { formatCurrency, relativeTime } from "@/lib/format";
 import { latestBrokerSyncTimestamp } from "@/lib/brokerSync";
 
@@ -111,6 +113,7 @@ function AccountCard({
   accountSummary: AccountSummary | undefined;
 }): JSX.Element {
   const qc = useQueryClient();
+  const toast = useToast();
   const [credsOpen, setCredsOpen] = useState(false);
   const [renameOpen, setRenameOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
@@ -124,6 +127,19 @@ function AccountCard({
 
   const remove = useMutation({
     mutationFn: () => AccountsApi.delete(account.id, account.display_name, account.mode),
+    onSuccess: () => {
+      toast.show({
+        severity: "ok",
+        title: `Account "${account.display_name}" deleted`,
+        description: `${account.provider} ${account.mode === "BROKER_LIVE" ? "LIVE" : "paper"} account removed.`,
+      });
+    },
+    onError: (e) =>
+      toast.show({
+        severity: "danger",
+        title: `Could not delete "${account.display_name}"`,
+        description: e instanceof ApiError ? e.detail ?? e.message : String(e),
+      }),
     onSettled: () => {
       void qc.invalidateQueries({ queryKey: ["accounts", "list"] });
       void qc.invalidateQueries({ queryKey: ["operations", "overview"] });
@@ -182,6 +198,8 @@ function AccountCard({
         <KeyValue label="Positions" value={String(positionCount)} />
         <KeyValue label="Last sync" value={lastSyncAt ? relativeTime(lastSyncAt) : "—"} />
       </div>
+
+      <AccountGuardianRow account={account} />
 
       {openBrokerOrders.length > 0 ? (
         <div className="border-t border-border/70 px-4 py-2">
@@ -451,6 +469,7 @@ function CreateAccountDrawer({
     setError(null);
   }
 
+  const toast = useToast();
   const create = useMutation({
     mutationFn: () =>
       AccountsApi.create({
@@ -461,13 +480,28 @@ function CreateAccountDrawer({
         api_secret: apiSecret.trim(),
       }),
     onSuccess: () => {
+      const name = displayName.trim();
+      const isLiveMode = mode === "BROKER_LIVE";
       reset();
       onOpenChange(false);
+      toast.show({
+        severity: isLiveMode ? "warn" : "ok",
+        title: `Account "${name}" added`,
+        description: `Alpaca ${isLiveMode ? "LIVE" : "paper"}. Per-Account trade sync will start on next boot.`,
+      });
       void qc.invalidateQueries({ queryKey: ["accounts", "list"] });
       void qc.invalidateQueries({ queryKey: ["operations", "overview"] });
       void qc.invalidateQueries({ queryKey: ["system", "streams"] });
     },
-    onError: (e) => setError(e instanceof ApiError ? e.detail || e.message : String(e)),
+    onError: (e) => {
+      const detail = e instanceof ApiError ? e.detail || e.message : String(e);
+      setError(detail);
+      toast.show({
+        severity: "danger",
+        title: "Could not add Account",
+        description: detail,
+      });
+    },
   });
 
   const formValid = displayName.trim().length > 0 && apiKey.trim().length > 0 && apiSecret.trim().length > 0;

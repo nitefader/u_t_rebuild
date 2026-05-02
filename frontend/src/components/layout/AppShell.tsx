@@ -2,20 +2,23 @@ import { Outlet } from "react-router-dom";
 import { SideNav } from "./SideNav";
 import { TopBar } from "./TopBar";
 import { JobToaster } from "@/components/jobs/JobToaster";
+import { ToastProvider } from "@/components/ui/Toast";
 import { useApplyTheme } from "@/store/useAppShell";
 
 export function AppShell(): JSX.Element {
   useApplyTheme();
   return (
-    <div className="flex min-h-screen w-full">
-      <SideNav />
-      <div className="flex min-w-0 flex-1 flex-col">
-        <TopBar />
-        <main className="flex-1 px-6 py-5">
-          <Outlet />
-        </main>
+    <ToastProvider>
+      <div className="flex min-h-screen w-full">
+        <SideNav />
+        <div className="flex min-w-0 flex-1 flex-col">
+          <TopBar />
+          <main className="flex-1 px-6 py-5">
+            <Outlet />
+          </main>
+        </div>
+        <JobToaster />
       </div>
-      <JobToaster />
-    </div>
+    </ToastProvider>
   );
 }

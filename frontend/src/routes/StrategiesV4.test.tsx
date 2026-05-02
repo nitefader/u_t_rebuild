@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { screen, waitFor, fireEvent } from "@testing-library/react";
+import { act, screen, waitFor, fireEvent } from "@testing-library/react";
 import { Route } from "react-router-dom";
 import { installFetchMock, renderRoute } from "@/test/renderRoute";
 import { StrategiesV4 } from "./StrategiesV4";
@@ -81,7 +81,7 @@ describe("<StrategiesV4 />", () => {
     });
   });
 
-  it("clicking Delete opens confirmation drawer", async () => {
+  it("clicking Delete opens hold-to-arm confirmation", async () => {
     restore = installFetchMock([
       { url: "/api/v1/strategies/v4/", body: [STRATEGY_A] },
     ]);
@@ -94,12 +94,16 @@ describe("<StrategiesV4 />", () => {
     fireEvent.click(screen.getByRole("button", { name: /delete strategy orb strategy/i }));
 
     await waitFor(() => {
-      expect(screen.getByText(/delete strategy/i)).toBeInTheDocument();
-      expect(screen.getByRole("button", { name: /delete permanently/i })).toBeInTheDocument();
+      // HoldToArmConfirm dialog shows the title and the Delete strategy action.
+      expect(screen.getByText(/Delete "ORB Strategy"\?/)).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: /^Delete strategy$/ })).toBeDisabled();
+      expect(
+        screen.getByRole("button", { name: /Hold 2 seconds to verify/i }),
+      ).toBeInTheDocument();
     });
   });
 
-  it("confirming Delete calls the delete endpoint and refreshes the list", async () => {
+  it("confirming Delete (after hold) calls the delete endpoint and refreshes the list", async () => {
     restore = installFetchMock([
       { url: "/api/v1/strategies/v4/", body: [STRATEGY_A] },
       {
@@ -117,11 +121,18 @@ describe("<StrategiesV4 />", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /delete strategy orb strategy/i }));
 
-    await waitFor(() => {
-      expect(screen.getByRole("button", { name: /delete permanently/i })).toBeInTheDocument();
-    });
+    const verifier = await screen.findByRole("button", { name: /Hold 2 seconds to verify/i });
 
-    fireEvent.click(screen.getByRole("button", { name: /delete permanently/i }));
+    vi.useFakeTimers();
+    fireEvent.pointerDown(verifier);
+    await act(async () => {
+      vi.advanceTimersByTime(2000);
+    });
+    vi.useRealTimers();
+
+    const deleteButton = await screen.findByRole("button", { name: /^Delete strategy$/ });
+    expect(deleteButton).toBeEnabled();
+    fireEvent.click(deleteButton);
 
     await waitFor(() => {
       const fetchCalls = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls as unknown[][];
