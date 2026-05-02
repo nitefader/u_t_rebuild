@@ -82,6 +82,12 @@ export const BrokerAccountSchema = z.object({
   validation_status: BrokerAccountValidationStatusSchema,
   last_account_snapshot: BrokerAccountSnapshotSchema.nullable().optional(),
   broker_sync_freshness: BrokerSyncStateSchema.nullable().optional(),
+  // M11 Guardian Assignment — Account-scoped Deployment that pre-authorizes
+  // adoption of orphaned / owner-down positions. Optional; backend ships
+  // null when no Guardian set. `guardian_deployment_name` is the readable
+  // label per the AGENTS.md "Human-Readable Frontend Data Rule".
+  guardian_deployment_id: z.string().nullable().optional(),
+  guardian_deployment_name: z.string().nullable().optional(),
   created_at: z.string(),
   is_archived: z.boolean(),
   archived_at: z.string().nullable().optional(),

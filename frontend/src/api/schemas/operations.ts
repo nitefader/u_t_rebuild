@@ -185,9 +185,28 @@ export const BrokerPositionSnapshotSchema = z
     status: z.string().nullable().optional(),
     timestamp: z.string().nullable().optional(),
     deployment_id: z.string().nullable().optional(),
+    deployment_name: z.string().nullable().optional(),
     strategy_id: z.string().nullable().optional(),
     opening_signal_plan_id: z.string().nullable().optional(),
     position_lineage_id: z.string().nullable().optional(),
+    // M2 (HARD.MD P0-2) — unmanaged-position classification flag (true when the
+    // position has no matched lineage and is not Guardian-adopted).
+    unmanaged_broker_position: z.boolean().nullable().optional(),
+    // M11 Guardian lineage extension. All optional; backend may ship any
+    // subset. The frontend surfaces badges only when the relevant fields
+    // are present, so the row stays clean while M11 backend is in flight.
+    adoption_status: z
+      .enum(["managed", "unmanaged", "adopted_by_guardian"])
+      .nullable()
+      .optional(),
+    adoption_reason: z
+      .enum(["owner_unknown", "owner_deployment_down_unprotected"])
+      .nullable()
+      .optional(),
+    original_owner_deployment_id: z.string().nullable().optional(),
+    original_owner_deployment_name: z.string().nullable().optional(),
+    owner_deployment_healthy: z.boolean().nullable().optional(),
+    owner_self_protected: z.boolean().nullable().optional(),
   })
   .passthrough();
 export type BrokerPositionSnapshot = z.infer<typeof BrokerPositionSnapshotSchema>;

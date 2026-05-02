@@ -22,6 +22,7 @@ import { formatCurrency, relativeTime } from "@/lib/format";
 import { latestBrokerSyncTimestamp } from "@/lib/brokerSync";
 import { getProtectionDisplay } from "@/lib/protectionDisplay";
 import { PositionExplainDrawer } from "./PositionExplainDrawer";
+import { GuardianBadges } from "@/components/badges/GuardianBadges";
 import { ManualOrderDrawer } from "./ManualOrderDrawer";
 import { RiskCardPanel } from "./RiskCardPanel";
 import { AccountRiskPlanCard } from "@/components/risk_plans/AccountRiskPlanCard";
@@ -225,7 +226,15 @@ export function AccountDetailDrawer({
                           const rowKey = lineageId ?? `${symbol}-${quantity}-fallback`;
                           return (
                             <tr key={rowKey}>
-                              <td className="font-medium">{symbol}</td>
+                              <td>
+                                <div className="font-medium">{symbol}</div>
+                                <div className="mt-1">
+                                  <GuardianBadges
+                                    snapshot={p}
+                                    accountGuardianName={account?.guardian_deployment_name ?? null}
+                                  />
+                                </div>
+                              </td>
                               <td className="tabular">{quantity}</td>
                               <td className="tabular">{formatCurrency(avg)}</td>
                               <td className="tabular">{formatCurrency(mv)}</td>

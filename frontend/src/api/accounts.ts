@@ -31,4 +31,14 @@ export const AccountsApi = {
       confirm_display_name: confirmDisplayName,
       confirm_mode: confirmMode,
     }),
+
+  /**
+   * M11 Guardian Assignment — set or remove the Account's Guardian Deployment.
+   * Backend route owned by Codex (queued in `INBOX_CODEX.md` 2026-05-02).
+   * Pass `null` to clear; pass a deployment_id to assign.
+   */
+  setGuardian: (accountId: string, deploymentId: string | null) =>
+    api.put(BrokerAccountResponseSchema, `/api/v1/broker-accounts/${accountId}/guardian`, {
+      guardian_deployment_id: deploymentId,
+    }),
 };
