@@ -1,0 +1,934 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Compose — Redesign Vision</title>
+<style>
+  :root {
+    --bg: #0b0d12;
+    --bg-raised: #11141b;
+    --bg-subtle: #0e1117;
+    --bg-elevated: #161a23;
+    --border: #232836;
+    --border-strong: #2e3445;
+    --fg: #e6e9ef;
+    --fg-muted: #a3a9b8;
+    --fg-subtle: #6b7280;
+    --accent: #6ea8fe;
+    --accent-strong: #4f8cf5;
+    --ok: #5dd39e;
+    --ok-bg: rgba(93, 211, 158, 0.12);
+    --warn: #f5b454;
+    --warn-bg: rgba(245, 180, 84, 0.12);
+    --danger: #f06b6b;
+    --danger-bg: rgba(240, 107, 107, 0.12);
+    --long: #5dd39e;
+    --short: #f06b6b;
+    --mono: ui-monospace, "JetBrains Mono", "Fira Code", Menlo, monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    font-family: -apple-system, "Segoe UI", Inter, Roboto, sans-serif;
+    background: var(--bg);
+    color: var(--fg);
+    font-size: 13px;
+    -webkit-font-smoothing: antialiased;
+  }
+  button { font-family: inherit; cursor: pointer; }
+  input, select, textarea { font-family: inherit; color: var(--fg); }
+
+  /* ===== App shell ===== */
+  .app { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
+
+  /* ===== Top bar — identity zone only ===== */
+  .topbar {
+    display: flex; align-items: center; gap: 14px;
+    padding: 10px 18px;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg-subtle);
+    flex-shrink: 0;
+  }
+  .topbar .back {
+    display: inline-flex; align-items: center; gap: 6px;
+    background: transparent; border: none; color: var(--fg-muted);
+    padding: 6px 8px; border-radius: 6px;
+  }
+  .topbar .back:hover { background: var(--bg-raised); color: var(--fg); }
+  .title-block { display: flex; flex-direction: column; gap: 2px; min-width: 280px; }
+  .title-input {
+    background: transparent; border: none; outline: none;
+    font-size: 16px; font-weight: 600; color: var(--fg);
+    padding: 0;
+  }
+  .title-input::placeholder { color: var(--fg-subtle); }
+  .desc-input {
+    background: transparent; border: none; outline: none;
+    font-size: 12px; color: var(--fg-muted); padding: 0;
+  }
+  .desc-input::placeholder { color: var(--fg-subtle); }
+  .version-pill {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 3px 8px; border-radius: 999px;
+    background: var(--bg-elevated); color: var(--fg-muted);
+    font-size: 11px; font-weight: 500;
+    border: 1px solid var(--border);
+  }
+  .version-pill .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--ok); }
+  .topbar .grow { flex: 1; }
+  .topbar .actions { display: flex; align-items: center; gap: 8px; }
+  .btn {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 7px 12px; border-radius: 7px;
+    border: 1px solid var(--border-strong);
+    background: var(--bg-raised); color: var(--fg);
+    font-size: 12px; font-weight: 500;
+  }
+  .btn:hover { background: var(--bg-elevated); }
+  .btn.primary {
+    background: var(--accent-strong); border-color: var(--accent-strong); color: white;
+    font-weight: 600;
+  }
+  .btn.primary:hover { background: var(--accent); }
+  .btn.ghost { background: transparent; border-color: transparent; color: var(--fg-muted); }
+  .btn.ghost:hover { background: var(--bg-raised); color: var(--fg); }
+
+  /* ===== Identity strip (just below title) ===== */
+  .identity-strip {
+    display: flex; align-items: center; gap: 18px;
+    padding: 8px 18px;
+    background: var(--bg-subtle);
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+  }
+  .strip-label {
+    font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em;
+    color: var(--fg-subtle); margin-right: 4px;
+  }
+  .seg {
+    display: inline-flex; padding: 2px;
+    background: var(--bg-elevated); border-radius: 8px;
+    border: 1px solid var(--border);
+  }
+  .seg button {
+    padding: 5px 10px; border: none; background: transparent;
+    color: var(--fg-muted); border-radius: 6px;
+    font-size: 12px; font-weight: 500;
+  }
+  .seg button.active { background: var(--bg); color: var(--fg); box-shadow: 0 1px 2px rgba(0,0,0,0.4); }
+  .seg button:hover:not(.active) { color: var(--fg); }
+
+  /* ===== Tabs (the missing four-tab shell) ===== */
+  .tabs {
+    display: flex; align-items: center; gap: 0;
+    padding: 0 18px;
+    background: var(--bg);
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+  }
+  .tab {
+    position: relative;
+    padding: 12px 18px;
+    font-size: 13px; font-weight: 500;
+    color: var(--fg-muted);
+    background: transparent; border: none;
+    border-bottom: 2px solid transparent;
+    margin-bottom: -1px;
+  }
+  .tab:hover { color: var(--fg); }
+  .tab.active { color: var(--fg); border-bottom-color: var(--accent); font-weight: 600; }
+  .tab .count {
+    display: inline-block; margin-left: 6px;
+    padding: 1px 6px; border-radius: 999px;
+    background: var(--bg-elevated); color: var(--fg-muted);
+    font-size: 10px; font-weight: 600;
+  }
+  .tab.active .count { background: var(--accent); color: white; }
+  .tab .err {
+    display: inline-block; margin-left: 6px;
+    padding: 1px 6px; border-radius: 999px;
+    background: var(--danger-bg); color: var(--danger);
+    font-size: 10px; font-weight: 600;
+  }
+
+  /* ===== Persistent ExecutionPreview (the comprehension anchor) ===== */
+  .preview-rail {
+    padding: 14px 18px;
+    background: linear-gradient(180deg, var(--bg-subtle), var(--bg));
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+  }
+  .preview-head {
+    display: flex; align-items: baseline; justify-content: space-between;
+    margin-bottom: 10px;
+  }
+  .preview-title {
+    font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em;
+    color: var(--fg-subtle); font-weight: 600;
+  }
+  .preview-meta { font-size: 11px; color: var(--fg-muted); }
+  .preview-meta strong { color: var(--fg); font-weight: 600; }
+  .rails {
+    position: relative; height: 64px; padding: 0 4px;
+  }
+  .rail-axis {
+    position: absolute; left: 0; right: 0; top: 50%;
+    height: 1px; background: var(--border-strong);
+  }
+  .rail-anchor {
+    position: absolute; top: 50%; transform: translate(-50%, -50%);
+    left: 38%;
+    display: flex; flex-direction: column; align-items: center; gap: 4px;
+  }
+  .rail-anchor .dot {
+    width: 10px; height: 10px; border-radius: 50%;
+    background: var(--accent); box-shadow: 0 0 0 3px rgba(110, 168, 254, 0.2);
+  }
+  .rail-anchor .label { font-size: 10px; color: var(--fg-muted); white-space: nowrap; }
+  .rail-bar {
+    position: absolute; top: 50%; transform: translateY(-50%);
+    height: 8px; border-radius: 4px;
+    display: flex; align-items: center;
+  }
+  .rail-bar.stop {
+    background: var(--danger);
+    right: 62%; width: 12%;
+  }
+  .rail-bar.t1 { background: var(--ok); left: 38%; width: 14%; opacity: 0.7; }
+  .rail-bar.t2 { background: var(--ok); left: 38%; width: 26%; opacity: 0.85; }
+  .rail-bar.runner { background: var(--accent); left: 38%; width: 38%; }
+  .rail-tick {
+    position: absolute; top: calc(50% + 14px);
+    font-size: 10px; color: var(--fg-muted); white-space: nowrap;
+    transform: translateX(-50%);
+  }
+  .rail-tick.danger { color: var(--danger); }
+  .rail-tick.ok { color: var(--ok); }
+  .rail-tick.accent { color: var(--accent); }
+
+  /* ===== Body layout ===== */
+  .body {
+    display: flex; flex: 1; min-height: 0; overflow: hidden;
+  }
+  .left {
+    width: 240px; flex-shrink: 0;
+    border-right: 1px solid var(--border);
+    background: var(--bg-subtle);
+    display: flex; flex-direction: column; overflow: hidden;
+  }
+  .left-head {
+    padding: 12px 14px 8px;
+    display: flex; flex-direction: column; gap: 8px;
+    border-bottom: 1px solid var(--border);
+  }
+  .left-head h3 {
+    margin: 0; font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em;
+    color: var(--fg-subtle); font-weight: 600;
+  }
+  .search {
+    display: flex; align-items: center; gap: 6px;
+    padding: 6px 8px; background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
+  }
+  .search input {
+    background: transparent; border: none; outline: none;
+    flex: 1; font-size: 12px;
+  }
+  .browse-all {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 7px 9px; background: var(--bg-elevated); border: 1px solid var(--border);
+    border-radius: 6px; font-size: 12px; color: var(--fg);
+  }
+  .browse-all:hover { background: var(--bg-raised); }
+  .browse-all .kbd {
+    font-family: var(--mono); font-size: 10px;
+    background: var(--bg); border: 1px solid var(--border-strong);
+    padding: 1px 5px; border-radius: 4px; color: var(--fg-muted);
+  }
+  .feature-list { flex: 1; overflow-y: auto; padding: 6px; }
+  .feature-cat {
+    font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em;
+    color: var(--fg-subtle); padding: 8px 6px 4px; font-weight: 600;
+  }
+  .feature {
+    display: flex; flex-direction: column; gap: 1px;
+    padding: 6px 8px; border-radius: 5px; cursor: grab;
+  }
+  .feature:hover { background: var(--bg-raised); }
+  .feature .name { font-family: var(--mono); font-size: 12px; color: var(--fg); }
+  .feature .desc { font-size: 11px; color: var(--fg-muted); }
+  .feature .ret { font-family: var(--mono); font-size: 10px; color: var(--fg-subtle); }
+
+  /* ===== Center pane ===== */
+  .center { flex: 1; min-width: 0; overflow-y: auto; }
+  .pane { padding: 18px 22px; max-width: 980px; }
+  .section {
+    background: var(--bg-subtle);
+    border: 1px solid var(--border); border-radius: 10px;
+    margin-bottom: 16px;
+    overflow: hidden;
+  }
+  .section-head {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg-elevated);
+  }
+  .section-title { font-size: 13px; font-weight: 600; color: var(--fg); }
+  .section-title small { display: block; font-size: 11px; font-weight: 400; color: var(--fg-muted); margin-top: 2px; }
+  .section-body { padding: 14px 16px; }
+
+  /* Side toggle (long/short) */
+  .side-tabs { display: flex; align-items: center; gap: 0; }
+  .side-tabs button {
+    padding: 7px 14px; background: transparent; border: 1px solid var(--border);
+    color: var(--fg-muted); font-size: 12px; font-weight: 500;
+  }
+  .side-tabs button:first-child { border-radius: 6px 0 0 6px; }
+  .side-tabs button:last-child { border-radius: 0 6px 6px 0; border-left: none; }
+  .side-tabs button.active.long { background: var(--ok-bg); color: var(--ok); border-color: var(--ok); }
+  .side-tabs button.active.short { background: var(--danger-bg); color: var(--danger); border-color: var(--danger); }
+
+  /* Variables */
+  .vars {
+    display: flex; flex-wrap: wrap; gap: 6px; align-items: center;
+    padding: 8px 0;
+  }
+  .var-chip {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 4px 10px; border-radius: 6px;
+    background: var(--bg-elevated); border: 1px solid var(--border);
+    font-family: var(--mono); font-size: 12px;
+  }
+  .var-chip.tf { background: rgba(110, 168, 254, 0.08); border-color: rgba(110, 168, 254, 0.3); color: var(--accent); }
+  .var-chip.tf::before { content: "⏱"; font-family: inherit; }
+  .var-chip .x { color: var(--fg-subtle); margin-left: 2px; cursor: pointer; }
+  .var-add {
+    display: inline-flex; align-items: center; gap: 4px;
+    padding: 4px 10px; border-radius: 6px;
+    background: transparent; border: 1px dashed var(--border-strong);
+    color: var(--fg-muted); font-size: 12px;
+  }
+  .var-add:hover { color: var(--fg); border-color: var(--fg-muted); }
+  .vars-help { font-size: 11px; color: var(--fg-subtle); margin-left: 8px; }
+
+  /* Editor (Monaco mock) */
+  .editor {
+    background: #0a0c11; border: 1px solid var(--border); border-radius: 8px;
+    font-family: var(--mono); font-size: 13px; line-height: 1.65;
+    padding: 14px 16px;
+    position: relative;
+  }
+  .editor .gutter {
+    position: absolute; left: 0; top: 14px; bottom: 14px; width: 36px;
+    display: flex; flex-direction: column; align-items: flex-end; padding-right: 8px;
+    color: #3a4154; user-select: none;
+  }
+  .editor .code { margin-left: 32px; }
+  .tok-fn { color: #e8b86b; }
+  .tok-num { color: #b890f5; }
+  .tok-op { color: #7e8597; }
+  .tok-var { color: #6ea8fe; }
+  .tok-keyword { color: #f06b9c; }
+  .tok-comment { color: #4a5066; font-style: italic; }
+  .editor-footer {
+    margin-top: 8px; display: flex; align-items: center; justify-content: space-between;
+    font-size: 11px; color: var(--fg-muted);
+  }
+  .editor-footer .ok { color: var(--ok); }
+  .editor-footer .kbd {
+    font-family: var(--mono);
+    background: var(--bg-elevated); border: 1px solid var(--border);
+    padding: 1px 5px; border-radius: 3px; color: var(--fg-muted);
+  }
+
+  /* ===== Stops / Targets / Execution table-style rows ===== */
+  .stack-grid {
+    display: grid; grid-template-columns: 60px 1fr 110px 130px 140px 30px;
+    gap: 8px; align-items: center;
+  }
+  .stack-head {
+    font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em;
+    color: var(--fg-subtle); font-weight: 600;
+    padding: 0 4px 6px;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 8px;
+  }
+  .stack-head > * { padding: 0 4px; }
+  .stack-row {
+    background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 8px;
+    padding: 10px 8px;
+    margin-bottom: 6px;
+  }
+  .stack-row .role {
+    font-family: var(--mono); font-size: 11px; font-weight: 600;
+    padding: 3px 8px; border-radius: 6px; text-align: center;
+    color: white;
+  }
+  .stack-row .role.stop { background: var(--danger); }
+  .stack-row .role.t1, .stack-row .role.t2 { background: var(--ok); }
+  .stack-row .role.runner { background: var(--accent); }
+  .field {
+    background: var(--bg); border: 1px solid var(--border); border-radius: 5px;
+    padding: 5px 8px; font-size: 12px; color: var(--fg);
+    width: 100%; outline: none;
+  }
+  .field:focus { border-color: var(--accent); }
+  .micro {
+    background: transparent; border: none; color: var(--fg-subtle);
+    width: 24px; height: 24px; border-radius: 4px;
+  }
+  .micro:hover { background: var(--bg-raised); color: var(--danger); }
+
+  /* On-fill subtle row beneath leg */
+  .stack-on-fill {
+    grid-column: 2 / -1;
+    margin-top: 6px; padding: 6px 8px;
+    background: var(--bg); border: 1px dashed var(--border); border-radius: 5px;
+    font-size: 11px; color: var(--fg-muted);
+    display: flex; align-items: center; gap: 8px;
+  }
+  .stack-on-fill .field { width: auto; padding: 3px 6px; font-size: 11px; }
+
+  .add-row {
+    display: flex; gap: 8px; margin-top: 10px;
+  }
+  .add-row .btn { padding: 5px 10px; font-size: 11px; }
+
+  /* Size summary */
+  .size-bar {
+    height: 6px; border-radius: 3px; background: var(--bg);
+    display: flex; overflow: hidden; margin: 8px 0 4px;
+  }
+  .size-bar > div { height: 100%; }
+  .size-meta { display: flex; justify-content: space-between; font-size: 11px; color: var(--fg-muted); }
+  .size-meta .bal-ok { color: var(--ok); }
+
+  /* Exits */
+  .exit-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .exit-col {
+    background: var(--bg); border: 1px dashed var(--border-strong); border-radius: 8px;
+    padding: 12px; min-height: 140px;
+  }
+  .exit-col-head {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-bottom: 10px;
+  }
+  .exit-col-title {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-size: 12px; font-weight: 600;
+  }
+  .exit-col-title .dot { width: 8px; height: 8px; border-radius: 50%; }
+  .exit-col-title.long .dot { background: var(--ok); }
+  .exit-col-title.short .dot { background: var(--danger); }
+  .exit-block {
+    background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 6px;
+    padding: 8px 10px; margin-bottom: 6px;
+    display: flex; align-items: center; justify-content: space-between;
+    font-size: 12px;
+  }
+  .exit-block .name { font-weight: 500; }
+  .exit-block .params { font-family: var(--mono); font-size: 11px; color: var(--fg-muted); }
+  .exit-empty {
+    text-align: center; padding: 18px 12px;
+    color: var(--fg-subtle); font-size: 12px;
+  }
+  .exit-empty .badge {
+    display: inline-block; padding: 3px 8px; border-radius: 4px;
+    background: var(--bg-elevated); font-family: var(--mono); font-size: 10px;
+    color: var(--fg-muted);
+  }
+
+  /* Coverage summary inline (replaces top-bar pills) */
+  .coverage {
+    display: flex; gap: 6px; padding: 0 0 14px;
+  }
+  .cov-chip {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 4px 10px; border-radius: 999px;
+    font-size: 11px; font-weight: 500;
+    background: var(--bg-elevated); border: 1px solid var(--border);
+    color: var(--fg-muted);
+    cursor: pointer;
+  }
+  .cov-chip.ok { background: var(--ok-bg); color: var(--ok); border-color: rgba(93, 211, 158, 0.3); }
+  .cov-chip.miss { background: var(--bg-elevated); color: var(--fg-subtle); }
+  .cov-chip.warn { background: var(--warn-bg); color: var(--warn); border-color: rgba(245, 180, 84, 0.3); }
+  .cov-chip:hover { filter: brightness(1.15); }
+
+  /* Right panel */
+  .right {
+    width: 340px; flex-shrink: 0;
+    border-left: 1px solid var(--border);
+    background: var(--bg-subtle);
+    display: flex; flex-direction: column; overflow: hidden;
+  }
+  .right-head {
+    padding: 12px 14px;
+    border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  .right-head h3 { margin: 0; font-size: 12px; font-weight: 600; }
+  .ai-prompt {
+    margin: 12px 14px; padding: 10px;
+    background: linear-gradient(135deg, rgba(110,168,254,0.08), rgba(180,144,245,0.08));
+    border: 1px solid rgba(110,168,254,0.25); border-radius: 8px;
+  }
+  .ai-prompt textarea {
+    width: 100%; height: 56px;
+    background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
+    padding: 8px; font-size: 12px; resize: none; outline: none;
+  }
+  .ai-prompt textarea:focus { border-color: var(--accent); }
+  .ai-prompt .ai-actions {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-top: 8px;
+  }
+  .ai-prompt small { color: var(--fg-subtle); font-size: 10px; }
+
+  .templates { padding: 0 14px 14px; overflow-y: auto; flex: 1; }
+  .tpl-filters { display: flex; gap: 6px; margin: 8px 0 12px; flex-wrap: wrap; }
+  .tpl-filter {
+    padding: 3px 8px; font-size: 11px; border-radius: 4px;
+    background: var(--bg-elevated); border: 1px solid var(--border);
+    color: var(--fg-muted);
+  }
+  .tpl-filter.active { background: var(--accent-strong); border-color: var(--accent-strong); color: white; }
+  .tpl-card {
+    background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 8px;
+    padding: 10px 12px; margin-bottom: 8px;
+  }
+  .tpl-card .tpl-name { font-size: 13px; font-weight: 600; margin-bottom: 2px; }
+  .tpl-card .tpl-desc { font-size: 11px; color: var(--fg-muted); margin-bottom: 8px; line-height: 1.4; }
+  .tpl-tags { display: flex; gap: 4px; flex-wrap: wrap; margin-bottom: 8px; }
+  .tpl-tag {
+    padding: 1px 6px; font-size: 10px; border-radius: 3px;
+    background: var(--bg); color: var(--fg-muted);
+  }
+  .tpl-card .tpl-apply {
+    width: 100%; padding: 6px;
+    background: transparent; border: 1px solid var(--border-strong);
+    color: var(--fg); border-radius: 5px; font-size: 12px;
+  }
+  .tpl-card .tpl-apply:hover { background: var(--accent-strong); border-color: var(--accent-strong); color: white; }
+
+  /* Validation panel (bottom) */
+  .valid-panel {
+    border-top: 1px solid var(--border);
+    padding: 8px 14px;
+    background: var(--bg-elevated);
+    display: flex; align-items: center; justify-content: space-between;
+    font-size: 11px; color: var(--fg-muted);
+  }
+  .valid-panel .valid-ok { color: var(--ok); }
+
+  /* Helpers */
+  .row { display: flex; align-items: center; gap: 10px; }
+  .col { display: flex; flex-direction: column; gap: 6px; }
+  .muted { color: var(--fg-muted); }
+  .mono { font-family: var(--mono); }
+  .gap-tight { gap: 4px; }
+
+  /* Strategy Controls tab content (mock) */
+  .ctl-grid {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 14px;
+  }
+  .ctl-field { display: flex; flex-direction: column; gap: 4px; }
+  .ctl-field label {
+    font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em;
+    color: var(--fg-subtle); font-weight: 600;
+  }
+  .ctl-field .help { font-size: 11px; color: var(--fg-subtle); }
+
+</style>
+</head>
+<body>
+<div class="app">
+
+  <!-- ====== Top bar: identity zone only ====== -->
+  <div class="topbar">
+    <button class="back" title="Back to strategies">← Strategies</button>
+    <div class="title-block">
+      <input class="title-input" placeholder="Untitled strategy" value="ORB Pullback — 5m Equities" />
+      <input class="desc-input" placeholder="Describe your idea (optional)" value="Open-range break, pull back to 9-EMA, enter on reclaim" />
+    </div>
+    <span class="version-pill"><span class="dot"></span>Draft · Saved v3 · 2:14 PM</span>
+    <div class="grow"></div>
+    <div class="actions">
+      <button class="btn ghost" title="Sim Lab">▶ Sim</button>
+      <button class="btn ghost">Backtest</button>
+      <button class="btn">Save draft</button>
+      <button class="btn primary">⏻ Freeze for deploy</button>
+    </div>
+  </div>
+
+  <!-- ====== Identity strip: Direction + Horizon + Base TF ====== -->
+  <div class="identity-strip">
+    <span class="strip-label">Direction</span>
+    <div class="seg" role="tablist">
+      <button>Long only</button>
+      <button class="active">Both</button>
+      <button>Short only</button>
+    </div>
+    <span class="strip-label">Horizon</span>
+    <div class="seg">
+      <button>Scalping</button>
+      <button class="active">Intraday</button>
+      <button>Swing</button>
+      <button>Position</button>
+    </div>
+    <span class="strip-label">Base timeframe</span>
+    <div class="seg">
+      <button>1m</button>
+      <button class="active">5m</button>
+      <button>15m</button>
+      <button>1h</button>
+      <button>1d</button>
+    </div>
+    <div class="grow"></div>
+    <span class="muted" style="font-size:11px;">Strategy is symbol-agnostic — symbols come from Watchlist at deploy.</span>
+  </div>
+
+  <!-- ====== Tabs (the missing four-tab shell) ====== -->
+  <div class="tabs">
+    <button class="tab active">Core <span class="count">4</span></button>
+    <button class="tab">Signals <span class="count">2</span></button>
+    <button class="tab">Stop · Target · Execution <span class="err">1</span></button>
+    <button class="tab">Strategy Controls</button>
+    <div style="flex:1"></div>
+    <button class="tab" style="border-bottom:none; color:var(--fg-muted);">Diff vs v2 →</button>
+  </div>
+
+  <!-- ====== Persistent ExecutionPreview rail ====== -->
+  <div class="preview-rail">
+    <div class="preview-head">
+      <div class="preview-title">Execution geometry — long side</div>
+      <div class="preview-meta">
+        Risk per trade: <strong>1.00R</strong> ·
+        First target: <strong>+1.4R</strong> ·
+        Runner: <strong>+2.8R</strong> ·
+        Avg win/loss expectancy: <strong style="color:var(--ok)">+0.78R</strong>
+      </div>
+    </div>
+    <div class="rails">
+      <div class="rail-axis"></div>
+      <div class="rail-bar stop"></div>
+      <div class="rail-bar runner"></div>
+      <div class="rail-bar t2"></div>
+      <div class="rail-bar t1"></div>
+      <div class="rail-anchor">
+        <div class="dot"></div>
+      </div>
+      <div class="rail-tick danger" style="left:26%;">Stop −1.0R · −0.85%</div>
+      <div class="rail-tick" style="left:38%; color:var(--accent);">Entry 0%</div>
+      <div class="rail-tick ok" style="left:52%;">T1 +1.0R · 50%</div>
+      <div class="rail-tick ok" style="left:64%;">T2 +1.8R · 25%</div>
+      <div class="rail-tick accent" style="left:76%;">Runner +2.8R · 25%</div>
+    </div>
+  </div>
+
+  <!-- ====== Body: left palette + center + right ====== -->
+  <div class="body">
+
+    <!-- ===== Left rail ===== -->
+    <aside class="left">
+      <div class="left-head">
+        <h3>Features</h3>
+        <div class="search">
+          <span class="muted">🔍</span>
+          <input placeholder="Search features…" />
+        </div>
+        <button class="browse-all">
+          <span>Browse all features</span>
+          <span class="kbd">Ctrl Space</span>
+        </button>
+      </div>
+      <div class="feature-list">
+        <div class="feature-cat">Trend</div>
+        <div class="feature">
+          <div class="name">ema(length)</div>
+          <div class="desc">Exponential moving average</div>
+        </div>
+        <div class="feature">
+          <div class="name">sma(length)</div>
+          <div class="desc">Simple moving average</div>
+        </div>
+        <div class="feature">
+          <div class="name">vwap()</div>
+          <div class="desc">Volume-weighted average price</div>
+        </div>
+        <div class="feature-cat">Momentum</div>
+        <div class="feature">
+          <div class="name">rsi(length)</div>
+          <div class="desc">Relative strength index 0–100</div>
+        </div>
+        <div class="feature">
+          <div class="name">macd(fast, slow)</div>
+          <div class="desc">MACD line</div>
+        </div>
+        <div class="feature-cat">Volatility</div>
+        <div class="feature">
+          <div class="name">atr(length)</div>
+          <div class="desc">Average true range</div>
+        </div>
+        <div class="feature">
+          <div class="name">bbands(length, k)</div>
+          <div class="desc">Bollinger band edges</div>
+        </div>
+        <div class="feature-cat">Session / Range</div>
+        <div class="feature">
+          <div class="name">opening_range(min)</div>
+          <div class="desc">Today's first N-min high/low</div>
+        </div>
+      </div>
+    </aside>
+
+    <!-- ===== Center pane (Stop·Target·Execution tab content shown) ===== -->
+    <main class="center">
+      <div class="pane">
+
+        <!-- Coverage chips moved here, clickable -->
+        <div class="coverage">
+          <span class="cov-chip ok">✓ Entry</span>
+          <span class="cov-chip ok">✓ Stop</span>
+          <span class="cov-chip ok">✓ Target</span>
+          <span class="cov-chip miss">○ Runner</span>
+          <span class="cov-chip warn">⚠ Exit</span>
+          <span class="muted" style="margin-left:auto; font-size:11px;">Click a chip to jump to the section</span>
+        </div>
+
+        <!-- Trade structure (stops, legs, on-fill all in one table) -->
+        <div class="section">
+          <div class="section-head">
+            <div class="section-title">
+              Trade structure
+              <small>One row per stop and target. Long-side geometry.</small>
+            </div>
+            <div class="row gap-tight">
+              <div class="seg">
+                <button class="active long">Long</button>
+                <button>Short</button>
+              </div>
+              <button class="btn ghost" title="Mirror long structure to short">⇄ Mirror</button>
+            </div>
+          </div>
+          <div class="section-body">
+
+            <!-- Size summary -->
+            <div class="row" style="justify-content:space-between;">
+              <div style="flex:1;">
+                <div class="size-bar">
+                  <div style="width:50%; background:var(--ok); opacity:0.7;"></div>
+                  <div style="width:25%; background:var(--ok); opacity:0.95;"></div>
+                  <div style="width:25%; background:var(--accent);"></div>
+                </div>
+                <div class="size-meta">
+                  <span>T1 50% · T2 25% · Runner 25%</span>
+                  <span class="bal-ok">✓ Balanced 100%</span>
+                </div>
+              </div>
+            </div>
+
+            <div style="height:14px;"></div>
+
+            <!-- Header row -->
+            <div class="stack-grid stack-head">
+              <div>Role</div>
+              <div>Definition</div>
+              <div>Type</div>
+              <div>Value</div>
+              <div>Size / scope</div>
+              <div></div>
+            </div>
+
+            <!-- Stop row -->
+            <div class="stack-row">
+              <div class="stack-grid">
+                <div class="role stop">STOP</div>
+                <input class="field mono" value="entry_price - atr(14) * 1.5" />
+                <select class="field"><option>ATR multiple</option><option>% of price</option><option>R multiple</option><option>Expression</option></select>
+                <input class="field" value="1.5" />
+                <select class="field"><option>All legs</option><option>Per leg</option></select>
+                <button class="micro" title="Remove">✕</button>
+              </div>
+              <div class="stack-on-fill">
+                <span class="muted">On fill:</span>
+                <select class="field"><option>Move stop to fill price</option><option>Move stop to fill + offset</option><option>Leave at signal price</option></select>
+                <span class="muted">— protective stop arms after fill</span>
+              </div>
+            </div>
+
+            <!-- Target 1 -->
+            <div class="stack-row">
+              <div class="stack-grid">
+                <div class="role t1">T1</div>
+                <input class="field mono" value="entry_price + (entry_price - stop) * 1.0" />
+                <select class="field"><option>R multiple</option><option>% of price</option><option>ATR multiple</option><option>Feature</option></select>
+                <input class="field" value="1.0" />
+                <input class="field" value="50%" />
+                <button class="micro">✕</button>
+              </div>
+              <div class="stack-on-fill">
+                <span class="muted">On fill:</span>
+                <select class="field"><option>Move stop to break-even</option><option>Trail stop by ATR</option><option>No change</option></select>
+              </div>
+            </div>
+
+            <!-- Target 2 -->
+            <div class="stack-row">
+              <div class="stack-grid">
+                <div class="role t2">T2</div>
+                <input class="field mono" value="entry_price + (entry_price - stop) * 1.8" />
+                <select class="field"><option>R multiple</option></select>
+                <input class="field" value="1.8" />
+                <input class="field" value="25%" />
+                <button class="micro">✕</button>
+              </div>
+            </div>
+
+            <!-- Runner -->
+            <div class="stack-row">
+              <div class="stack-grid">
+                <div class="role runner">RUN</div>
+                <input class="field mono" value="trail by atr(14) * 2.0" />
+                <select class="field"><option>Trailing</option></select>
+                <input class="field" value="2.0 ATR" />
+                <input class="field" value="25%" />
+                <button class="micro">✕</button>
+              </div>
+            </div>
+
+            <div class="add-row">
+              <button class="btn">+ Add target</button>
+              <button class="btn">+ Add runner</button>
+              <button class="btn ghost">Auto-balance sizes</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Exits -->
+        <div class="section">
+          <div class="section-head">
+            <div class="section-title">
+              Exits
+              <small>Time, session, feature-driven exit conditions. Drag from the palette.</small>
+            </div>
+            <button class="btn ghost">⇄ Copy long → short</button>
+          </div>
+          <div class="section-body">
+            <div class="exit-cols">
+              <div class="exit-col">
+                <div class="exit-col-head">
+                  <span class="exit-col-title long"><span class="dot"></span>Long exits</span>
+                  <span class="muted" style="font-size:11px;">2 blocks</span>
+                </div>
+                <div class="exit-block">
+                  <div>
+                    <div class="name">Time exit</div>
+                    <div class="params">close ≥ 15:55 ET</div>
+                  </div>
+                  <span class="muted">▾</span>
+                </div>
+                <div class="exit-block">
+                  <div>
+                    <div class="name">Feature exit</div>
+                    <div class="params">close &lt; ema(20)</div>
+                  </div>
+                  <span class="muted">▾</span>
+                </div>
+              </div>
+              <div class="exit-col">
+                <div class="exit-col-head">
+                  <span class="exit-col-title short"><span class="dot"></span>Short exits</span>
+                  <span class="muted" style="font-size:11px;">empty</span>
+                </div>
+                <div class="exit-empty">
+                  <div style="margin-bottom:8px;">Drag <span class="badge">time_exit</span> · <span class="badge">feature_exit</span> · <span class="badge">session_close</span> from the palette</div>
+                  <button class="btn ghost">+ Add exit</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </main>
+
+    <!-- ===== Right panel: AI + templates ===== -->
+    <aside class="right">
+      <div class="right-head">
+        <h3>Compose with AI · Templates</h3>
+        <button class="btn ghost" title="Hide">»</button>
+      </div>
+      <div class="ai-prompt">
+        <textarea placeholder="Describe a strategy idea — e.g. 'pull back to 9-EMA after opening range break, exit at 3R or session close'"></textarea>
+        <div class="ai-actions">
+          <small>Anthropic · Claude Opus 4.7</small>
+          <button class="btn primary" style="padding:5px 10px; font-size:11px;">✨ Generate draft</button>
+        </div>
+      </div>
+
+      <div class="templates">
+        <div class="tpl-filters">
+          <span class="tpl-filter active">All horizons</span>
+          <span class="tpl-filter">Intraday</span>
+          <span class="tpl-filter">Swing</span>
+          <span class="tpl-filter">Long</span>
+          <span class="tpl-filter">Mean-reversion</span>
+        </div>
+
+        <div class="tpl-card">
+          <div class="tpl-name">Opening Range Break · pullback</div>
+          <div class="tpl-desc">Break of 30-min OR, wait for pullback to 9-EMA, enter on reclaim. Exits at 1R / 1.8R / runner.</div>
+          <div class="tpl-tags">
+            <span class="tpl-tag">intraday</span>
+            <span class="tpl-tag">long</span>
+            <span class="tpl-tag">trend</span>
+          </div>
+          <button class="tpl-apply">Use this template</button>
+        </div>
+
+        <div class="tpl-card">
+          <div class="tpl-name">Mean reversion · BB extreme</div>
+          <div class="tpl-desc">Fade 2σ Bollinger touches when RSI &lt; 25 or &gt; 75 and trend is flat. Tight ATR stop.</div>
+          <div class="tpl-tags">
+            <span class="tpl-tag">intraday</span>
+            <span class="tpl-tag">both</span>
+            <span class="tpl-tag">mean-revert</span>
+          </div>
+          <button class="tpl-apply">Use this template</button>
+        </div>
+
+        <div class="tpl-card">
+          <div class="tpl-name">Swing · 50/200 reclaim</div>
+          <div class="tpl-desc">Long when price reclaims 50-EMA above rising 200-EMA. Stop under last swing low.</div>
+          <div class="tpl-tags">
+            <span class="tpl-tag">swing</span>
+            <span class="tpl-tag">long</span>
+            <span class="tpl-tag">trend</span>
+          </div>
+          <button class="tpl-apply">Use this template</button>
+        </div>
+      </div>
+    </aside>
+  </div>
+
+  <!-- ====== Validation footer ====== -->
+  <div class="valid-panel">
+    <div>
+      <span class="valid-ok">✓ Expression valid</span>
+      <span style="margin: 0 10px;">·</span>
+      <span class="muted">Variables: 3 ok</span>
+      <span style="margin: 0 10px;">·</span>
+      <span style="color: var(--warn);">⚠ Short side has no exits — will use stop/target only</span>
+    </div>
+    <div class="muted">
+      <span class="kbd" style="font-family:var(--mono); background:var(--bg); border:1px solid var(--border); padding:1px 5px; border-radius:3px;">Ctrl S</span> Save draft
+      &nbsp;·&nbsp;
+      <span class="kbd" style="font-family:var(--mono); background:var(--bg); border:1px solid var(--border); padding:1px 5px; border-radius:3px;">Ctrl Space</span> Browse features
+    </div>
+  </div>
+
+</div>
+</body>
+</html>

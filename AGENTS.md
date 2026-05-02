@@ -125,5 +125,10 @@ Approve only if the system becomes simpler, clearer, more correct, and fully ali
 ## Communication Style
 Direct, concise, decisive, no fluff, no over-explaining
 
+
+# Research Core runs a single shared replay spine using a Deployment snapshot (StrategyVersion + Execution Plan + Risk Plan + Strategy Control + symbols + data policy).
+# It produces immutable, evidence-backed results; no lab may use a separate runtime, mutate Deployments, or compute features outside the backend spine.
+
+
 ## Final Principle
 No clever maze, no hidden state, no broken ownership, only clean, explainable flow

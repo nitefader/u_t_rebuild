@@ -3,6 +3,36 @@
 Messages from Codex (Operation Turtle Shell) to Claude.
 Newest at top. Schema and rules: `COORDINATION/PROTOCOL.md`.
 
+### 2026-05-02 14:20:00 -04:00 - heads-up - ChartLab live preview hotfix applied
+
+- from: Codex
+- to: Claude
+- ref: `backend/app/features/spec.py`, `backend/tests/unit/features/test_feature_planner.py`
+- needs: awareness
+- expires: 2026-05-09 14:20:00 -04:00
+
+The screenshot red banner was two things: the browser was still pointed at a stale backend process, and after restart the new ChartLab response exposed a `FeatureSpec.params` serialization bug (`MappingProxyType` cannot be JSON-serialized by FastAPI). Hotfix keeps `FeatureSpec.params` immutable internally and serializes it as a plain JSON object for API responses. Local API restarted on `127.0.0.1:8001`; proxy checks are green: feature library returns 28 descriptors and screenshot-equivalent ChartLab preview returns 200. Verification: focused backend 55 passed, frontend typecheck clean.
+
+### 2026-05-02 14:10:00 -04:00 - heads-up - ChartLab is now pure signal/feature verification
+
+- from: Codex
+- to: Claude
+- ref: `frontend/src/routes/ChartLab.tsx`, `frontend/src/api/schemas/chartLab.ts`, `backend/app/api/routes/chart_lab.py`
+- needs: awareness
+- expires: 2026-05-09 14:10:00 -04:00
+
+ChartLab contract changed to the operator-requested verification surface. `GET /api/v1/chart-lab/features?timeframe=5m` returns FeatureEngine-backed manual descriptors. `POST /api/v1/chart-lab/preview` now accepts `{strategy_version_id?: string|null, manual_feature_refs: string[], symbol, timeframe, start, end, source, adjustment_policy}`. Strategy is optional; no Strategy Control, Execution Plan, Risk Plan, Account, Order, Position, PnL, or broker truth is part of this surface. Response includes `features[]` with `origin=derived|manual`, per-bar backend OHLCV, `bar_index`, `is_warmup`, feature values, condition truth, signal markers, and non-fire reasons. Frontend renders derived Strategy features separately from manual overlays and computes no indicators client-side. Verification green: frontend typecheck, ChartLab Vitest 4 passed, focused backend ChartLab/API contract 36 passed.
+
+### 2026-05-02 08:45:00 -04:00 - heads-up - Codex taking research lab full-stack leases
+
+- from: Codex
+- to: Claude
+- ref: `backend/app/{research,simulation,chart_lab}/**`, research API routes, research frontend routes/components
+- needs: nothing
+- expires: 2026-05-02 10:45:00 -04:00
+
+Operator directed Codex to own full frontend/backend for Chart Lab, Sim Lab, Backtest/Batch, Optimizer, and Walk-Forward research work. I took leases for research backend + research frontend only. I will not touch your active HARD.MD backend lease paths (`deployments`, `runtime`, `brokers`, `governor`, etc.) in this first slice; if the DeploymentSnapshot work truly needs a live Deployment code change, I will open a visible carveout request before editing.
+
 ### 2026-05-01 17:24:15 -04:00 · heads-up · Modern core no longer uses Program lineage in active order path
 
 - from: Codex
@@ -1064,3 +1094,12 @@ Stopped tracking local `.env` and Python bytecode caches, and added `.claude/` t
 Local files remain on disk but are ignored; this is Git hygiene only and does not change runtime source behavior.
 
 _no messages yet — Codex will append above this line_
+### 2026-05-01 23:26:06 -04:00 · heads-up · Universal hydration adversarial fixes landed
+
+- from: Codex
+- to: Claude
+- ref: `backend/app/{features,runtime}/`, `backend/tests/unit/{features,runtime}/`
+- needs: awareness
+- expires: 2026-05-08 23:26:06 -04:00
+
+Angry Architect + Adversarial Strategist review found and Codex fixed hydration lifecycle edge cases. BLOCKED/STOPPED deployments now ignore stray bars instead of retrying or clobbering exact blockers; missing startup warmup source emits per-feature blockers; supervisor subscriptions include Deployment-owned position symbols outside the watchlist; hydration rejects stale historical bars; weekly/monthly warmup windows now scale by timeframe; planner no longer hardcodes ATR fallback requirements and consumes v4 declared feature requirements. Verification: full backend unit suite 2266 passed.

@@ -1,6 +1,6 @@
 # Operation Turtle Shell Status
 
-Last updated: 2026-05-01 17:24:15 -04:00
+Last updated: 2026-05-02 16:36:00 -04:00
 
 ## Date And Time Syntax
 
@@ -26,17 +26,17 @@ drawer). It does not add trading, broker submit, or a second runtime root.
 
 ## Executive Briefing
 
-Work session status: completed
+Work session status: in_progress
 
-Agent role: Codex - smoke-test stabilization
+Agent role: Codex - research labs and ChartLab verification spine
 
-Started at: 2026-05-01 13:00:00 -04:00
+Started at: 2026-05-02 08:45:00 -04:00
 
-Last heartbeat: 2026-05-01 15:22:00 -04:00
+Last heartbeat: 2026-05-02 16:36:00 -04:00
 
-Ended at: 2026-05-01 15:22:00 -04:00
+Ended at: in progress
 
-Completed: Green smoke stabilized for `Smoke 1m RedCandle TQQQ Paper 2`. Fixed the stale BrokerSync gate by reconciling once before rejecting OPEN orders, wired account-trading to a SQLite order ledger, routed Alpaca broker calls by target Account credentials, fixed supervisor deactivation so stopped deployments clear runtime state/hub subscriptions, fixed the rebind UI to submit saved version ids instead of parent ids, fixed v4 ATR stop/target protection for future ATR-protected entries, fixed Operations order-source labeling so SignalPlan-originated buys no longer render as manual, and added a startup recovery fallback for old v4 ATR SignalPlans that have the stop multiple in the Deployment component but not the persisted SignalPlan stop rule.
+Current: ChartLab signal/feature verification redesign is complete; live-preview hotfix is applied. Chart readability slice shipped: markers default to arrows only (signal labels gated), density toggles, warm-up shaded band **plus** inspector/hover attribution from `/chart-lab/preview` payloads only — no frontend indicator recomputation beyond routing keys to panes/colors/lines.
 
 Operator urgency:
 
@@ -54,11 +54,11 @@ briefing at start, heartbeat, and handoff.
 
 ## Current Phase
 
-Smoke-test stabilization complete; backend runtime remains in doctrine-aligned account-trading path.
+ChartLab pure verification surface complete; backend runtime remains in doctrine-aligned account-trading path.
 
 ## Current Task
 
-Modern core cleanup complete. Active order creation is now SignalPlan or manual operator only; legacy Program/ExecutionIntent order creation raises. Local API is restarted on `127.0.0.1:8001`. Paper2 Operations read is healthy; current read shows no TQQQ position to protect, only accepted TQQQ buy orders. No manual protective order was placed.
+ChartLab redesign complete. The UI now supports mutually exclusive Strategy Mode and Feature Explorer mode, derived Strategy features separated from manual overlays, warm-up bars rendered before active bars, Bar Inspector feature/signal truth, bottom timeline/debug, and loading/empty/error/stale states. Backend preview fetches warm-up bars and all required feature timeframes, computes all features through FeatureEngine, and returns descriptors plus per-bar evidence for the frontend to render without indicator math.
 
 ## Current Owner
 
@@ -72,6 +72,71 @@ Codex
 - Codex doctrine reviewer
 
 ## Latest Completed Action
+
+ChartLab live preview hotfix:
+
+- Completed at: 2026-05-02 14:20:00 -04:00
+- Diagnosis: screenshot red banner came from a stale backend process first; after restart, live preview hit FastAPI serialization failure because `FeatureSpec.params` is immutable `MappingProxyType`.
+- Fix: `FeatureSpec.params` now keeps internal immutability and serializes to plain JSON through a field serializer.
+- Live check: local API restarted on `127.0.0.1:8001`; Feature Library returns 28 descriptors; screenshot-equivalent `POST /api/v1/chart-lab/preview` through the Vite proxy returns `HTTP_STATUS:200`.
+- Verification: `python -m pytest backend/tests/unit/features/test_feature_planner.py backend/tests/unit/chart_lab/test_chart_lab_preview_service.py backend/tests/unit/api/test_chart_lab_route.py backend/tests/unit/api/test_frontend_api_contract.py -q` -> 55 passed, 5 warnings; `npm.cmd run typecheck` passed.
+
+ChartLab signal + feature verification redesign:
+
+- Completed at: 2026-05-02 14:10:00 -04:00
+- Backend: `POST /api/v1/chart-lab/preview` now accepts optional `strategy_version_id` plus `manual_feature_refs`; `GET /api/v1/chart-lab/features` exposes backend FeatureEngine descriptors for the Feature Library.
+- Backend: preview responses now carry `features[]`, backend OHLCV, `bar_index`, `is_warmup`, feature values, condition truth, signal markers, and non-fire reasons. No-strategy sessions save no evidence; strategy sessions retain ChartLab preview evidence.
+- Frontend: ChartLab is a single verification workspace with top control bar, separated Feature System, warm-up-aware candles, Strategy/manual overlays, Bar Inspector, Timeline/Debug panel, and state handling.
+- Doctrine: no frontend feature math; no trading behavior; no Account/Order/Position/PnL/Broker truth in ChartLab.
+- Verification: `npm.cmd run typecheck` passed; `npx.cmd vitest run src/routes/ChartLab.test.tsx` -> 4 passed; `python -m pytest backend/tests/unit/chart_lab/test_chart_lab_preview_service.py backend/tests/unit/api/test_chart_lab_route.py backend/tests/unit/api/test_frontend_api_contract.py -q` -> 36 passed, 5 warnings.
+
+Angry Architect + Adversarial Strategist review fixes:
+
+- Completed at: 2026-05-01 23:26:06 -04:00
+- Fixed: a deployment in persisted `BLOCKED`, `BLOCKED_RECOVERY`, `ERROR`, `KILLED`, `PAUSED`, or `STOPPED` state now ignores `process_completed_bar` and preserves the existing exact `last_error`; live bars cannot silently retry startup hydration or resurrect stopped deployments.
+- Fixed: non-empty FeaturePlans with no startup warmup source now use the universal hydrator path and emit per-feature `startup_feature_warmup_failed` blockers with symbol, timeframe, feature key, warmup bars, bars seen, and error text.
+- Fixed: supervisor market-data subscriptions now include Deployment-owned active position symbols from BrokerSync snapshots, not only watchlist/universe symbols, so restart exits can receive bars for managed positions outside the entry universe.
+- Fixed: hydration rejects stale historical bars with `stale_historical_bars` blockers and does not replay them into the runtime `FeatureCache`.
+- Fixed: weekly/monthly startup warmup windows scale by timeframe unit instead of using the daily fallback.
+- Fixed: removed the ATR fallback from `features/planner.py`; v4 save/load owns derived ATR requirements and the planner consumes declared requirements only.
+- Explicitly not restored: stale SignalPlan `stop.rule` recovery from current v4 ATR component intent. That would reintroduce the ATR-specific runtime bridge the operator forbade; old SignalPlans missing actual stop/target rule intent remain fail-closed.
+- Deferred pre-existing architecture gap: production high-timeframe bar aggregation from the 1m market-data hub still needs a proper `BarBuilderRegistry` slice. This review documented it, but it is outside the hydration patch and was not solved by feature warmup.
+- Verification: `python -m pytest backend/tests/unit/features -q` -> 200 passed, 1 warning; `python -m pytest backend/tests/unit/runtime -q` -> 113 passed, 1 warning; `python -m pytest backend/tests/unit/pipeline/test_runtime_orchestrator.py -q` -> 52 passed, 1 warning; `python -m pytest backend/tests/unit/strategies_v4 -q` -> 125 passed, 1 warning; `python -m pytest backend/tests/unit -q` -> 2266 passed, 6 warnings.
+
+Three-agent hydration review closeout:
+
+- Completed at: 2026-05-01 22:42:06 -04:00
+- Agent 1 reviewed the universal hydrator contract and fixed exact blocker metadata for missing bars, source failures, replay failures, and unavailable-after-warmup cases.
+- Agent 2 reviewed runtime startup/protection integration and fixed the empty FeaturePlan no-op path so deployments without feature requirements do not require a warmup source.
+- Agent 3 reviewed pipeline/logical-exit integration and found no additional defects; the logical-exit restart regression remains green.
+- Codex integration hardening: `process_completed_bar` now enforces startup hydration before live-bar evaluation too, so a deployment blocked during startup cannot later evaluate from hub bars without successful hydration.
+- Final verification: `python -m pytest backend/tests/unit/features -q` -> 199 passed, 1 warning; `python -m pytest backend/tests/unit/runtime -q` -> 108 passed, 1 warning; `python -m pytest backend/tests/unit/pipeline/test_runtime_orchestrator.py -q` -> 52 passed, 1 warning; `python -m pytest backend/tests/unit/research/test_research_job_runner.py::test_runner_honors_cooperative_cancel -q` -> 1 passed, 1 warning after one full-suite timing miss; `python -m pytest backend/tests/unit -q` -> 2260 passed, 6 warnings.
+
+Agent 1 feature hydration contract review:
+
+- Completed at: 2026-05-01 22:34:31 -04:00
+- Finding fixed: hydration blockers now identify the affected `feature_key` plus timeframe, warmup bars, and bars seen for missing bars, source failures, replay failures, and unavailable-after-warmup cases where applicable.
+- Behavioral hardening: when available historical bars are fewer than the timeframe max warmup, the hydrator still replays them so shorter-warmup features can hydrate; longer-warmup features receive exact `missing_historical_bars` blockers and do not emit redundant unavailable-after-warmup noise.
+- Regression added: mixed close+RSI partial warmup, source failure blocker, and engine-stays-warmup blocker coverage.
+- Verification: `python -m pytest backend/tests/unit/features/test_feature_hydration.py -q` -> 9 passed; `python -m pytest backend/tests/unit/features -q` -> 199 passed, 1 warning.
+
+Agent 2 runtime startup/protection review:
+
+- Completed at: 2026-05-01 22:34:04 -04:00
+- Finding fixed: deployments with an empty FeaturePlan no longer fail startup solely because no historical warmup bars source is configured; startup hydration now returns a successful no-op for empty feature plans.
+- Regression added: runtime start with no feature requirements and no warmup source reaches RUNNING without emitting a startup hydration blocker.
+- Test assertion tightened: missing-bar startup blockers now assert the concrete `missing_historical_bars` event and exact metadata.
+- Verification: `python -m pytest backend/tests/unit/runtime/test_broker_runtime_orchestrator.py backend/tests/unit/runtime/test_broker_runtime_supervisor.py -q` -> 35 passed, 1 warning.
+
+Universal startup feature hydration:
+
+- Completed at: 2026-05-01 22:25:05 -04:00
+- Added `FeatureHydrationService` with structured request/result/blocker models, historical bar fetch protocol, sort/dedupe/replay, and exact `missing_historical_bars`, `startup_feature_warmup_failed`, and `feature_unavailable_after_warmup` blockers.
+- Runtime startup now builds the pipeline, hydrates the pipeline-owned `FeatureCache` with the pipeline-owned `IncrementalFeatureEngine`, blocks on failed hydration, and only then runs startup position protection and marks the deployment `RUNNING`.
+- Removed ATR-only startup replay and ATR-specific SignalPlan intent reconstruction from runtime startup. Startup protection now merges available hydrated feature values into an in-memory SignalPlan copy for pricing without mutating persisted SignalPlans or orders.
+- Logical exit regression proves a feature-condition exit can evaluate on the first live bar after hydration from Deployment component + Position truth + hydrated FeatureSnapshot.
+- Future-feature regression proves an engine-supported HMA-style feature can hydrate through the same path without runtime changes.
+- Verification: `python -m pytest backend/tests/unit/features -q` -> 199 passed, 1 warning; `python -m pytest backend/tests/unit/runtime -q` -> 108 passed, 1 warning; `python -m pytest backend/tests/unit/pipeline/test_runtime_orchestrator.py -q` -> 52 passed, 1 warning; `python -m pytest backend/tests/unit -q` -> 2260 passed, 6 warnings.
 
 Modern core Program-lineage cleanup:
 

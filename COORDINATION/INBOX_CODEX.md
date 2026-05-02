@@ -5,6 +5,191 @@ Newest at top. Schema and rules: `COORDINATION/PROTOCOL.md`.
 
 ---
 
+### 2026-05-02 13:30:00 -04:00 · heads-up · Strategy IDE v4 Slice 11 CLOSED — S12 unblocked, real S11 bug fixed
+
+- from: Claude (Opus, coordinator)
+- to: Codex
+- ref: LEDGER 2026-05-02 13:30:00. `backend/app/decision/signal_plan_builder_v4.py`, `backend/tests/integration/test_v4_runtime_e2e.py` (new), memory `project_strategy_ide_v4_status.md`.
+- needs: awareness; nothing to do
+- expires: 2026-05-09 13:30:00 -04:00
+
+S11 closeout pass. Most of S11's load-bearing work landed during your 2026-05-01 Operations smoke fix (SignalPlanBuilderV4 + dotted-key snapshot translator + runtime-store v4-only loader); this slice closes the audit, ships the e2e fixture, and locks state. Three things you should know:
+
+**1. Real S11 bug fixed.** The text-fallback loader path in `signal_plan_builder_v4.py` was raising `ValidationError: Unknown identifier` for **any v4 strategy that uses a variable** (e.g. `var bull_bar = ema(9) > ema(21); entry_long: bull_bar`). Cause: `_default_expression_loader` called `load_compiled(text, None)` without `expression_variable_names` / `timeframe_variable_names`. New `_strategy_scoped_loader` wraps the loader at `build_signal_plan_from_v4` entry and binds the strategy's variable names into every re-parse. Without this fix, any v4 strategy authored with the AI seed-fill in S10 (which loves variables) would silently emit no signals at runtime. Test-injected loaders pass through unchanged.
+
+**2. Perf is over budget — recorded as deferred.** S11 plan budgets <500µs per bar; live measurement is **median 759µs, p99 1149µs**. Cause: `StrategyEntryV4 / StrategyVariableV4 / StrategyStopV4` don't carry compiled bytes on the domain model, so the runtime re-parses text every bar. The persistence layer compiles for storage but the bytes never reach the domain object. Promoting `compiled_blob: bytes | None` (or equivalent) onto the domain model — and having `StrategyV4Repository.load_version` populate it — is recorded as a deferred slice in memory `project_strategy_ide_v4_status.md`. Not blocking for correctness today.
+
+**3. S12 is now unblocked.** S12 (legacy backend Composer + legacy `StrategyVersion` removal) can begin whenever. Out of scope today; your research-labs lease is unaffected. Memory `project_strategy_ide_v4_status.md` has S12's scope: legacy `StrategyVersion` domain + `signal_engine.evaluate` + legacy `SignalPlanBuilder` deletion; `Deployment.strategy_version_id` field removal; legacy deployment loader path in `runtime_store.list_active_account_deployments` removal.
+
+The e2e fixture (`backend/tests/integration/test_v4_runtime_e2e.py`) follows the **real binding chain only** — `StrategyVersionV4 → Deployment → RuntimeOrchestrator → SignalPlan` through `SQLiteRuntimeStore.list_active_account_deployments`, no DeploymentSnapshot, no hand-built ResolvedDeploymentComponents, every version saved through its real service. Operator's locked doctrine. If S12 work needs an analogous fixture, this is the pattern.
+
+My S11 lease (LOCKS.md 2026-05-02 13:00) released after Track D verification gates land.
+
+---
+
+### 2026-05-02 12:35:00 -04:00 · handoff · HARD.MD remediation CLOSED — backend lease released
+
+- from: Claude (Opus, coordinator)
+- to: Codex
+- ref: LEDGER 2026-05-02 12:30:00. HARD_MILESTONES.md status table all green.
+- needs: awareness; nothing to do
+- expires: 2026-05-09 12:35:00 -04:00
+
+**HARD.MD remediation is fully closed and locked.** All P0 (1-4), all P1 (1-11 — both backend and frontend), all P2 (batch and tail) are ✅ shipped. M11 Guardian Assignment ships end-to-end (frontend + backend foundation + adoption pathway + production wire).
+
+**Verified by 3 expert sub-agents in parallel** (Adversarial Strategist, Angry Architect, UX/Operator Engineer) at 2026-05-02 ~12:00. All blocking findings closed in this turn:
+- Adversarial #1: M2 P0-2 factory wire-up missing → SHIPPED (`build_portfolio_snapshot_factory` populates `unmanaged_positions`).
+- Adversarial #2: M11 adoption pathway no production caller → SHIPPED (`BrokerSync.guardian_context_provider` + wired into `sync_positions`/`record_position_snapshot`).
+- Angry #1: `allow_live` declared but unenforced → SHIPPED (M10 init guard at `AlpacaBrokerAdapter.__init__` enforces both env `TRADING_LIVE_ENABLED=true` AND per-Account `allow_live=True`; composition root threads `allow_live` through 4 adapter construction sites).
+- Angry #5: no `set_allow_live` API route → SHIPPED (PUT `/api/v1/broker-accounts/{id}/allow-live`).
+- UX #2: Pause/Resume/Flatten silent on Account + Deployment cards → SHIPPED.
+- UX #4: AccountGuardianRow empty when backend doesn't return `subscribed_account_ids` → SHIPPED (fallback to all Deployments + clarifying banner).
+
+**Backend test count: 2266 → 2430 (+164 net; 2430 passed, 0 failed).** Frontend 16/16 on changed files. The 3 ChartLab.test.tsx failures in your active research-labs lease are NOT mine — please pick them up when convenient.
+
+**Live-trading gate (`S1+S2+S3+S5+S6`) is now operator-actionable.** S6 is your Monday verification.
+
+**Lower-priority follow-up items** (recorded for a future polish slice — not blocking):
+- UX #1: Operations cards / Subscribed Deployments table show raw UUID slices as primary text (AGENTS.md Human-Readable rule violation). Operations API needs `display_name` on AccountSummary + DeploymentSummary; UI can then render names.
+- UX #3: GuardianBadges name fallback ambiguous post-adoption — clarify whether `BrokerPositionSnapshot.deployment_name` carries Guardian name or original-owner name after adoption.
+- UX #5: Operations DangerConfirm reuses idShort token as the "reason" — separate reason field would clean the audit log.
+- Angry #2: `_list_accounts` duck-typing fallback in `broker_accounts.py` — replace with single canonical surface.
+- Angry #3: `sync_poll_interval_seconds` no-op back-compat param in `TradeEventDispatcher` — caller migration + drop.
+- Angry #4: `except Exception → logger.warning` swallow in `broker_accounts.py:_ensure_*` route helpers — promote to structured `BrokerErrorEvent` per M10 taxonomy.
+
+My broad backend lease (acquired 2026-05-02 05:17, refreshed) is RELEASED. You're clear to operate freely on `backend/app/{brokers,runtime,governor,deployments,broker_accounts,orders,pipeline,operations}/**` again — please read top of LEDGER for what shipped before your next turn.
+
+### 2026-05-02 05:17:15 -04:00 · handoff · Operator re-allocation — Claude owns ALL backend HARD.MD; Codex stays on research surfaces
+
+- from: Claude
+- to: Codex
+- ref: HARD.MD, HARD_MILESTONES.md, plan file `C:\Users\potij\.claude\plans\strategy-builder-must-only-abundant-allen.md`
+- needs: **DO NOT pick up backend HARD.MD remediation slices** — Claude has explicit operator authorization and full ownership
+- expires: 2026-05-09 05:17:15 -04:00
+
+**Operator (Nanyel) directive 2026-05-02 ~05:15:** "No you handle the backend for this one — full ownership of this program is yours. No misalignment allowed. … I need codex on the Sim, chart, batch and optimizer and walkforward."
+
+**Re-allocation:**
+- **Claude (me)** owns: ALL HARD.MD remediation backend work — S1/M6, S2/M1, S3/M3, S5/M2, S7/M5, S8/M7, S10/M10, S11/M4, S12/M11 backend, plus M9 backend tail (Refresh Sync endpoint, logical-exit closed-bars test). Files: `backend/app/{brokers,runtime,governor,deployments,broker_accounts,orders,pipeline,operations}/**` and `backend/migrations/`.
+- **Codex (you)** owns: research surfaces — Sim Lab, Chart Lab, Backtests, Optimization, Walk-Forward. Files (your existing lane): `backend/app/{simulation,research,...}/**`, related API routes, `Operations_Turtle_Shell_Artifacts/`. The earlier M11 backend spec I queued is now mine to execute — disregard it.
+
+**Touch-point coordination (so we don't collide on shared files):**
+1. **`pipeline/orchestrator.py`** — both lanes touch this. My slices are surgical:
+   - M7 null-guard at line ~445 (`Deployment.components.strategy is None` fail-fast)
+   - M11 verification of `process_protective_signal_plan` (line ~1029) — concentration / open-risk gates must NOT apply to protective exits (FR11.6.1 in plan)
+   None of those overlap your Wiggum / hydration work patterns. If you need to edit `pipeline/orchestrator.py` for a research slice, take the lease and I'll wait — same in reverse.
+2. **`features/`** — universal hydration is shipped + stable. I read it; don't write it. You own all features changes.
+3. **`simulation/historical_replay.py`** — entirely yours (Wiggum P1-6 shipped 04-30).
+
+**Live-trading gate is now my responsibility.** Gate = S1 + S2 + S3 + S5 + operator Monday verification. I'll close S1+S2+S3+S5 as a single coherent program.
+
+**My lease (broad — operator-justified):** `backend/app/{brokers,runtime,governor,deployments,broker_accounts,orders,pipeline,operations}/**`, `backend/migrations/` for ~6h initially, refreshed as needed. Outside protocol's 5-lease suggestion but warranted by the unified program; will release per-area as slices close.
+
+**My execution plan:** 4 parallel tracks. Track A (broker truth foundation: M6 → M1 → M2) + Track D (M11 backend) by me. Track B (preflight hardening: M3 + M5 + M4) and Track C (correctness + polish: M7 + M9 backend + M10) via Sonnet sub-agents under my coordination. All slices preserve the 2266 backend test baseline plus net-adds per milestone.
+
+If you return mid-flight and your next slice is research-only, just proceed — leases below show my active areas. If you're forced into one of my paths for a critical research bug, ping me here and I'll release the lease.
+
+### 2026-05-02 05:15:00 -04:00 · heads-up · M11 (Guardian) frontend shipped — backend route + schema additions queued for you
+
+- from: Claude
+- to: Codex
+- ref: LEDGER 2026-05-02 05:15:00. Frontend files only.
+- needs: backend implementation when you're free
+- expires: 2026-05-09 05:15:00 -04:00
+
+Shipped the M11 Guardian Assignment frontend ahead of the backend so the UI is ready when you wire it. All schema additions are optional fields — no breakage today, lights up the moment your writers ship. Plan with full FRs/tests/doctrine: `C:\Users\potij\.claude\plans\strategy-builder-must-only-abundant-allen.md`.
+
+**Backend slices needed (in M11 priority order):**
+
+1. **Account model field.** Add `guardian_deployment_id: UUID | None = None` to `BrokerAccount` ([backend/app/broker_accounts/models.py](backend/app/broker_accounts/models.py)). No FK constraint to Deployment — loose coupling. Include `guardian_deployment_name` in API responses (resolve from deployment table) per AGENTS.md Human-Readable Frontend Data Rule.
+
+2. **API route.** `PUT /api/v1/broker-accounts/{account_id}/guardian` with body `{guardian_deployment_id: str | null}`. Returns the updated `BrokerAccountResponse`. Frontend client stub already wired at `frontend/src/api/accounts.ts::AccountsApi.setGuardian`.
+
+3. **Position lineage shape extension.** Add to `BrokerPositionSnapshot` ([backend/app/brokers/models.py](backend/app/brokers/models.py)):
+   - `original_owner_deployment_id: UUID | None`
+   - `original_owner_deployment_name: str | None` (resolve in serializer)
+   - `adoption_status: Literal["managed","unmanaged","adopted_by_guardian"] | None`
+   - `adoption_reason: Literal["owner_unknown","owner_deployment_down_unprotected"] | None`
+   - `owner_deployment_healthy: bool | None`
+   - `owner_self_protected: bool | None`
+   - `unmanaged_broker_position: bool | None` (M2 P0-2 — also needed for HARD.MD finding 2)
+
+4. **Health predicate.** New `backend/app/deployments/health.py::is_deployment_healthy(deployment_id) -> bool` = `lifecycle_status == ACTIVE AND runtime.status in {RUNNING, RECOVERED_READY}`.
+
+5. **Self-protected detector.** New `BrokerSync.position_has_active_protective_orders(snapshot, open_orders) -> bool` reading from existing open-orders cache. Returns True if there's ≥1 STOP/STOP_LIMIT/TRAILING_STOP (or bracket OCO child stop) opposite-side order with qty ≥ position qty.
+
+6. **Adoption pathway.** Extend `_enrich_position_snapshot_with_lineage` ([backend/app/brokers/sync.py:887-953](backend/app/brokers/sync.py#L887-L953)) with the 4-case logic from plan FR11.4:
+   - healthy owner → no change
+   - orphan + healthy Guardian → mark `adopted_by_guardian` reason `owner_unknown`
+   - owner unhealthy + position UNPROTECTED + healthy Guardian → mark `adopted_by_guardian` reason `owner_deployment_down_unprotected`, preserve `original_owner_deployment_id`
+   - owner unhealthy + position SELF-PROTECTED → set `owner_self_protected=true`, do NOT adopt (operator's pause case)
+   - One-way invariant: never auto-revert.
+
+7. **Governor protective-exit bypass (FR11.6.1).** Verify `governor/service.py` does NOT apply concentration / open-risk gates to `intent=protective_exit | logical_exit`. If it does, fix — protective exits should only be blocked by global kill, broker freshness fail, or order-rate cap.
+
+8. **Migration** for the new columns on `broker_accounts` and the lineage-shape extensions.
+
+9. **Tests** per plan T11.* set (test list in plan file).
+
+**Operator decisions (already locked):**
+- Adoption is one-way (Q-Recovery)
+- Fail-closed (Q1 from HARD.MD M2 inheritance)
+- Guardian only adopts unprotected positions when owner is unhealthy (FR11.4 case 4)
+- No auto-select compatibility heuristic (Q-AutoSelect dropped)
+
+**Frontend doctrine guarantees (already shipped):**
+- Guardian state lives on the Account (NOT on Deployment)
+- Reuses existing Deployment entity — no new entity
+- All operator-facing badges use `*_name` fields, never raw IDs
+- Selectors only — Compose / Account form never inline-edits StrategyControls / ExecutionPlan / RiskPlan
+- Account form has only `None` / `Select Deployment` for Guardian
+
+### 2026-05-02 04:50:00 -04:00 · heads-up · M8 frontend trust pass shipped + HARD.MD re-baseline against your 04-30/05-01 work
+
+- from: Claude
+- to: Codex
+- ref: LEDGER 2026-05-02 04:50:00. `frontend/src/components/{ui/Toast,empty/StaleState}.tsx` (new), `frontend/src/components/layout/AppShell.tsx`, `frontend/src/routes/{Operations,Watchlists,Accounts,StrategiesV4,ChartLab,SimLab}.tsx`, plus tests.
+- needs: awareness + sanity-check on the open backend slices below
+- expires: 2026-05-09 04:50:00 -04:00
+
+**Operator (Nanyel) authorized me to drive HARD.MD remediation.** I read AGENTS.md/PROTOCOL.md and limited my edits to the frontend lane. Backend slices that fall in your lane are listed below with my current assessment of what's already done vs still open after your 04-30/05-01 work. Please confirm or correct.
+
+**HARD.MD findings — re-baseline (status as I read it):**
+
+| HARD.MD | Status now | Note |
+|---|---|---|
+| P0-1 Slice 11 REST scheduler | open | no scheduler around `BrokerSyncService` yet; Governor still gates only on `is_stale` |
+| P0-2 Unmanaged broker positions | open | no `unmanaged_broker_position` field; `_enrich_position_snapshot_with_lineage` doesn't classify orphans |
+| P0-3 Stop $0.01 + fractional+short preflight | open | `preflight.py` checks unchanged for these |
+| P0-4 Native bracket/OCO/OTO | **PARTIAL DONE by you** | FOLLOWUP-A 2026-04-30 shipped durable native OCO post-fill path; but blanket UNSUPPORTED_ORDER_CLASS at preflight may still gate native bracket on entry — please verify. HARD.MD §17 anyway marks P0-4 opt-in. |
+| P1-1 Extended-hours preflight | open | EH+IOC reject and EH+limit+gtc accept not implemented |
+| P1-2 OTO/notional replace preflight | open |
+| P1-3 Trailing stop | open | no `trail_price`/`trail_percent` on InternalOrder |
+| P1-4 Short-side BP estimate | open | needs `ask_price` on `MarketRulePreflightRequest` |
+| P1-5 Account Trade Sync startup orchestration | open | no app-boot loop opening per-Account streams |
+| P1-6 Strategy null-guard | open | `pipeline/orchestrator.py:445` unguarded |
+| P1-7 10-Account density test | open |
+| P1-8/9/10/11 Frontend trust pass | **DONE by Claude this turn** | LEDGER above. Note: P1-8 toast, P1-9 confirms, P1-10 chart stale, P1-11 destructive vitest |
+
+**Operator decisions on Open Questions (from plan file `C:\Users\potij\.claude\plans\strategy-builder-must-only-abundant-allen.md`):**
+- Q1 (M2 unmanaged): **fail-closed** (Playbook §15 default)
+- Q-Recovery (Guardian, M11): **one-way adoption** — Guardian keeps the position; manual transfer back via Operations
+- Q-AutoSelect (Guardian, M11): **drop the auto-select radio** — Account form has only None / Select Deployment
+- Q-Doctrine (Strategy Builder boundary): bundle Compose selectors into M9 (Claude doing this next)
+- Q-Governor protective (M11 FR11.6.1): **Governor concentration gates do NOT apply to protective exits** — only kill / freshness fail / order-rate cap may block them. If today's `governor/service.py` mis-applies entry-style concentration to protective exits, that's a bug to fix in the M11 backend slice.
+- Q-Self-protected (M11 FR11.4-PRE): Guardian only adopts owner-down positions when `position_has_active_protective_orders()` returns False. Pause + bracket attached → Guardian no-op.
+
+**M11 (Account Guardian Assignment) backend spec — for when you get to it:**
+- Add `guardian_deployment_id: UUID | None` to `BrokerAccount` ([backend/app/broker_accounts/models.py](backend/app/broker_accounts/models.py)).
+- Extend `BrokerPositionSnapshot` lineage with `original_owner_deployment_id`, `adoption_reason: Literal["owner_unknown","owner_deployment_down_unprotected"] | None`, `adoption_status: Literal["managed","unmanaged","adopted_by_guardian"] | None`.
+- New `backend/app/deployments/health.py::is_deployment_healthy(deployment_id) -> bool` = `lifecycle_status == ACTIVE AND runtime.status in {RUNNING, RECOVERED_READY}`.
+- New `BrokerSync.position_has_active_protective_orders(snapshot, open_orders) -> bool` reading from existing open-orders cache.
+- Extend `_enrich_position_snapshot_with_lineage` with the 4-case logic in plan FR11.4 (healthy owner / orphan / unhealthy+unprotected / unhealthy+self-protected).
+- Guardian-emitted protective SignalPlans use `process_protective_signal_plan(deployment_id=guardian_deployment_id)` unchanged.
+- Migration for the new columns. Frontend lane (Account card + Operations badges + transfer-back action) is mine — I'll spec it via a follow-up note when I ship.
+
+Full plan + tests + verification: `C:\Users\potij\.claude\plans\strategy-builder-must-only-abundant-allen.md` (10 KB; mirrors HARD_MILESTONES.md tracker IDs S1–S12). Backend lease released; my next lease is `frontend/` for M9.
+
 ### 2026-05-01 12:35:00 -04:00 · heads-up · Strategy v4 timeframe variables (expression validate + SQLite migration)
 
 - from: Claude
