@@ -55,12 +55,30 @@ async function readBodySafe(res: Response): Promise<unknown> {
 }
 
 function detailFrom(body: unknown): string {
-  if (body && typeof body === "object" && "detail" in body) {
-    const d = (body as { detail: unknown }).detail;
-    if (typeof d === "string") return d;
-    if (Array.isArray(d)) return d.map((e) => JSON.stringify(e)).join("; ");
-  }
   if (typeof body === "string") return body;
+  if (body == null || typeof body !== "object") return "";
+  const obj = body as Record<string, unknown>;
+  const detail = "detail" in obj ? obj.detail : undefined;
+  if (typeof detail === "string") return detail;
+  if (Array.isArray(detail)) {
+    return detail
+      .map((e) => {
+        if (typeof e === "string") return e;
+        if (e && typeof e === "object" && "msg" in (e as Record<string, unknown>)) {
+          const msg = (e as { msg: unknown }).msg;
+          if (typeof msg === "string") return msg;
+        }
+        try {
+          return JSON.stringify(e);
+        } catch {
+          return String(e);
+        }
+      })
+      .join("; ");
+  }
+  // Common alt fields some endpoints use.
+  const message = obj.message ?? obj.error;
+  if (typeof message === "string") return message;
   return "";
 }
 

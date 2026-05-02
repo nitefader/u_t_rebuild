@@ -152,6 +152,8 @@ export const StrategyVersionV4Schema = z
     name: z.string(),
     description: z.string().nullable().optional(),
     identity: IdentityDraftSchema,
+    default_strategy_controls_version_id: z.string().nullable().optional(),
+    default_execution_plan_version_id: z.string().nullable().optional(),
     timeframe_aliases: z.record(z.string()).optional().default({}),
     variables: z.array(
       z.object({

@@ -80,6 +80,7 @@ export function StrategyControls(): JSX.Element {
       <PageHeader
         title="Strategy Controls"
         subtitle="Reusable session, timing, and concurrency rules. Deployments bind a Controls version."
+        explainSlug="strategy-controls"
         actions={
           <Button
             size="sm"

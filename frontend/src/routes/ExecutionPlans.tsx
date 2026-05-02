@@ -80,6 +80,7 @@ export function ExecutionPlans(): JSX.Element {
       <PageHeader
         title="Execution Profiles"
         subtitle="Reusable order type, bracket, and runner rules. Deployments bind an Execution Profile version."
+        explainSlug="execution-plans"
         actions={
           <Button
             size="sm"

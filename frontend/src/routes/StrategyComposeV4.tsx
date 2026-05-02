@@ -34,6 +34,7 @@ import type { Horizon, BaseTimeframe } from "@/strategy_ide_v4/HorizonPicker";
 import { CoverageChips } from "@/strategy_ide_v4/CoverageChips";
 import { StarterStrategyPanel } from "@/strategy_ide_v4/StarterStrategyPanel";
 import { ExecutionPreview } from "@/strategy_ide_v4/ExecutionPreview";
+import { DefaultsSection } from "@/strategy_ide_v4/DefaultsSection";
 import { buildPlaceholderLegs, buildPlaceholderStops } from "@/strategy_ide_v4/draftDefaults";
 import { validateLegs, validateStops } from "@/strategy_ide_v4/legAutoBalance";
 import { ApiError } from "@/api/client";
@@ -143,6 +144,16 @@ export function StrategyComposeV4(): JSX.Element {
   const [logicalExits, setLogicalExits] = useState<ExitsSectionValue>({ long: [], short: [] });
   const [activeSide, setActiveSide] = useState<TradeSide>("long");
 
+  // Default linked components (selectors only — actual binding is per-Deployment).
+  // Doctrine: Strategy Builder edits signal logic only; StrategyControls / ExecutionPlan
+  // are linked entities edited on their own routes.
+  const [defaultStrategyControlsVersionId, setDefaultStrategyControlsVersionId] = useState<
+    string | null
+  >(null);
+  const [defaultExecutionPlanVersionId, setDefaultExecutionPlanVersionId] = useState<
+    string | null
+  >(null);
+
   // Horizon / base-timeframe UX filters (do NOT touch draft domain)
   const [horizon, setHorizon] = useState<Horizon | null>(null);
   const [baseTimeframe, setBaseTimeframe] = useState<BaseTimeframe>("5m");
@@ -216,6 +227,8 @@ export function StrategyComposeV4(): JSX.Element {
             short: (version.logical_exits.short ?? []) as ExitsSectionValue["short"],
           });
         }
+        setDefaultStrategyControlsVersionId(version.default_strategy_controls_version_id ?? null);
+        setDefaultExecutionPlanVersionId(version.default_execution_plan_version_id ?? null);
         // Collapse starter panel when loading an existing strategy
         setStarterPanelOpen(false);
       })
@@ -275,6 +288,8 @@ export function StrategyComposeV4(): JSX.Element {
       long: (draft.logical_exits?.long ?? []) as ExitsSectionValue["long"],
       short: (draft.logical_exits?.short ?? []) as ExitsSectionValue["short"],
     });
+    setDefaultStrategyControlsVersionId(draft.default_strategy_controls_version_id ?? null);
+    setDefaultExecutionPlanVersionId(draft.default_execution_plan_version_id ?? null);
   }
 
   function showSaveBanner(meta: LastSaved): void {
@@ -359,6 +374,8 @@ export function StrategyComposeV4(): JSX.Element {
       stops,
       legs,
       logical_exits: logicalExits,
+      default_strategy_controls_version_id: defaultStrategyControlsVersionId,
+      default_execution_plan_version_id: defaultExecutionPlanVersionId,
     };
 
     setSaving(true);
@@ -519,6 +536,15 @@ export function StrategyComposeV4(): JSX.Element {
           </button>
         </div>
       </header>
+
+      {/* Defaults strip — selectors only; doctrine: signal logic edited below, components edited on their own routes */}
+      <DefaultsSection
+        compact
+        defaultStrategyControlsVersionId={defaultStrategyControlsVersionId}
+        onDefaultStrategyControlsChange={setDefaultStrategyControlsVersionId}
+        defaultExecutionPlanVersionId={defaultExecutionPlanVersionId}
+        onDefaultExecutionPlanChange={setDefaultExecutionPlanVersionId}
+      />
 
       {/* Load error */}
       {loadError ? (

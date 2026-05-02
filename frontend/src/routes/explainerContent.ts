@@ -270,4 +270,105 @@ export const EXPLAINERS: Record<string, ExplainerEntry> = {
       },
     ],
   },
+
+  screeners: {
+    pageSlug: "screeners",
+    pageTitle: "Screeners",
+    oneLiner:
+      "Saved discovery queries that produce candidate symbol lists. Output feeds Watchlists; Screeners themselves do not trade.",
+    sections: [
+      {
+        heading: "What you can do here",
+        body: "Browse and edit saved Screeners. Each Screener defines a universe source, criteria, and a result projection. Run a Screener to produce a candidate list; save it as a static or dynamic Watchlist for Deployment use.",
+      },
+      {
+        heading: "Discovery schedules",
+        body: "Dynamic Watchlists can re-run their Screener on a schedule. Schedule changes affect future entry candidates only — they never close existing Positions.",
+      },
+      {
+        heading: "Doctrine",
+        body: "Screener output is research evidence. It does not size, gate, or submit. Promotion to Watchlist is an explicit operator action.",
+      },
+    ],
+  },
+
+  "screener-detail": {
+    pageSlug: "screener-detail",
+    pageTitle: "Screener detail",
+    oneLiner:
+      "Single Screener — criteria editor, run history, and result table.",
+    sections: [
+      {
+        heading: "Edit and run",
+        body: "Tune universe and criteria, preview the resulting expression, then run the Screener. Results render as a sortable table; click any symbol to open the Chart Lab pin.",
+      },
+      {
+        heading: "Save as Watchlist",
+        body: "Once results look right, save them as a Watchlist (static or dynamic). Dynamic Watchlists keep the lineage so refreshes recompute against the same Screener.",
+      },
+    ],
+  },
+
+  "execution-plans": {
+    pageSlug: "execution-plans",
+    pageTitle: "Execution Profiles",
+    oneLiner:
+      "Reusable order-type, bracket, and runner rules. Deployments bind a versioned Execution Profile.",
+    sections: [
+      {
+        heading: "What lives here",
+        body: "Order class (market / limit / bracket / OCO), TIF, post-fill protective placement strategy, runner / partial-take rules. These are the order-expression knobs — what to send to the broker once the Account decides to trade.",
+      },
+      {
+        heading: "Versioning",
+        body: "Each save creates a new immutable version. Deployments pin a specific version id; existing Deployments are not affected by edits to a later version until rebound.",
+      },
+      {
+        heading: "Doctrine",
+        body: "Execution Profile owns HOW to express an order. Strategy owns the trade structure (entry/exit logic). RiskPlan owns sizing. Account owns the gate.",
+      },
+    ],
+  },
+
+  "risk-plans": {
+    pageSlug: "risk-plans",
+    pageTitle: "Risk Plans",
+    oneLiner:
+      "Reusable risk policy. Pinned to research runs, Account defaults, and the live runtime. Every sized SignalPlan reads from a versioned RiskPlan.",
+    sections: [
+      {
+        heading: "What lives here",
+        body: "Position-sizing rules, per-trade and per-day risk caps, concentration limits, drawdown disarm, allowed horizons. RiskPlans are versioned and bound at the Account or Deployment level.",
+      },
+      {
+        heading: "Promotion",
+        body: "Compare versions side-by-side and promote a new version to Account default. Existing Deployments keep the version they were bound to until rebound.",
+      },
+      {
+        heading: "Doctrine",
+        body: "RiskPlan produces final quantity at the RiskResolver boundary. Governor reads the same RiskPlan inputs to decide whether to gate. SignalPlans never embed sizing.",
+      },
+    ],
+  },
+
+  "strategy-controls": {
+    pageSlug: "strategy-controls",
+    pageTitle: "Strategy Controls",
+    oneLiner:
+      "Reusable session, timing, and concurrency rules. Deployments bind a versioned Controls version.",
+    sections: [
+      {
+        heading: "What lives here",
+        body: "Session windows, max concurrent positions per symbol / per Account, cooldown after exit, daily entry caps, manual override switches. Operator-edited; AI prompt may seed-fill the form but the operator owns final values.",
+      },
+      {
+        heading: "Versioning",
+        body: "Each save creates a new immutable version. Deployments pin a specific version id; rebind to pull a newer version into a running Deployment.",
+      },
+      {
+        heading: "Doctrine",
+        body: "StrategyControls is an operator-owned configuration layer separate from Strategy logic. Same Strategy can run under tighter or looser Controls without editing the Strategy.",
+      },
+    ],
+  },
 };

@@ -129,6 +129,7 @@ export function RiskPlans(): JSX.Element {
       <PageHeader
         title="Risk Plans"
         subtitle="Reusable risk policy. Pinned to research runs, Account defaults, and the live runtime. Every sized SignalPlan reads from a versioned RiskPlan."
+        explainSlug="risk-plans"
         actions={
           <div className="flex flex-wrap items-center gap-2">
             <Button
