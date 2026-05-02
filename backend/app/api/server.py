@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from uuid import UUID
+
 try:  # pragma: no cover - optional dotenv support; tests don't depend on it.
     import os as _os
 
@@ -16,9 +18,15 @@ try:  # pragma: no cover - optional dotenv support; tests don't depend on it.
 except ImportError:  # pragma: no cover
     pass
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 
 from backend.app.api.api_key_middleware import OptionalApiKeyMiddleware
+from backend.app.composition import (
+    SignalSourceRegistry,
+    StrategyArtifactKind,
+    StrategyArtifactMetadata,
+    StrategyArtifactResolver,
+)
 from backend.app.api.routes import (
     ai,
     broker_accounts,
@@ -44,10 +52,72 @@ from backend.app.api.routes import (
     system_streams,
     watchlists,
 )
+from backend.app.decision.ports import SignalSourcePort
+from backend.app.decision.signal_sources import V4ExpressionSignalSource
+from backend.app.domain.strategy_v4 import StrategyVersionV4
 
 
 app = FastAPI(title="Ultimate Trader API")
 app.add_middleware(OptionalApiKeyMiddleware)
+
+
+def _build_strategy_artifact_resolver() -> tuple[
+    SignalSourceRegistry,
+    StrategyArtifactResolver,
+]:
+    registry = SignalSourceRegistry()
+
+    def v4_expression_factory(
+        _metadata: StrategyArtifactMetadata,
+    ) -> SignalSourcePort:
+        return V4ExpressionSignalSource()
+
+    def strategy_v4_lookup(strategy_version_v4_id: UUID) -> StrategyVersionV4:
+        from backend.app.strategies_v4.runtime_service import (
+            create_strategy_v4_service_from_environment,
+        )
+
+        return create_strategy_v4_service_from_environment().get(
+            strategy_version_v4_id
+        )
+
+    registry.register(StrategyArtifactKind.EXPRESSION_V1, v4_expression_factory)
+    resolver = StrategyArtifactResolver(
+        registry=registry,
+        strategy_v4_lookup=strategy_v4_lookup,
+    )
+    return registry, resolver
+
+
+def _configure_strategy_artifact_composition(target_app: FastAPI) -> None:
+    registry, resolver = _build_strategy_artifact_resolver()
+    target_app.state.signal_source_registry = registry
+    target_app.state.strategy_artifact_resolver = resolver
+
+
+def get_signal_source_registry(request: Request) -> SignalSourceRegistry:
+    registry: object | None = getattr(
+        request.app.state,
+        "signal_source_registry",
+        None,
+    )
+    if not isinstance(registry, SignalSourceRegistry):
+        raise RuntimeError("signal_source_registry is not configured")
+    return registry
+
+
+def get_strategy_artifact_resolver(request: Request) -> StrategyArtifactResolver:
+    resolver: object | None = getattr(
+        request.app.state,
+        "strategy_artifact_resolver",
+        None,
+    )
+    if not isinstance(resolver, StrategyArtifactResolver):
+        raise RuntimeError("strategy_artifact_resolver is not configured")
+    return resolver
+
+
+_configure_strategy_artifact_composition(app)
 
 
 def _kill_orphan_python_children() -> int:
