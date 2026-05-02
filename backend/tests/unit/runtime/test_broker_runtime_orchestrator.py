@@ -13,8 +13,10 @@ from backend.app.brokers import (
     BrokerSync,
     FakeBrokerAdapter,
 )
+from backend.app.composition import SignalSourceRegistry, StrategyArtifactKind, StrategyArtifactResolver
 from backend.app.control_plane import ControlPlane
 from backend.app.decision import SignalEngine
+from backend.app.decision.signal_sources import V4ExpressionSignalSource
 from backend.app.domain import (
     CandidateSide,
     ConditionNode,
@@ -167,6 +169,27 @@ def _components_with_v4_atr(*, symbol: str = "SPY") -> ResolvedDeploymentCompone
         feature_requirements=("1m.close", "1m.open", "atr:length=14[0]"),
     )
     return components.model_copy(update={"strategy_version_v4": strategy_v4})
+
+
+def _strategy_artifact_resolver(
+    components: ResolvedDeploymentComponents,
+) -> StrategyArtifactResolver:
+    registry = SignalSourceRegistry()
+    registry.register(
+        StrategyArtifactKind.EXPRESSION_V1,
+        lambda _metadata: V4ExpressionSignalSource(),
+    )
+
+    def lookup(strategy_version_v4_id: UUID) -> StrategyVersionV4:
+        sv4 = components.strategy_version_v4
+        if sv4 is None or sv4.id != strategy_version_v4_id:
+            raise KeyError(strategy_version_v4_id)
+        return sv4
+
+    return StrategyArtifactResolver(
+        registry=registry,
+        strategy_v4_lookup=lookup,
+    )
 
 
 def _components_without_feature_requirements(*, symbol: str = "SPY") -> ResolvedDeploymentComponents:
@@ -387,6 +410,11 @@ def _runtime(
         bar_source=bar_source,
         startup_warmup_bars_source=startup_warmup_bars_source,
         portfolio_snapshot_factory=lambda _aid: PortfolioSnapshot(equity=100_000),
+        strategy_artifact_resolver=(
+            _strategy_artifact_resolver(resolved)
+            if resolved.strategy_version_v4 is not None
+            else None
+        ),
     )
     return runtime, store, adapter
 

@@ -15,7 +15,9 @@ from backend.app.brokers import (
     BrokerSyncState,
 )
 from backend.app.broker_accounts import BrokerAccount, BrokerAccountValidationStatus
+from backend.app.composition import SignalSourceRegistry, StrategyArtifactKind, StrategyArtifactResolver
 from backend.app.control_plane import ControlPlane
+from backend.app.decision.signal_sources import V4ExpressionSignalSource
 from backend.app.domain import (
     ExecutionStyleVersion,
     OrderType,
@@ -204,6 +206,27 @@ def _deployment(components: ResolvedDeploymentComponents) -> DeploymentContext:
     )
 
 
+def _strategy_artifact_resolver(
+    components: ResolvedDeploymentComponents,
+) -> StrategyArtifactResolver:
+    registry = SignalSourceRegistry()
+    registry.register(
+        StrategyArtifactKind.EXPRESSION_V1,
+        lambda _metadata: V4ExpressionSignalSource(),
+    )
+
+    def lookup(strategy_version_v4_id: UUID) -> StrategyVersionV4:
+        sv4 = components.strategy_version_v4
+        if sv4 is None or sv4.id != strategy_version_v4_id:
+            raise KeyError(strategy_version_v4_id)
+        return sv4
+
+    return StrategyArtifactResolver(
+        registry=registry,
+        strategy_v4_lookup=lookup,
+    )
+
+
 def _bar(*, index: int = 0, open_: float = 99, close: float = 100) -> NormalizedBar:
     return NormalizedBar(
         symbol="SPY",
@@ -243,6 +266,7 @@ def _paper_context(tmp_path, monkeypatch, *, broker_freshness: GovernorBrokerSyn
         portfolio_snapshot=PortfolioSnapshot(equity=100_000),
         control_plane=runtime_control_plane,
         runtime_store=store,
+        strategy_artifact_resolver=_strategy_artifact_resolver(components),
     )
     return {
         "store": store,

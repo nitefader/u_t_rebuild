@@ -5,8 +5,10 @@ from datetime import datetime, timedelta, timezone
 from uuid import UUID, uuid4
 
 from backend.app.brokers import AlpacaBrokerAdapter, BrokerOrderStatus, BrokerPositionSide, BrokerPositionSnapshot, FakeBrokerAdapter
+from backend.app.composition import SignalSourceRegistry, StrategyArtifactKind, StrategyArtifactResolver
 from backend.app.control_plane import ControlPlane
 from backend.app.decision import SignalEvaluation
+from backend.app.decision.signal_sources import V4ExpressionSignalSource
 from backend.app.domain import (
     AccountEvaluationStatus,
     AccountParticipationDecision,
@@ -226,6 +228,27 @@ def _deployment(components: ResolvedDeploymentComponents) -> DeploymentContext:
     )
 
 
+def _strategy_artifact_resolver(
+    components: ResolvedDeploymentComponents,
+) -> StrategyArtifactResolver:
+    registry = SignalSourceRegistry()
+    registry.register(
+        StrategyArtifactKind.EXPRESSION_V1,
+        lambda _metadata: V4ExpressionSignalSource(),
+    )
+
+    def lookup(strategy_version_v4_id: UUID) -> StrategyVersionV4:
+        sv4 = components.strategy_version_v4
+        if sv4 is None or sv4.id != strategy_version_v4_id:
+            raise KeyError(strategy_version_v4_id)
+        return sv4
+
+    return StrategyArtifactResolver(
+        registry=registry,
+        strategy_v4_lookup=lookup,
+    )
+
+
 def _bar(index: int = 0, *, open_: float = 99, close: float = 100) -> NormalizedBar:
     return NormalizedBar(
         symbol="SPY",
@@ -398,6 +421,11 @@ def _orchestrator(
             portfolio_snapshot
             if portfolio_snapshot is not None
             else PortfolioSnapshot(equity=100_000)
+        ),
+        strategy_artifact_resolver=(
+            _strategy_artifact_resolver(resolved)
+            if resolved.strategy_version_v4 is not None
+            else None
         ),
     )
 
@@ -1142,6 +1170,7 @@ def test_no_component_bypass() -> None:
 
     assert ".compute(" not in source
     assert "InternalOrder(" not in source
+    assert "build_signal_plan_from_v4(" not in source
     assert ".can_open_new_position(" in source
     assert ".create_signal_plan_order(" in source
     assert ".submit_order(" in source

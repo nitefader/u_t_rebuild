@@ -21,6 +21,7 @@ from backend.app.brokers import (
     build_market_rule_preflight_request,
 )
 from backend.app.control_plane.service import ControlPlane
+from backend.app.composition import StrategyArtifactResolver
 from backend.app.decision import (
     PositionContext,
     SignalEngine,
@@ -28,12 +29,9 @@ from backend.app.decision import (
     SignalEvaluationError,
     SignalPlanBuilder,
 )
-from backend.app.decision.signal_plan_builder_v4 import (
-    ExpressionLoader as V4ExpressionLoader,
-    build_signal_plan_from_v4,
-    _default_expression_loader as _v4_default_expression_loader,
-)
+from backend.app.decision.ports import SignalEvaluationContext
 from backend.app.decision.signal_plan_common import parse_post_fill_pct
+from backend.app.deployments.models import Deployment
 from backend.app.domain._base import utc_now
 from backend.app.domain import (
     AccountEvaluationStatus,
@@ -188,7 +186,8 @@ class RuntimeOrchestrator:
         daily_state_factory: "Callable[[UUID], object | None] | None" = None,
         daily_state_aggregator: object | None = None,
         daily_states: "dict[UUID, object] | None" = None,
-        v4_expression_loader: "V4ExpressionLoader | None" = None,
+        strategy_artifact_resolver: StrategyArtifactResolver | None = None,
+        v4_expression_loader: object | None = None,
     ) -> None:
         self._account_id = account_id
         self._account_ids = tuple(dict.fromkeys(account_ids or (account_id,)))
@@ -201,6 +200,11 @@ class RuntimeOrchestrator:
             raise RuntimeError(
                 f"deployment_strategy_unset:{deployment.deployment_id}"
             )
+        if (
+            components.strategy_version_v4 is not None
+            and strategy_artifact_resolver is None
+        ):
+            raise ValueError("v4 components require a strategy_artifact_resolver")
         self._initial_cash = initial_cash
         self._feature_engine = feature_engine or IncrementalFeatureEngine()
         self._signal_engine = signal_engine or SignalEngine()
@@ -281,7 +285,7 @@ class RuntimeOrchestrator:
         # form, e.g. "1m.close", "1m.rsi(2)") can find values in the runtime
         # FeatureSnapshot (keyed by the long form make_feature_key produces).
         # Without this bridge every v4 expression lookup raises EvalError →
-        # build_signal_plan_from_v4 returns None → silent no-signal forever.
+        # the legacy v4 builder returned None -> silent no-signal forever.
         self._v4_dotted_to_runtime_key: dict[str, str] = {}
         if components.strategy_version_v4 is not None:
             from backend.app.features.parser import parse_feature_expression
@@ -314,12 +318,9 @@ class RuntimeOrchestrator:
         # read->compute->create->submit sequence atomic for one parent.
         self._post_fill_parent_locks: dict[UUID, threading.Lock] = {}
         self._post_fill_parent_locks_guard = threading.Lock()
-        # V4 expression loader: bound once at construction time so the hot
-        # path never re-parses raw text.  Defaults to load_compiled which
-        # handles pickle drift via text fallback.
-        self._v4_expression_loader: V4ExpressionLoader = (
-            v4_expression_loader or _v4_default_expression_loader
-        )
+        self._strategy_artifact_resolver = strategy_artifact_resolver
+        # unused after S12.6b; remove at S12.8.
+        self._v4_expression_loader = v4_expression_loader
 
     @property
     def order_manager(self) -> OrderManager:
@@ -2155,6 +2156,20 @@ class RuntimeOrchestrator:
             timestamp=runtime_snapshot.timestamp,
             values=translated_values,
         )
+        assert self._strategy_artifact_resolver is not None
+        signal_source, _metadata = self._strategy_artifact_resolver.resolve(
+            Deployment(
+                deployment_id=self._deployment.deployment_id,
+                name=str(self._deployment.deployment_id),
+                strategy_version_id=(
+                    self._components.strategy.id
+                    if self._components.strategy is not None
+                    else None
+                ),
+                strategy_version_v4_id=sv4.id,
+                risk_horizon=self._deployment_risk_horizon,
+            )
+        )
 
         for side_str in ("long", "short"):
             entry = sv4.entries.long if side_str == "long" else sv4.entries.short
@@ -2163,18 +2178,19 @@ class RuntimeOrchestrator:
             if normalized_bar.symbol.upper() not in self._entry_symbols:
                 continue
 
-            signal_plan = build_signal_plan_from_v4(
+            context = SignalEvaluationContext(
                 strategy=sv4,
-                snapshot=translated_snapshot,
                 symbol=normalized_bar.symbol.upper(),
                 side=side_str,  # type: ignore[arg-type]
                 timestamp=normalized_bar.timestamp,
                 deployment_id=self._deployment.deployment_id,
                 watchlist_snapshot_id=self._components.universe.id,
-                expression_loader=self._v4_expression_loader,
+                position_contexts={},
             )
-            if signal_plan is None:
+            result = signal_source.evaluate(translated_snapshot, context)
+            if result.decision != "emitted" or result.signal_plan is None:
                 continue
+            signal_plan = result.signal_plan
 
             plans.append(signal_plan)
             # Synthetic CandidateTradeIntent for event logging only.

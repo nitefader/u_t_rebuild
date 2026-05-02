@@ -40,7 +40,9 @@ from backend.app.brokers import (
     BrokerSyncState,
     FakeBrokerAdapter,
 )
+from backend.app.composition import SignalSourceRegistry, StrategyArtifactKind, StrategyArtifactResolver
 from backend.app.control_plane import ControlPlane
+from backend.app.decision.signal_sources import V4ExpressionSignalSource
 from backend.app.domain import (
     CandidateSide,
     ExecutionStyleVersion,
@@ -180,6 +182,27 @@ def _components_v4_bars_exit(*, bars_since: int = _BARS_SINCE) -> ResolvedDeploy
         risk_profile=risk,
         execution_style=execution,
         universe=universe,
+    )
+
+
+def _strategy_artifact_resolver(
+    components: ResolvedDeploymentComponents,
+) -> StrategyArtifactResolver:
+    registry = SignalSourceRegistry()
+    registry.register(
+        StrategyArtifactKind.EXPRESSION_V1,
+        lambda _metadata: V4ExpressionSignalSource(),
+    )
+
+    def lookup(strategy_version_v4_id: UUID) -> StrategyVersionV4:
+        sv4 = components.strategy_version_v4
+        if sv4 is None or sv4.id != strategy_version_v4_id:
+            raise KeyError(strategy_version_v4_id)
+        return sv4
+
+    return StrategyArtifactResolver(
+        registry=registry,
+        strategy_v4_lookup=lookup,
     )
 
 
@@ -331,6 +354,7 @@ def _build_runtime(
         control_plane=control_plane,
         startup_warmup_bars_source=_WARMUP_SOURCE,
         portfolio_snapshot_factory=lambda _: PortfolioSnapshot(equity=100_000.0),
+        strategy_artifact_resolver=_strategy_artifact_resolver(components),
     )
 
 

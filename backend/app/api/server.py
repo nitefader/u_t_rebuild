@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from uuid import UUID
-
 try:  # pragma: no cover - optional dotenv support; tests don't depend on it.
     import os as _os
 
@@ -23,9 +21,8 @@ from fastapi import FastAPI, Request
 from backend.app.api.api_key_middleware import OptionalApiKeyMiddleware
 from backend.app.composition import (
     SignalSourceRegistry,
-    StrategyArtifactKind,
-    StrategyArtifactMetadata,
     StrategyArtifactResolver,
+    build_strategy_artifact_resolver,
 )
 from backend.app.api.routes import (
     ai,
@@ -52,45 +49,13 @@ from backend.app.api.routes import (
     system_streams,
     watchlists,
 )
-from backend.app.decision.ports import SignalSourcePort
-from backend.app.decision.signal_sources import V4ExpressionSignalSource
-from backend.app.domain.strategy_v4 import StrategyVersionV4
-
 
 app = FastAPI(title="Ultimate Trader API")
 app.add_middleware(OptionalApiKeyMiddleware)
 
 
-def _build_strategy_artifact_resolver() -> tuple[
-    SignalSourceRegistry,
-    StrategyArtifactResolver,
-]:
-    registry = SignalSourceRegistry()
-
-    def v4_expression_factory(
-        _metadata: StrategyArtifactMetadata,
-    ) -> SignalSourcePort:
-        return V4ExpressionSignalSource()
-
-    def strategy_v4_lookup(strategy_version_v4_id: UUID) -> StrategyVersionV4:
-        from backend.app.strategies_v4.runtime_service import (
-            create_strategy_v4_service_from_environment,
-        )
-
-        return create_strategy_v4_service_from_environment().get(
-            strategy_version_v4_id
-        )
-
-    registry.register(StrategyArtifactKind.EXPRESSION_V1, v4_expression_factory)
-    resolver = StrategyArtifactResolver(
-        registry=registry,
-        strategy_v4_lookup=strategy_v4_lookup,
-    )
-    return registry, resolver
-
-
 def _configure_strategy_artifact_composition(target_app: FastAPI) -> None:
-    registry, resolver = _build_strategy_artifact_resolver()
+    registry, resolver = build_strategy_artifact_resolver()
     target_app.state.signal_source_registry = registry
     target_app.state.strategy_artifact_resolver = resolver
 
@@ -334,6 +299,7 @@ def _bootstrap_streams() -> None:  # pragma: no cover
                 provider="alpaca",
             )
             control_plane = ControlPlane(state_store=runtime_store)
+            strategy_artifact_resolver = app.state.strategy_artifact_resolver
             account_trading = BrokerRuntimeOrchestrator(
                 deployments=(),
                 runtime_store=runtime_store,
@@ -341,6 +307,7 @@ def _bootstrap_streams() -> None:  # pragma: no cover
                 broker_sync=broker_sync,
                 order_manager=order_manager,
                 control_plane=control_plane,
+                strategy_artifact_resolver=strategy_artifact_resolver,
                 portfolio_snapshot_factory=build_portfolio_snapshot_factory(
                     runtime_store
                 ),

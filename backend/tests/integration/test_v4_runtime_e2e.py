@@ -32,8 +32,10 @@ import pytest
 
 from backend.app.broker_accounts import BrokerAccount, BrokerAccountValidationStatus
 from backend.app.brokers.fake import FakeBrokerAdapter
+from backend.app.composition import build_strategy_artifact_resolver
 from backend.app.config import runtime_paths
-from backend.app.deployments.models import DeploymentLifecycleStatus, DeploymentWriteRequest
+from backend.app.decision.ports import SignalEvaluationContext
+from backend.app.deployments.models import Deployment, DeploymentLifecycleStatus, DeploymentWriteRequest
 from backend.app.deployments.persistence import DeploymentRepository
 from backend.app.deployments.service import DeploymentService
 from backend.app.domain import (
@@ -267,6 +269,7 @@ def _build_orchestrator(
         "the dual-track loader skipped or downgraded our v4 deployment"
     )
 
+    _registry, strategy_artifact_resolver = build_strategy_artifact_resolver()
     return RuntimeOrchestrator(
         account_id=runtime_deployment.account_id,
         account_ids=runtime_deployment.account_ids,
@@ -276,6 +279,7 @@ def _build_orchestrator(
         portfolio_snapshot=PortfolioSnapshot(equity=100_000),
         governor=PortfolioGovernor(),
         runtime_store=runtime_store,
+        strategy_artifact_resolver=strategy_artifact_resolver,
     )
 
 
@@ -426,8 +430,6 @@ def test_v4_runtime_perf_probe_under_budget(runtime_db):
     """
     import time
 
-    from backend.app.decision.signal_plan_builder_v4 import build_signal_plan_from_v4
-
     db_path = runtime_db
     strategy_v4_id = _save_strategy_v4(db_path)
     controls_id = _save_controls(db_path)
@@ -480,22 +482,31 @@ def test_v4_runtime_perf_probe_under_budget(runtime_db):
         timestamp=runtime_snapshot.timestamp,
         values=translated_values,
     )
+    assert orchestrator._strategy_artifact_resolver is not None
+    signal_source, _metadata = orchestrator._strategy_artifact_resolver.resolve(
+        Deployment(
+            deployment_id=deployment_id,
+            name="S11 e2e Deployment",
+            strategy_version_v4_id=sv4.id,
+        )
+    )
+    context = SignalEvaluationContext(
+        strategy=sv4,
+        position_contexts={},
+        symbol=bar.symbol.upper(),
+        side="long",
+        timestamp=bar.timestamp,
+        deployment_id=deployment_id,
+        watchlist_snapshot_id=orchestrator._components.universe.id,
+    )
 
     iterations = 200
     samples_us: list[float] = []
     for _ in range(iterations):
         t0 = time.perf_counter_ns()
-        plan = build_signal_plan_from_v4(
-            strategy=sv4,
-            snapshot=translated_snapshot,
-            symbol=bar.symbol.upper(),
-            side="long",
-            timestamp=bar.timestamp,
-            deployment_id=deployment_id,
-            expression_loader=orchestrator._v4_expression_loader,
-        )
+        result = signal_source.evaluate(translated_snapshot, context)
         t1 = time.perf_counter_ns()
-        assert plan is not None
+        assert result.signal_plan is not None
         samples_us.append((t1 - t0) / 1000.0)
 
     samples_us.sort()

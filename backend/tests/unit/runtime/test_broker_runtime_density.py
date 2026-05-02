@@ -28,7 +28,9 @@ import pytest
 
 from backend.app.broker_accounts.models import BrokerAccount, BrokerAccountValidationStatus
 from backend.app.brokers import BrokerOrderStatus, BrokerSync, BrokerSyncState, FakeBrokerAdapter
+from backend.app.composition import SignalSourceRegistry, StrategyArtifactKind, StrategyArtifactResolver
 from backend.app.control_plane import ControlPlane
+from backend.app.decision.signal_sources import V4ExpressionSignalSource
 from backend.app.domain import (
     CandidateSide,
     ConditionNode,
@@ -46,6 +48,7 @@ from backend.app.domain import (
 )
 from backend.app.domain.risk_profile import PositionSizingMethod
 from backend.app.domain.strategy import SignalRule
+from backend.app.domain.strategy_v4 import StrategyVersionV4
 from backend.app.features import NormalizedBar, ResolvedDeploymentComponents
 from backend.app.governor import PortfolioSnapshot
 from backend.app.orders import OrderManager
@@ -120,6 +123,27 @@ def _components(*, symbol: str = "SPY") -> ResolvedDeploymentComponents:
         risk_profile=risk,
         execution_style=execution,
         universe=universe,
+    )
+
+
+def _strategy_artifact_resolver(
+    components: ResolvedDeploymentComponents,
+) -> StrategyArtifactResolver:
+    registry = SignalSourceRegistry()
+    registry.register(
+        StrategyArtifactKind.EXPRESSION_V1,
+        lambda _metadata: V4ExpressionSignalSource(),
+    )
+
+    def lookup(strategy_version_v4_id: UUID) -> StrategyVersionV4:
+        sv4 = components.strategy_version_v4
+        if sv4 is None or sv4.id != strategy_version_v4_id:
+            raise KeyError(strategy_version_v4_id)
+        return sv4
+
+    return StrategyArtifactResolver(
+        registry=registry,
+        strategy_v4_lookup=lookup,
     )
 
 
@@ -400,5 +424,6 @@ def test_deployment_with_v4_strategy_does_not_raise() -> None:
         account_id=uuid4(),
         deployment=dep,
         components=comps_v4_only,
+        strategy_artifact_resolver=_strategy_artifact_resolver(comps_v4_only),
     )
     assert orchestrator is not None

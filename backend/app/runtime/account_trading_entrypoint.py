@@ -35,6 +35,7 @@ from backend.app.brokers import (
     AlpacaBrokerError,
     BrokerSync,
 )
+from backend.app.composition import build_strategy_artifact_resolver
 from backend.app.control_plane import ControlPlane
 from backend.app.governor import (
     PortfolioSnapshot,
@@ -331,6 +332,7 @@ def run_account_trading(
 
     bootstrap_manual_trade_composition(broker_account_service)
     bootstrap_streams(broker_account_service)
+    _registry, strategy_artifact_resolver = build_strategy_artifact_resolver()
     account_trading = BrokerRuntimeOrchestrator(
         deployments=tuple(deployments or ()),
         runtime_store=runtime_store,
@@ -338,6 +340,7 @@ def run_account_trading(
         broker_sync=broker_sync,
         order_manager=order_manager,
         control_plane=control_plane,
+        strategy_artifact_resolver=strategy_artifact_resolver,
         portfolio_snapshot_factory=build_portfolio_snapshot_factory(runtime_store),
         startup_warmup_bars_source=RuntimeHistoricalWarmupBarsSource(runtime_store),
     )
