@@ -33,7 +33,7 @@ from backend.app.decision.signal_plan_builder_v4 import (
     build_signal_plan_from_v4,
     _default_expression_loader as _v4_default_expression_loader,
 )
-from backend.app.decision.signal_plan_builder import parse_post_fill_pct
+from backend.app.decision.signal_plan_common import parse_post_fill_pct
 from backend.app.domain._base import utc_now
 from backend.app.domain import (
     AccountEvaluationStatus,
@@ -1214,7 +1214,7 @@ class RuntimeOrchestrator:
         not a replacement for post-fill.
         """
 
-        from backend.app.decision.signal_plan_builder import parse_post_fill_pct
+        from backend.app.decision.signal_plan_common import parse_post_fill_pct
 
         execution_mode = getattr(self._components.execution_style, "execution_mode", None)
         if execution_mode is None or getattr(execution_mode, "value", execution_mode) != "native_alpaca_bracket":
