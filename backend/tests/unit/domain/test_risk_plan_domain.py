@@ -97,6 +97,43 @@ def test_risk_plan_rejects_invalid_score_and_ai_source_mismatch() -> None:
         )
 
 
+def test_research_derived_risk_plan_requires_evidence_lineage() -> None:
+    with pytest.raises(ValidationError, match="source_run_id"):
+        RiskPlan(
+            name="Optimization Draft",
+            risk_score=5,
+            risk_tier=RiskPlanTier.BALANCED,
+            source=RiskPlanSource.OPTIMIZATION_GENERATED,
+        )
+
+    with pytest.raises(ValidationError, match="evidence_lineage"):
+        RiskPlan(
+            name="Walk Forward Draft",
+            risk_score=5,
+            risk_tier=RiskPlanTier.BALANCED,
+            source=RiskPlanSource.WALK_FORWARD_RECOMMENDED,
+            source_run_id=uuid4(),
+        )
+
+    run_id = uuid4()
+    risk_plan = RiskPlan(
+        name="Evidence Backed Draft",
+        risk_score=5,
+        risk_tier=RiskPlanTier.BALANCED,
+        source=RiskPlanSource.WALK_FORWARD_RECOMMENDED,
+        source_run_id=run_id,
+        source_evidence_type="WalkForwardRun",
+        evidence_lineage={
+            "source_run_id": str(run_id),
+            "source_evidence_type": "WalkForwardRun",
+            "artifact_id": str(uuid4()),
+            "deployment_snapshot_id": str(uuid4()),
+        },
+    )
+
+    assert risk_plan.source_run_id == run_id
+
+
 def test_risk_plan_config_requires_method_specific_sizing_input() -> None:
     with pytest.raises(ValidationError, match="risk_per_trade_pct is required"):
         RiskPlanConfig(sizing_method=RiskPlanSizingMethod.RISK_PERCENT)

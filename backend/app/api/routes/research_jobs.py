@@ -149,6 +149,8 @@ def _dispatch_backtest(job: ResearchJob, reporter: JobReporter) -> UUID:
         BacktestExecutionRequest(
             strategy_id=UUID(str(request["strategy_id"])),
             strategy_version_id=UUID(str(request["strategy_version_id"])),
+            strategy_controls_version_id=UUID(str(request["strategy_controls_version_id"])),
+            execution_plan_version_id=UUID(str(request["execution_plan_version_id"])),
             risk_plan_version_id=(
                 UUID(str(request["risk_plan_version_id"])) if request.get("risk_plan_version_id") else None
             ),
@@ -211,6 +213,8 @@ def _dispatch_walk_forward(job: ResearchJob, reporter: JobReporter) -> UUID:
     wf_request = WalkForwardExecutionRequest(
         strategy_id=UUID(str(request["strategy_id"])),
         strategy_version_id=UUID(str(request["strategy_version_id"])),
+        strategy_controls_version_id=UUID(str(request["strategy_controls_version_id"])),
+        execution_plan_version_id=UUID(str(request["execution_plan_version_id"])),
         symbols=tuple(request["symbols"]),
         start=_iso(request["start"]),
         end=_iso(request["end"]),
@@ -269,6 +273,8 @@ def _dispatch_optimization(job: ResearchJob, reporter: JobReporter) -> UUID:
     opt_request = OptimizationExecutionRequest(
         strategy_id=UUID(str(request["strategy_id"])),
         strategy_version_id=UUID(str(request["strategy_version_id"])),
+        strategy_controls_version_id=UUID(str(request["strategy_controls_version_id"])),
+        execution_plan_version_id=UUID(str(request["execution_plan_version_id"])),
         symbols=tuple(request["symbols"]),
         start=_iso(request["start"]),
         end=_iso(request["end"]),
@@ -310,16 +316,19 @@ def _summary(job: ResearchJob) -> ResearchJobSummary:
 
 @router.post("/api/v1/research/jobs/backtest", response_model=ResearchJobSummary)
 def submit_backtest_job(payload: ResearchJobSubmitRequest, store: JobStoreDependency) -> ResearchJobSummary:
+    payload = payload.model_copy(update={"request": _validate_job_request(ResearchJobKind.BACKTEST, payload.request)})
     return _submit(kind=ResearchJobKind.BACKTEST, payload=payload, store=store)
 
 
 @router.post("/api/v1/research/jobs/walk-forward", response_model=ResearchJobSummary)
 def submit_walk_forward_job(payload: ResearchJobSubmitRequest, store: JobStoreDependency) -> ResearchJobSummary:
+    payload = payload.model_copy(update={"request": _validate_job_request(ResearchJobKind.WALK_FORWARD, payload.request)})
     return _submit(kind=ResearchJobKind.WALK_FORWARD, payload=payload, store=store)
 
 
 @router.post("/api/v1/research/jobs/optimization", response_model=ResearchJobSummary)
 def submit_optimization_job(payload: ResearchJobSubmitRequest, store: JobStoreDependency) -> ResearchJobSummary:
+    payload = payload.model_copy(update={"request": _validate_job_request(ResearchJobKind.OPTIMIZATION, payload.request)})
     return _submit(kind=ResearchJobKind.OPTIMIZATION, payload=payload, store=store)
 
 
@@ -340,6 +349,56 @@ def _submit(
     except Exception as exc:  # noqa: BLE001 — surface as 422 to the operator
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return _summary(job)
+
+
+def _validate_job_request(kind: ResearchJobKind, request: JsonDict) -> JsonDict:
+    try:
+        if kind == ResearchJobKind.BACKTEST:
+            from backend.app.api.routes.research_runs import BacktestRunRequest
+
+            parsed = BacktestRunRequest.model_validate(request)
+            _require(parsed.strategy_controls_version_id, "strategy_controls_version_id")
+            _require(parsed.execution_plan_version_id, "execution_plan_version_id")
+            _require(parsed.risk_plan_version_id, "risk_plan_version_id")
+            _require_symbols(parsed.symbols or parsed.universe, "backtest")
+            return parsed.model_dump(mode="json")
+        if kind == ResearchJobKind.WALK_FORWARD:
+            from backend.app.api.routes.research_runs import WalkForwardRunRequest
+
+            parsed = WalkForwardRunRequest.model_validate(request)
+            _require(parsed.strategy_controls_version_id, "strategy_controls_version_id")
+            _require(parsed.execution_plan_version_id, "execution_plan_version_id")
+            _require_symbols(parsed.symbols, "walk-forward")
+            sweep = parsed.sweep or {}
+            if not sweep.get("base_risk_plan_version_id"):
+                raise ValueError("walk-forward requires sweep.base_risk_plan_version_id")
+            return parsed.model_dump(mode="json")
+        if kind == ResearchJobKind.OPTIMIZATION:
+            from backend.app.api.routes.research_runs import OptimizationRunRequest
+
+            parsed = OptimizationRunRequest.model_validate(request)
+            _require(parsed.strategy_controls_version_id, "strategy_controls_version_id")
+            _require(parsed.execution_plan_version_id, "execution_plan_version_id")
+            _require_symbols(parsed.symbols, "optimization")
+            sweep = parsed.sweep or {}
+            if not sweep.get("base_risk_plan_version_id"):
+                raise ValueError("optimization requires sweep.base_risk_plan_version_id")
+            if not sweep.get("parameters"):
+                raise ValueError("optimization sweep must declare at least one parameter")
+            return parsed.model_dump(mode="json")
+    except Exception as exc:  # noqa: BLE001 - submit-time contract surface
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    raise HTTPException(status_code=422, detail=f"unsupported research job kind {kind}")
+
+
+def _require(value: object | None, field: str) -> None:
+    if value is None:
+        raise ValueError(f"{field} is required for research jobs")
+
+
+def _require_symbols(symbols: object, purpose: str) -> None:
+    if not symbols:
+        raise ValueError(f"{purpose} research job requires at least one symbol")
 
 
 @router.get("/api/v1/research/jobs", response_model=ResearchJobListResponse)

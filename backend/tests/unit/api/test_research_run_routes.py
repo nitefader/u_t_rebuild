@@ -4,12 +4,21 @@ from datetime import datetime, timezone
 from uuid import UUID, uuid4
 from urllib.parse import urlencode
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from backend.app.api.routes import research_runs
 from backend.app.domain import BacktestRun, OptimizationRun, SimulationRunEvidence, WalkForwardRun
+from backend.app.domain import CandidateSide, ConditionNode, ConditionOperator, IntentType, SignalRule, StrategyVersion
+from backend.app.domain import ExecutionStyleVersion, OrderType, StrategyControlsVersion, TimeInForce
+from backend.app.domain import ResearchDataPolicy, ResearchRunKind, RiskPlanSizingMethod
+from backend.app.domain.execution_style import BracketSpec
+from backend.app.execution_plans.persistence import ExecutionPlanRepository
 from backend.app.persistence import SQLiteRuntimeStore
+from backend.app.research.artifacts import build_research_run_artifact
+from backend.app.research.components import load_research_components
+from backend.app.strategy_controls.persistence import StrategyControlsRepository
 
 
 def _store(tmp_path) -> SQLiteRuntimeStore:  # type: ignore[no-untyped-def]
@@ -30,101 +39,231 @@ def _http_client(store: SQLiteRuntimeStore) -> TestClient:
     return TestClient(app)
 
 
-def test_backtest_routes_create_list_get_and_cancel_evidence(tmp_path) -> None:  # type: ignore[no-untyped-def]
+def _save_research_components(store: SQLiteRuntimeStore, *, timeframe: str = "1d") -> tuple[UUID, UUID]:
+    db_path = store._session_factory.path
+    controls = StrategyControlsVersion(
+        id=uuid4(),
+        strategy_controls_id=uuid4(),
+        version=1,
+        name=f"{timeframe} Research Controls",
+        timeframe=timeframe,
+    )
+    execution = ExecutionStyleVersion(
+        id=uuid4(),
+        execution_style_id=uuid4(),
+        version=1,
+        name="Research Execution Plan",
+        entry_order_type=OrderType.MARKET,
+        time_in_force=TimeInForce.DAY,
+        bracket=BracketSpec(enabled=True, take_profit_r_multiple=2, stop_loss_r_multiple=1),
+    )
+    StrategyControlsRepository(db_path).save_version(controls)
+    ExecutionPlanRepository(db_path).save_version(execution)
+    return controls.id, execution.id
+
+
+def _green_bar_strategy(strategy_id: UUID, version_id: UUID, *, timeframe: str = "1d") -> StrategyVersion:
+    return StrategyVersion(
+        id=version_id,
+        strategy_id=strategy_id,
+        version=1,
+        name="Research reference strategy",
+        entry_rules=[
+            SignalRule(
+                name="green_bar_entry",
+                side=CandidateSide.LONG,
+                intent_type=IntentType.ENTRY,
+                condition=ConditionNode(
+                    left_feature=f"{timeframe}.close[0]",
+                    operator=ConditionOperator.GREATER_THAN,
+                    right_feature=f"{timeframe}.open[0]",
+                ),
+                stop_candidate_feature=f"{timeframe}.low[0]",
+                target_candidate_feature=f"{timeframe}.high[0]",
+            )
+        ],
+    )
+
+
+class _FakeRecord:
+    def __init__(self, payload: StrategyVersion) -> None:
+        self.payload = payload
+
+
+class _FakeStrategyService:
+    def __init__(self, payload: StrategyVersion) -> None:
+        self._payload = payload
+
+    def get_version(self, _strategy_version_id):
+        return _FakeRecord(self._payload)
+
+
+def _save_fixed_risk_plan(store: SQLiteRuntimeStore) -> research_runs.RiskPlanVersion:
+    risk_plan = research_runs.RiskPlan(
+        name="Research Base Risk Plan",
+        risk_score=5,
+        risk_tier=research_runs.RiskPlanTier.BALANCED,
+    )
+    version = research_runs.RiskPlanVersion(
+        risk_plan_id=risk_plan.risk_plan_id,
+        version=1,
+        config=research_runs.RiskPlanConfig(
+            sizing_method=RiskPlanSizingMethod.FIXED_SHARES,
+            fixed_shares=10,
+        ),
+    )
+    store.save_risk_plan(risk_plan)
+    store.save_risk_plan_version(version)
+    return version
+
+
+def _attach_research_artifact(
+    store: SQLiteRuntimeStore,
+    *,
+    run_id: UUID,
+    run_kind: ResearchRunKind,
+    strategy_id: UUID,
+    strategy_version_id: UUID,
+    risk_plan_version_id: UUID,
+    symbols: tuple[str, ...] = ("SPY",),
+    timeframe: str = "1d",
+) -> None:
+    controls_version_id, execution_plan_version_id = _save_research_components(store, timeframe=timeframe)
+    components = load_research_components(
+        strategy_lookup=_FakeStrategyService(
+            _green_bar_strategy(strategy_id, strategy_version_id, timeframe=timeframe)
+        ),
+        store=store,
+        strategy_version_id=strategy_version_id,
+        strategy_controls_version_id=controls_version_id,
+        execution_plan_version_id=execution_plan_version_id,
+        risk_plan_version_id=risk_plan_version_id,
+        symbols=symbols,
+        timeframe=timeframe,
+        universe_name="Research artifact symbols",
+        purpose="test",
+    )
+    start, end = _window()
+    artifact = build_research_run_artifact(
+        run_id=run_id,
+        run_kind=run_kind,
+        components=components,
+        data_policy=ResearchDataPolicy(
+            provider="yahoo",
+            timeframe=timeframe,
+            start=start,
+            end=end,
+        ),
+    )
+    store.save_research_run_artifact(artifact)
+
+
+def test_backtest_rejects_client_authored_placeholder_evidence(tmp_path) -> None:  # type: ignore[no-untyped-def]
     store = _store(tmp_path)
     strategy_id = uuid4()
     version_id = uuid4()
     start, end = _window()
 
-    created = research_runs.create_backtest_run(
-        research_runs.BacktestRunRequest(
-            strategy_id=strategy_id,
-            strategy_version_id=version_id,
-            start=start,
-            end=end,
-            bar_count=25,
-            signal_plan_count=2,
-            simulated_trade_count=1,
-            metrics={"sharpe": 1.2},
-        ),
-        store=store,
-    )
-
-    listed = research_runs.list_backtests(store=store)
-    loaded = research_runs.get_backtest_run(created.run_id, store=store)
-    canceled = research_runs.cancel_backtest_run(
-        created.run_id,
-        request=research_runs.CancelRunRequest(reason="operator stopped run"),
-        store=store,
-    )
-
-    assert isinstance(created, BacktestRun)
-    assert listed.runs == (created,)
-    assert loaded == created
-    assert canceled.metrics["status"] == "canceled"
-    assert canceled.metrics["status_reason"] == "operator stopped run"
+    with pytest.raises(Exception, match="research spine"):
+        research_runs.create_backtest_run(
+            research_runs.BacktestRunRequest(
+                strategy_id=strategy_id,
+                strategy_version_id=version_id,
+                start=start,
+                end=end,
+                bar_count=25,
+                signal_plan_count=2,
+                simulated_trade_count=1,
+                metrics={"sharpe": 1.2},
+            ),
+            store=store,
+        )
 
 
-def test_sim_lab_routes_create_run_results_and_archive_evidence(tmp_path) -> None:  # type: ignore[no-untyped-def]
+def test_sim_lab_legacy_session_routes_reject_client_authored_evidence(tmp_path) -> None:  # type: ignore[no-untyped-def]
     store = _store(tmp_path)
     start, end = _window()
-    session = research_runs.create_sim_lab_session(
-        research_runs.SimulationSessionRequest(
-            strategy_id=uuid4(),
-            strategy_version_id=uuid4(),
-            scenario_name="Morning replay",
-            start=start,
-            end=end,
-        ),
-        store=store,
-    )
 
-    completed = research_runs.run_sim_lab_session(
-        session.run_id,
-        request=research_runs.SimulationRunRequest(
-            signal_plan_count=3,
-            simulated_order_count=2,
-            simulated_fill_count=2,
-            metrics={"net": 42},
-        ),
-        store=store,
-    )
-    results = research_runs.get_sim_lab_results(session.run_id, store=store)
-    archived = research_runs.archive_sim_lab_session(session.run_id, store=store)
-
-    assert isinstance(session, SimulationRunEvidence)
-    assert completed.metrics["status"] == "completed"
-    assert results == completed
-    assert archived.metrics["status"] == "archived"
+    with pytest.raises(Exception, match="research spine"):
+        research_runs.create_sim_lab_session(
+            research_runs.SimulationSessionRequest(
+                strategy_id=uuid4(),
+                strategy_version_id=uuid4(),
+                scenario_name="Morning replay",
+                start=start,
+                end=end,
+            ),
+            store=store,
+        )
+    with pytest.raises(Exception, match="research spine"):
+        research_runs.run_sim_lab_session(
+            uuid4(),
+            request=research_runs.SimulationRunRequest(
+                signal_plan_count=3,
+                simulated_order_count=2,
+                simulated_fill_count=2,
+                metrics={"net": 42},
+            ),
+            store=store,
+        )
 
 
 def test_research_sim_lab_batch_run_executes_fixed_window_replay(tmp_path) -> None:  # type: ignore[no-untyped-def]
-    client = _http_client(_store(tmp_path))
+    store = _store(tmp_path)
+    client = _http_client(store)
     strategy_id = uuid4()
     version_id = uuid4()
-    start, end = _window()
-
-    response = client.post(
-        "/api/v1/research/sim_lab/runs",
-        json={
-            "strategy_id": str(strategy_id),
-            "strategy_version_id": str(version_id),
-            "scenario_name": "Fixed window replay",
-            "universe": ["SPY"],
-            "timeframe": "5m",
-            "start": start.isoformat(),
-            "end": end.isoformat(),
-            "initial_cash": 100000,
-            "bar_count": 6,
-        },
+    controls_version_id, execution_plan_version_id = _save_research_components(store, timeframe="5m")
+    risk_plan = research_runs.RiskPlan(
+        name="Sim Lab Risk Plan",
+        risk_score=5,
+        risk_tier=research_runs.RiskPlanTier.BALANCED,
     )
+    risk_plan_version = research_runs.RiskPlanVersion(
+        risk_plan_id=risk_plan.risk_plan_id,
+        version=1,
+        config=research_runs.RiskPlanConfig(
+                sizing_method=RiskPlanSizingMethod.FIXED_SHARES,
+            fixed_shares=10,
+        ),
+    )
+    store.save_risk_plan(risk_plan)
+    store.save_risk_plan_version(risk_plan_version)
+    start, end = _window()
+    original_lookup = research_runs._get_strategy_lookup
+    research_runs._get_strategy_lookup = lambda: _FakeStrategyService(
+        _green_bar_strategy(strategy_id, version_id, timeframe="5m")
+    )  # type: ignore[assignment]
+
+    try:
+        response = client.post(
+            "/api/v1/research/sim_lab/runs",
+            json={
+                "strategy_id": str(strategy_id),
+                "strategy_version_id": str(version_id),
+                "strategy_controls_version_id": str(controls_version_id),
+                "execution_plan_version_id": str(execution_plan_version_id),
+                "risk_plan_version_id": str(risk_plan_version.risk_plan_version_id),
+                "scenario_name": "Fixed window replay",
+                "universe": ["SPY"],
+                "timeframe": "5m",
+                "start": start.isoformat(),
+                "end": end.isoformat(),
+                "initial_cash": 100000,
+                "bar_count": 6,
+            },
+        )
+    finally:
+        research_runs._get_strategy_lookup = original_lookup  # type: ignore[assignment]
 
     assert response.status_code == 200
     payload = response.json()
     run = payload["run"]
     assert run["strategy_id"] == str(strategy_id)
     assert run["strategy_version_id"] == str(version_id)
-    assert run["scenario_name"] == "historical_replay"
+    assert run["scenario_name"] == "Fixed window replay"
+    assert run["artifact_id"]
+    assert run["deployment_snapshot_id"]
     assert run["signal_plan_count"] > 0
     assert run["simulated_order_count"] == len(payload["orders"])
     assert run["simulated_fill_count"] == len(payload["fills"])
@@ -141,11 +280,36 @@ def test_research_sim_lab_stream_emits_ordered_replay_artifacts(tmp_path) -> Non
     client = _http_client(store)
     strategy_id = uuid4()
     version_id = uuid4()
+    controls_version_id, execution_plan_version_id = _save_research_components(store, timeframe="5m")
+    risk_plan = research_runs.RiskPlan(
+        name="Sim Lab Stream Risk Plan",
+        risk_score=5,
+        risk_tier=research_runs.RiskPlanTier.BALANCED,
+    )
+    risk_plan_version = research_runs.RiskPlanVersion(
+        risk_plan_id=risk_plan.risk_plan_id,
+        version=1,
+        config=research_runs.RiskPlanConfig(
+                sizing_method=RiskPlanSizingMethod.FIXED_SHARES,
+            fixed_shares=10,
+        ),
+    )
+    store.save_risk_plan(risk_plan)
+    store.save_risk_plan_version(risk_plan_version)
     start, end = _window()
+    original_lookup = research_runs._get_strategy_lookup
+    original_runtime_path = research_runs.get_runtime_db_path
+    research_runs._get_strategy_lookup = lambda: _FakeStrategyService(
+        _green_bar_strategy(strategy_id, version_id, timeframe="5m")
+    )  # type: ignore[assignment]
+    research_runs.get_runtime_db_path = lambda: store._session_factory.path  # type: ignore[assignment]
     query = urlencode(
         {
             "strategy_id": str(strategy_id),
             "strategy_version_id": str(version_id),
+            "strategy_controls_version_id": str(controls_version_id),
+            "execution_plan_version_id": str(execution_plan_version_id),
+            "risk_plan_version_id": str(risk_plan_version.risk_plan_version_id),
             "scenario_name": "Streaming replay",
             "universe": "SPY",
             "timeframe": "5m",
@@ -157,13 +321,17 @@ def test_research_sim_lab_stream_emits_ordered_replay_artifacts(tmp_path) -> Non
     )
 
     messages: list[dict[str, object]] = []
-    with client.websocket_connect(f"/api/v1/research/sim_lab/stream?{query}") as websocket:
-        while True:
-            message = websocket.receive_json()
-            messages.append(message)
-            if message["type"] == "session_completed":
-                websocket.close()
-                break
+    try:
+        with client.websocket_connect(f"/api/v1/research/sim_lab/stream?{query}") as websocket:
+            while True:
+                message = websocket.receive_json()
+                messages.append(message)
+                if message["type"] == "session_completed":
+                    websocket.close()
+                    break
+    finally:
+        research_runs._get_strategy_lookup = original_lookup  # type: ignore[assignment]
+        research_runs.get_runtime_db_path = original_runtime_path  # type: ignore[assignment]
 
     message_types = [message["type"] for message in messages]
     assert messages[0]["type"] == "session_started"
@@ -189,52 +357,52 @@ def test_research_sim_lab_stream_emits_ordered_replay_artifacts(tmp_path) -> Non
     assert position_payload["symbol"] == "SPY"  # type: ignore[index]
     assert position_payload["qty"] > 0  # type: ignore[index]
     assert position_payload["avg_price"] > 0  # type: ignore[index]
-    assert research_runs.list_sim_lab_sessions(store=store).sessions == ()
+    sessions = research_runs.list_sim_lab_sessions(store=store).sessions
+    assert len(sessions) == 1
+    evidence = sessions[0]
+    assert evidence.artifact_id is not None
+    assert evidence.deployment_snapshot_id is not None
+    assert evidence.deployment_snapshot is not None
+    assert evidence.deployment_snapshot.strategy_controls_version_id == controls_version_id
+    assert evidence.deployment_snapshot.execution_plan_version_id == execution_plan_version_id
+    assert evidence.deployment_snapshot.risk_plan_version_id == risk_plan_version.risk_plan_version_id
+    assert evidence.metrics["research_artifact"]["run_kind"] == "sim_lab"
+    artifact = store.load_research_run_artifact_for_run(evidence.run_id)
+    assert artifact.run_kind == ResearchRunKind.SIM_LAB
+    assert artifact.deployment_snapshot.snapshot_id == evidence.deployment_snapshot_id
 
 
-def test_optimization_routes_create_query_and_archive_evidence(tmp_path) -> None:  # type: ignore[no-untyped-def]
+def test_optimization_rejects_client_authored_placeholder_evidence(tmp_path) -> None:  # type: ignore[no-untyped-def]
     store = _store(tmp_path)
 
-    created = research_runs.create_optimization_run(
-        research_runs.OptimizationRunRequest(
-            strategy_id=uuid4(),
-            strategy_version_id=uuid4(),
-            objective="maximize_sharpe",
-            candidate_count=12,
-            best_parameters={"rsi": 21},
-            best_metrics={"sharpe": 1.4},
-        ),
-        store=store,
-    )
-
-    assert isinstance(created, OptimizationRun)
-    assert research_runs.list_optimization_runs(store=store).runs == (created,)
-    assert research_runs.get_optimization_run(created.run_id, store=store) == created
-    archived = research_runs.archive_optimization_run(created.run_id, store=store)
-    assert archived.best_metrics["status"] == "archived"
-    assert research_runs.list_optimization_runs(store=store).runs == (archived,)
+    with pytest.raises(Exception, match="research spine"):
+        research_runs.create_optimization_run(
+            research_runs.OptimizationRunRequest(
+                strategy_id=uuid4(),
+                strategy_version_id=uuid4(),
+                objective="maximize_sharpe",
+                candidate_count=12,
+                best_parameters={"rsi": 21},
+                best_metrics={"sharpe": 1.4},
+            ),
+            store=store,
+        )
 
 
-def test_walk_forward_routes_create_query_and_archive_evidence(tmp_path) -> None:  # type: ignore[no-untyped-def]
+def test_walk_forward_rejects_client_authored_placeholder_evidence(tmp_path) -> None:  # type: ignore[no-untyped-def]
     store = _store(tmp_path)
 
-    created = research_runs.create_walk_forward_run(
-        research_runs.WalkForwardRunRequest(
-            strategy_id=uuid4(),
-            strategy_version_id=uuid4(),
-            window_count=6,
-            passed_window_count=5,
-            metrics={"oos_sharpe": 0.9},
-        ),
-        store=store,
-    )
-
-    assert isinstance(created, WalkForwardRun)
-    assert research_runs.list_walk_forward_runs(store=store).runs == (created,)
-    assert research_runs.get_walk_forward_run(created.run_id, store=store) == created
-    archived = research_runs.archive_walk_forward_run(created.run_id, store=store)
-    assert archived.metrics["status"] == "archived"
-    assert research_runs.list_walk_forward_runs(store=store).runs == (archived,)
+    with pytest.raises(Exception, match="research spine"):
+        research_runs.create_walk_forward_run(
+            research_runs.WalkForwardRunRequest(
+                strategy_id=uuid4(),
+                strategy_version_id=uuid4(),
+                window_count=6,
+                passed_window_count=5,
+                metrics={"oos_sharpe": 0.9},
+            ),
+            store=store,
+        )
 
 
 def test_research_routes_are_registered() -> None:
@@ -259,11 +427,25 @@ def test_research_routes_are_registered() -> None:
     }
 
 
-def test_research_evidence_rejects_trading_truth_fields_through_api_request(tmp_path) -> None:  # type: ignore[no-untyped-def]
+def test_research_evidence_rejects_trading_truth_fields_in_domain_model() -> None:
+    start, end = _window()
+
+    with pytest.raises(Exception, match="research evidence cannot contain trading truth fields"):
+        BacktestRun(
+            run_id=uuid4(),
+            strategy_id=uuid4(),
+            strategy_version_id=uuid4(),
+            start=start,
+            end=end,
+            metrics={"account_id": str(uuid4())},
+        )
+
+
+def test_research_api_rejects_client_authored_trading_truth_placeholder(tmp_path) -> None:  # type: ignore[no-untyped-def]
     store = _store(tmp_path)
     start, end = _window()
 
-    try:
+    with pytest.raises(Exception, match="research spine"):
         research_runs.create_backtest_run(
             research_runs.BacktestRunRequest(
                 strategy_id=uuid4(),
@@ -274,10 +456,6 @@ def test_research_evidence_rejects_trading_truth_fields_through_api_request(tmp_
             ),
             store=store,
         )
-    except Exception as exc:  # noqa: BLE001
-        assert "research evidence cannot contain trading truth fields" in str(exc)
-    else:  # pragma: no cover
-        raise AssertionError("trading truth field was accepted")
 
 
 def test_research_http_contract_supports_frontend_backtest_client(tmp_path) -> None:  # type: ignore[no-untyped-def]
@@ -299,27 +477,8 @@ def test_research_http_contract_supports_frontend_backtest_client(tmp_path) -> N
             "metrics": {"expectancy": 1.7},
         },
     )
-    assert created_response.status_code == 200
-    created = created_response.json()
-
-    assert UUID(created["run_id"])
-    assert created["strategy_id"] == str(strategy_id)
-    assert created["strategy_version_id"] == str(version_id)
-    assert created["created_at"]
-    assert created["metrics"]["status"] == "recorded"
-
-    list_response = client.get("/api/v1/backtests")
-    assert list_response.status_code == 200
-    assert list_response.json()["runs"][0]["run_id"] == created["run_id"]
-
-    cancel_response = client.post(
-        f"/api/v1/backtests/{created['run_id']}/cancel",
-        json={"reason": "operator canceled"},
-    )
-    assert cancel_response.status_code == 200
-    canceled = cancel_response.json()
-    assert canceled["metrics"]["status"] == "canceled"
-    assert canceled["metrics"]["status_reason"] == "operator canceled"
+    assert created_response.status_code == 422
+    assert "research spine" in created_response.text
 
 
 def test_research_http_contract_supports_frontend_sim_optimization_and_walk_forward_clients(
@@ -341,13 +500,11 @@ def test_research_http_contract_supports_frontend_sim_optimization_and_walk_forw
             "metrics": {"source": "frontend-contract"},
         },
     )
-    assert session_response.status_code == 200
-    session = session_response.json()
-    assert session["scenario_name"] == "Opening range replay"
-    assert session["metrics"]["status"] == "created"
+    assert session_response.status_code == 422
+    assert "research spine" in session_response.text
 
     run_response = client.post(
-        f"/api/v1/sim-lab/sessions/{session['run_id']}/run",
+        f"/api/v1/sim-lab/sessions/{uuid4()}/run",
         json={
             "signal_plan_count": 5,
             "simulated_order_count": 5,
@@ -355,8 +512,8 @@ def test_research_http_contract_supports_frontend_sim_optimization_and_walk_forw
             "metrics": {"net_profit": 215.75},
         },
     )
-    assert run_response.status_code == 200
-    assert run_response.json()["metrics"]["status"] == "completed"
+    assert run_response.status_code == 422
+    assert "research spine" in run_response.text
 
     optimization_response = client.post(
         "/api/v1/optimization/runs",
@@ -369,10 +526,8 @@ def test_research_http_contract_supports_frontend_sim_optimization_and_walk_forw
             "best_metrics": {"expectancy": 1.9},
         },
     )
-    assert optimization_response.status_code == 200
-    optimization = optimization_response.json()
-    assert optimization["candidate_count"] == 9
-    assert optimization["best_parameters"]["rsi_length"] == 21
+    assert optimization_response.status_code == 422
+    assert "research spine" in optimization_response.text
 
     walk_forward_response = client.post(
         "/api/v1/walk-forward/runs",
@@ -384,10 +539,8 @@ def test_research_http_contract_supports_frontend_sim_optimization_and_walk_forw
             "metrics": {"oos_sharpe": 0.92},
         },
     )
-    assert walk_forward_response.status_code == 200
-    walk_forward = walk_forward_response.json()
-    assert walk_forward["window_count"] == 6
-    assert walk_forward["passed_window_count"] == 5
+    assert walk_forward_response.status_code == 422
+    assert "research spine" in walk_forward_response.text
 
 
 def test_research_backtest_create_status_results_metrics_and_cost_model(tmp_path) -> None:  # type: ignore[no-untyped-def]
@@ -401,8 +554,6 @@ def test_research_backtest_create_status_results_metrics_and_cost_model(tmp_path
     from uuid import uuid4 as _uuid4
 
     from backend.app.api.routes import research_runs as rr
-    from backend.app.api.routes.strategies import get_strategy_service
-    from backend.app.data_center.ingest_service import HistoricalBarIngestService
     from backend.app.domain import (
         CandidateSide,
         ConditionNode,
@@ -438,6 +589,7 @@ def test_research_backtest_create_status_results_metrics_and_cost_model(tmp_path
     store.save_risk_plan(risk_plan)
     store.save_risk_plan_version(risk_plan_version)
     risk_plan_version_id = risk_plan_version.risk_plan_version_id
+    controls_version_id, execution_plan_version_id = _save_research_components(store, timeframe="1d")
     start, end = _window()
     end = start + timedelta(days=30)
 
@@ -500,8 +652,6 @@ def test_research_backtest_create_status_results_metrics_and_cost_model(tmp_path
 
     # Patch the bars source + strategy lookup factories on the route module
     original_lookup = rr._get_strategy_lookup
-    original_ingest_factory = HistoricalBarIngestService
-
     rr._get_strategy_lookup = lambda: fake_strategy_service  # type: ignore[assignment]
     # Monkeypatch ingest sources by wrapping HistoricalBarIngestService
     import backend.app.api.routes.research_runs as research_runs_module
@@ -518,6 +668,8 @@ def test_research_backtest_create_status_results_metrics_and_cost_model(tmp_path
             json={
                 "strategy_id": str(strategy_id),
                 "strategy_version_id": str(version_id),
+                "strategy_controls_version_id": str(controls_version_id),
+                "execution_plan_version_id": str(execution_plan_version_id),
                 "risk_plan_version_id": str(risk_plan_version_id),
                 "symbols": ["SPY", "QQQ"],
                 "timeframe": "1d",
@@ -541,6 +693,12 @@ def test_research_backtest_create_status_results_metrics_and_cost_model(tmp_path
         ]
         assert created["universe"] == ["SPY", "QQQ"]
         assert created["initial_capital"] == 100_000
+        assert created["artifact_id"]
+        assert created["deployment_snapshot_id"]
+        assert created["deployment_snapshot"]["symbols"] == ["SPY", "QQQ"]
+        assert created["deployment_snapshot"]["data_policy"]["provider"] == "yahoo"
+        assert created["deployment_snapshot"]["strategy_controls_version_id"] == str(controls_version_id)
+        assert created["deployment_snapshot"]["execution_plan_version_id"] == str(execution_plan_version_id)
 
         results_response = client.get(f"/api/v1/research/backtests/{created['run_id']}/results")
         assert results_response.status_code == 200
@@ -548,9 +706,19 @@ def test_research_backtest_create_status_results_metrics_and_cost_model(tmp_path
         assert results["equity_curve"]
         assert created["metrics"]["risk_plan_version_id"] == str(risk_plan_version_id)
         assert created["metrics"]["risk_decision_card_ids"]
+        assert created["metrics"]["research_artifact"]["artifact_id"] == created["artifact_id"]
+        assert (
+            created["metrics"]["research_artifact"]["deployment_snapshot_id"]
+            == created["deployment_snapshot_id"]
+        )
         sample_card = store.load_risk_decision_card(UUID(created["metrics"]["risk_decision_card_ids"][0]))
         assert sample_card.risk_plan_id == risk_plan.risk_plan_id
         assert sample_card.risk_plan_version_id == risk_plan_version_id
+        artifact = store.load_research_run_artifact_for_run(UUID(created["run_id"]))
+        assert artifact.artifact_id == UUID(created["artifact_id"])
+        assert artifact.deployment_snapshot.snapshot_id == UUID(created["deployment_snapshot_id"])
+        assert artifact.deployment_snapshot.risk_plan_version_id == risk_plan_version_id
+        assert artifact.deployment_snapshot.symbols == ("SPY", "QQQ")
         # Trade ledger may be empty if signals never fired in this stub data;
         # the spine assertion is that the route ran without error and persisted real evidence.
 
@@ -580,6 +748,7 @@ def test_research_backtest_create_status_results_metrics_and_cost_model(tmp_path
 
 def test_walk_forward_save_recommendation_as_draft_risk_plan(tmp_path) -> None:  # type: ignore[no-untyped-def]
     store = _store(tmp_path)
+    base_risk_plan_version = _save_fixed_risk_plan(store)
     run = WalkForwardRun(
         run_id=uuid4(),
         strategy_id=uuid4(),
@@ -596,6 +765,14 @@ def test_walk_forward_save_recommendation_as_draft_risk_plan(tmp_path) -> None: 
                 "explanation": "Stable OOS profile.",
             }
         },
+    )
+    _attach_research_artifact(
+        store,
+        run_id=run.run_id,
+        run_kind=ResearchRunKind.WALK_FORWARD,
+        strategy_id=run.strategy_id,
+        strategy_version_id=run.strategy_version_id,
+        risk_plan_version_id=base_risk_plan_version.risk_plan_version_id,
     )
     store.save_research_evidence(run)
     client = _http_client(store)
@@ -614,11 +791,16 @@ def test_walk_forward_save_recommendation_as_draft_risk_plan(tmp_path) -> None: 
     assert body["risk_plan_version"]["status"] == "draft"
     assert body["risk_plan_version"]["config"]["risk_per_trade_pct"] == 0.5
     assert body["risk_plan_version"]["config"]["max_open_positions"] == 3
-    assert store.load_risk_plan(UUID(body["risk_plan"]["risk_plan_id"]))
+    persisted = store.load_risk_plan(UUID(body["risk_plan"]["risk_plan_id"]))
+    assert persisted.source_run_id == run.run_id
+    assert persisted.evidence_lineage["source_run_id"] == str(run.run_id)
+    assert persisted.evidence_lineage["source_evidence_type"] == "WalkForwardRun"
+    assert persisted.evidence_lineage["parameters"]["max_positions"] == 3
 
 
 def test_optimization_save_winner_as_draft_risk_plan(tmp_path) -> None:  # type: ignore[no-untyped-def]
     store = _store(tmp_path)
+    base_risk_plan_version = _save_fixed_risk_plan(store)
     run = OptimizationRun(
         run_id=uuid4(),
         strategy_id=uuid4(),
@@ -631,6 +813,14 @@ def test_optimization_save_winner_as_draft_risk_plan(tmp_path) -> None:  # type:
             "max_daily_loss_pct": 3,
         },
         best_metrics={"best_parameters": {"fixed_shares": 12, "max_symbol_exposure_pct": 20}},
+    )
+    _attach_research_artifact(
+        store,
+        run_id=run.run_id,
+        run_kind=ResearchRunKind.OPTIMIZATION,
+        strategy_id=run.strategy_id,
+        strategy_version_id=run.strategy_version_id,
+        risk_plan_version_id=base_risk_plan_version.risk_plan_version_id,
     )
     store.save_research_evidence(run)
     client = _http_client(store)
@@ -647,3 +837,8 @@ def test_optimization_save_winner_as_draft_risk_plan(tmp_path) -> None:  # type:
     assert body["risk_plan"]["source"] == "optimization_generated"
     assert body["risk_plan_version"]["config"]["sizing_method"] == "fixed_shares"
     assert body["risk_plan_version"]["config"]["fixed_shares"] == 12
+    persisted = store.load_risk_plan(UUID(body["risk_plan"]["risk_plan_id"]))
+    assert persisted.source_run_id == run.run_id
+    assert persisted.evidence_lineage["source_run_id"] == str(run.run_id)
+    assert persisted.evidence_lineage["source_evidence_type"] == "OptimizationRun"
+    assert persisted.evidence_lineage["parameters"]["fixed_shares"] == 12

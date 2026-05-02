@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from datetime import datetime
+from typing import Any
 from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 
 from backend.app.decision import PositionContext, SignalEngine, SignalEvaluationError
@@ -774,6 +775,10 @@ class HistoricalReplayEngine:
         initial_cash: float = 100_000,
         session_id: UUID | None = None,
         run_id: UUID | None = None,
+        scenario_name: str = "historical_replay",
+        artifact_id: UUID | None = None,
+        deployment_snapshot_id: UUID | None = None,
+        deployment_snapshot: Any | None = None,
     ) -> SimulationReplayResult:
         self._risk_decision_cards = []
         session = SimulationSession(
@@ -823,9 +828,12 @@ class HistoricalReplayEngine:
         max_drawdown = max((point.drawdown for point in equity_curve), default=0)
         evidence = SimulationRunEvidence(
             run_id=session.id,
+            artifact_id=artifact_id,
+            deployment_snapshot_id=deployment_snapshot_id,
+            deployment_snapshot=deployment_snapshot,
             strategy_id=components.strategy.strategy_id,
             strategy_version_id=components.strategy.id,
-            scenario_name="historical_replay",
+            scenario_name=scenario_name,
             start=start,
             end=end,
             signal_plan_count=sum(1 for event in event_log.snapshot() if event.event_type == SimulatedEventType.SIGNAL_CANDIDATE),

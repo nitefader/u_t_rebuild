@@ -8,22 +8,6 @@ from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 from pydantic import BaseModel, ConfigDict, Field
 
 from backend.app.domain._base import JsonDict
-from backend.app.domain import (
-    CandidateSide,
-    ConditionNode,
-    ConditionOperator,
-    ExecutionStyleVersion,
-    IntentType,
-    OrderType,
-    RiskProfileVersion,
-    StrategyControlsVersion,
-    StrategyVersion,
-    UniverseSnapshot,
-    UniverseSymbol,
-)
-from backend.app.domain.execution_style import BracketSpec
-from backend.app.domain.risk_profile import PositionSizingMethod
-from backend.app.domain.strategy import SignalRule
 from backend.app.features import NormalizedBar, ResolvedDeploymentComponents
 from backend.app.simulation import HistoricalReplayEngine
 from backend.app.simulation.models import SimulatedEventType, SimulationEvent, SimulationReplayResult
@@ -80,11 +64,33 @@ class SimLabBatchRunService:
     def __init__(self, *, replay_engine: HistoricalReplayEngine | None = None) -> None:
         self._replay_engine = replay_engine or HistoricalReplayEngine()
 
-    def create_run(self, request: SimLabBatchRunRequest) -> SimulationReplayResult:
-        return self._execute(request).result
+    def create_run(
+        self,
+        request: SimLabBatchRunRequest,
+        *,
+        components: ResolvedDeploymentComponents,
+        run_id: UUID | None = None,
+    ) -> SimulationReplayResult:
+        return self._execute(request, components=components, run_id=run_id).result
 
-    def stream_messages(self, request: SimLabBatchRunRequest) -> tuple[SimLabStreamMessage, ...]:
-        execution = self._execute(request)
+    def stream_messages(
+        self,
+        request: SimLabBatchRunRequest,
+        *,
+        components: ResolvedDeploymentComponents,
+        run_id: UUID | None = None,
+    ) -> tuple[SimLabStreamMessage, ...]:
+        messages, _ = self.stream_result(request, components=components, run_id=run_id)
+        return messages
+
+    def stream_result(
+        self,
+        request: SimLabBatchRunRequest,
+        *,
+        components: ResolvedDeploymentComponents,
+        run_id: UUID | None = None,
+    ) -> tuple[tuple[SimLabStreamMessage, ...], SimulationReplayResult]:
+        execution = self._execute(request, components=components, run_id=run_id)
         result = execution.result
         if result.evidence is None:  # pragma: no cover - HistoricalReplayEngine records evidence for every run.
             raise ValueError("sim lab stream run did not produce evidence")
@@ -157,9 +163,15 @@ class SimLabBatchRunService:
                 },
             )
         )
-        return tuple(messages)
+        return tuple(messages), result
 
-    def _execute(self, request: SimLabBatchRunRequest) -> _SimLabExecution:
+    def _execute(
+        self,
+        request: SimLabBatchRunRequest,
+        *,
+        components: ResolvedDeploymentComponents,
+        run_id: UUID | None = None,
+    ) -> _SimLabExecution:
         if request.start >= request.end:
             raise ValueError("sim lab run start must be before end")
         if request.initial_cash <= 0:
@@ -170,7 +182,11 @@ class SimLabBatchRunService:
         if request.bar_count < 2:
             raise ValueError("bar_count must be at least 2")
 
-        components = self._components(request=request, symbols=symbols)
+        component_symbols = tuple(symbol.symbol.upper() for symbol in components.universe.symbols)
+        if symbols != component_symbols:
+            raise ValueError("sim lab universe must match resolved component symbols")
+        if components.strategy is None:
+            raise ValueError("sim lab requires a resolved StrategyVersion")
         bars = self._bars(request=request, symbols=symbols)
         result = self._replay_engine.run(
             components=components,
@@ -178,7 +194,9 @@ class SimLabBatchRunService:
             start=request.start,
             end=request.end,
             initial_cash=request.initial_cash,
-            session_id=uuid4(),
+            session_id=run_id or uuid4(),
+            run_id=run_id,
+            scenario_name=request.scenario_name,
         )
         return _SimLabExecution(bars=bars, result=result)
 
@@ -269,61 +287,6 @@ class SimLabBatchRunService:
                 "source_event_sequence": event.sequence,
             },
         }
-
-    def _components(self, *, request: SimLabBatchRunRequest, symbols: tuple[str, ...]) -> ResolvedDeploymentComponents:
-        strategy = StrategyVersion(
-            id=request.strategy_version_id,
-            strategy_id=request.strategy_id,
-            version=1,
-            name=f"{request.scenario_name} strategy",
-            entry_rules=[
-                SignalRule(
-                    name="green_bar_entry",
-                    side=CandidateSide.LONG,
-                    intent_type=IntentType.ENTRY,
-                    condition=ConditionNode(
-                        left_feature=f"{request.timeframe}.close[0]",
-                        operator=ConditionOperator.GREATER_THAN,
-                        right_feature=f"{request.timeframe}.open[0]",
-                    ),
-                    stop_candidate_feature=f"{request.timeframe}.low[0]",
-                    target_candidate_feature=f"{request.timeframe}.high[0]",
-                )
-            ],
-        )
-        return ResolvedDeploymentComponents(
-            strategy=strategy,
-            strategy_controls=StrategyControlsVersion(
-                id=uuid4(),
-                strategy_controls_id=uuid4(),
-                version=1,
-                name=f"{request.timeframe} controls",
-                timeframe=request.timeframe,
-            ),
-            risk_profile=RiskProfileVersion(
-                id=uuid4(),
-                risk_profile_id=uuid4(),
-                version=1,
-                name="Sim Lab fixed shares",
-                sizing_method=PositionSizingMethod.FIXED_SHARES,
-                fixed_shares=10,
-            ),
-            execution_style=ExecutionStyleVersion(
-                id=uuid4(),
-                execution_style_id=uuid4(),
-                version=1,
-                name="Sim Lab market bracket",
-                entry_order_type=OrderType.MARKET,
-                bracket=BracketSpec(enabled=True, take_profit_r_multiple=2, stop_loss_r_multiple=1),
-            ),
-            universe=UniverseSnapshot(
-                id=uuid4(),
-                universe_id=uuid4(),
-                version=1,
-                name="Sim Lab universe",
-                symbols=[UniverseSymbol(symbol=symbol) for symbol in symbols],
-            ),
-        )
 
     def _bars(self, *, request: SimLabBatchRunRequest, symbols: tuple[str, ...]) -> tuple[NormalizedBar, ...]:
         total_seconds = max((request.end - request.start).total_seconds(), 1)

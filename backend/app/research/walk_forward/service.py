@@ -28,22 +28,20 @@ from backend.app.data_center.ingest_service import (
     HistoricalBarIngestService,
 )
 from backend.app.domain import (
-    ExecutionStyleVersion,
-    OrderType,
+    ResearchDataPolicy,
+    ResearchRunKind,
     RiskDecisionMode,
     RiskProfileVersion,
-    StrategyControlsVersion,
     StrategyVersion,
-    UniverseSnapshot,
-    UniverseSymbol,
     WalkForwardRun,
 )
 from backend.app.domain._base import JsonDict, utc_now
-from backend.app.domain.execution_style import BracketSpec
 from backend.app.domain.risk_profile import PositionSizingMethod
 from backend.app.features import NormalizedBar, ResolvedDeploymentComponents
+from backend.app.research.artifacts import artifact_lineage_payload, build_research_run_artifact
 from backend.app.research.backtests.metrics_service import BacktestMetricsService, CostModel
 from backend.app.research.backtests.monte_carlo import MonteCarloAnalyzer, MonteCarloConfig
+from backend.app.research.components import load_research_components
 from backend.app.research.risk_plan_lookup import load_risk_profile_from_plan_version
 from backend.app.simulation import HistoricalReplayEngine
 
@@ -83,6 +81,8 @@ class WalkForwardSweepConfig:
 class WalkForwardExecutionRequest:
     strategy_id: UUID
     strategy_version_id: UUID
+    strategy_controls_version_id: UUID
+    execution_plan_version_id: UUID
     symbols: tuple[str, ...]
     start: datetime
     end: datetime
@@ -167,7 +167,7 @@ class WalkForwardExecutionService:
         )
 
         # Ingest the full bar window once; folds slice from this set.
-        all_bars = self._ingest_full_window(request=request, symbols=symbols)
+        all_bars, dataset_ids, data_quality_warnings = self._ingest_full_window(request=request, symbols=symbols)
         bars_by_symbol: dict[str, list[NormalizedBar]] = {}
         for bar in all_bars:
             bars_by_symbol.setdefault(bar.symbol, []).append(bar)
@@ -175,6 +175,19 @@ class WalkForwardExecutionService:
         # Resolve the StrategyVersion + base components once.
         strategy_payload = self._resolve_strategy_version(request.strategy_version_id)
         base_risk_plan = self._resolve_base_risk_plan(request)
+        base_components = load_research_components(
+            strategy_lookup=self._strategy_lookup,
+            store=self._store,
+            strategy_version_id=request.strategy_version_id,
+            expected_strategy_id=request.strategy_id,
+            strategy_controls_version_id=request.strategy_controls_version_id,
+            execution_plan_version_id=request.execution_plan_version_id,
+            risk_plan_version_id=base_risk_plan.id,
+            symbols=symbols,
+            timeframe=request.timeframe,
+            universe_name="Walk-Forward universe",
+            purpose="WalkForwardExecutionService",
+        )
         sweep_grid = _expand_sweep_grid(request.sweep)
         if not sweep_grid:
             sweep_grid = [{}]  # one no-op candidate ⇒ pure fixed-RiskPlan forward test
@@ -202,6 +215,7 @@ class WalkForwardExecutionService:
             fold_record = self._run_fold(
                 fold=fold,
                 strategy_payload=strategy_payload,
+                base_components=base_components,
                 base_risk_plan=base_risk_plan,
                 sweep_grid=sweep_grid,
                 symbols=symbols,
@@ -257,6 +271,22 @@ class WalkForwardExecutionService:
             }
 
         created_at = utc_now()
+        run_id = uuid4()
+        artifact = build_research_run_artifact(
+            run_id=run_id,
+            run_kind=ResearchRunKind.WALK_FORWARD,
+            components=base_components,
+            data_policy=ResearchDataPolicy(
+                provider=request.source,
+                timeframe=request.timeframe,
+                adjustment_policy=request.adjustment_policy,
+                start=request.start,
+                end=request.end,
+                warmup_start=min((bar.timestamp for bar in all_bars), default=request.start),
+            ),
+            historical_dataset_ids=dataset_ids,
+            data_quality_warnings=data_quality_warnings,
+        )
         metrics_payload: JsonDict = {
             "status": "completed",
             "status_updated_at": created_at.isoformat(),
@@ -287,6 +317,7 @@ class WalkForwardExecutionService:
             "risk_plan_id": str(base_risk_plan.risk_profile_id),
             "risk_plan_version_id": str(base_risk_plan.id),
             "base_risk_plan_version_id": str(base_risk_plan.id),
+            "research_artifact": artifact_lineage_payload(artifact),
             "risk_decision_card_ids": all_card_ids,
             "oos_trade_count": len(all_oos_trades),
             **recommendation_payload["metrics"],
@@ -299,8 +330,13 @@ class WalkForwardExecutionService:
             }
 
         passed = recommendation_payload["metrics"].get("folds_passed_count", 0)
+        if self._store is not None and hasattr(self._store, "save_research_run_artifact"):
+            self._store.save_research_run_artifact(artifact)
         run = WalkForwardRun(
-            run_id=uuid4(),
+            run_id=run_id,
+            artifact_id=artifact.artifact_id,
+            deployment_snapshot_id=artifact.deployment_snapshot.snapshot_id,
+            deployment_snapshot=artifact.deployment_snapshot,
             strategy_id=request.strategy_id,
             strategy_version_id=request.strategy_version_id,
             window_count=len(fold_results),
@@ -319,6 +355,7 @@ class WalkForwardExecutionService:
         *,
         fold: FoldWindow,
         strategy_payload: StrategyVersion,
+        base_components: ResolvedDeploymentComponents,
         base_risk_plan: RiskProfileVersion,
         sweep_grid: list[dict[str, Any]],
         symbols: tuple[str, ...],
@@ -350,12 +387,7 @@ class WalkForwardExecutionService:
         is_results: list[tuple[dict[str, Any], dict[str, Any]]] = []
         for parameters in sweep_grid:
             candidate_risk_plan = _apply_sweep(base_risk_plan, parameters)
-            components = self._build_components(
-                request=request,
-                strategy_payload=strategy_payload,
-                risk_plan=candidate_risk_plan,
-                symbols=symbols,
-            )
+            components = base_components.model_copy(update={"risk_profile": candidate_risk_plan})
             is_metrics = self._replay_window(
                 components=components,
                 bars=is_bars,
@@ -389,12 +421,7 @@ class WalkForwardExecutionService:
         winner_risk_plan = _apply_sweep(base_risk_plan, winner_parameters)
 
         # OOS replay with the winner candidate.
-        winner_components = self._build_components(
-            request=request,
-            strategy_payload=strategy_payload,
-            risk_plan=winner_risk_plan,
-            symbols=symbols,
-        )
+        winner_components = base_components.model_copy(update={"risk_profile": winner_risk_plan})
         oos_engine = HistoricalReplayEngine(
             mode=RiskDecisionMode.WALK_FORWARD,
             risk_decision_sink=self._risk_decision_sink,
@@ -423,12 +450,7 @@ class WalkForwardExecutionService:
                 oos_candidate_scores.append((parameters, oos_bundle.metrics))
                 continue
             candidate_risk_plan = _apply_sweep(base_risk_plan, parameters)
-            components = self._build_components(
-                request=request,
-                strategy_payload=strategy_payload,
-                risk_plan=candidate_risk_plan,
-                symbols=symbols,
-            )
+            components = base_components.model_copy(update={"risk_profile": candidate_risk_plan})
             cand_metrics = self._replay_window(
                 components=components,
                 bars=oos_bars,
@@ -513,53 +535,20 @@ class WalkForwardExecutionService:
             purpose="WalkForwardExecutionService",
         )
 
-    def _build_components(
-        self,
-        *,
-        request: WalkForwardExecutionRequest,
-        strategy_payload: StrategyVersion,
-        risk_plan: RiskProfileVersion,
-        symbols: tuple[str, ...],
-    ) -> ResolvedDeploymentComponents:
-        return ResolvedDeploymentComponents(
-            strategy=strategy_payload,
-            strategy_controls=StrategyControlsVersion(
-                id=uuid4(),
-                strategy_controls_id=uuid4(),
-                version=1,
-                name=f"WF {request.timeframe} controls",
-                timeframe=request.timeframe,
-            ),
-            risk_profile=risk_plan,
-            execution_style=ExecutionStyleVersion(
-                id=uuid4(),
-                execution_style_id=uuid4(),
-                version=1,
-                name="WF market entry, signal-driven exit",
-                entry_order_type=OrderType.MARKET,
-                bracket=BracketSpec(enabled=False),
-            ),
-            universe=UniverseSnapshot(
-                id=uuid4(),
-                universe_id=uuid4(),
-                version=1,
-                name="Walk-Forward universe",
-                symbols=[UniverseSymbol(symbol=s) for s in symbols],
-            ),
-        )
-
     def _ingest_full_window(
         self,
         *,
         request: WalkForwardExecutionRequest,
         symbols: tuple[str, ...],
-    ) -> tuple[NormalizedBar, ...]:
+    ) -> tuple[tuple[NormalizedBar, ...], tuple[UUID, ...], tuple[str, ...]]:
         if self._ingest_service is None:
             raise ValueError(
                 "WalkForwardExecutionService requires an ingest service; configure via runtime"
             )
         warmup = timedelta(days=14)
         merged: list[NormalizedBar] = []
+        dataset_ids: list[UUID] = []
+        warnings: list[str] = []
         for symbol in symbols:
             result = self._ingest_service.ensure_bars(
                 HistoricalBarIngestRequest(
@@ -571,9 +560,11 @@ class WalkForwardExecutionService:
                     adjustment_policy=request.adjustment_policy,
                 )
             )
+            dataset_ids.append(result.dataset_id)
+            warnings.extend(result.data_quality_warnings)
             merged.extend(result.bars)
         merged.sort(key=lambda b: (b.timestamp, b.symbol))
-        return tuple(merged)
+        return tuple(merged), tuple(dataset_ids), tuple(warnings)
 
     @staticmethod
     def _slice_bars(

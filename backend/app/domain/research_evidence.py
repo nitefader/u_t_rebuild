@@ -6,6 +6,7 @@ from uuid import UUID
 from pydantic import Field, model_validator
 
 from ._base import DomainSchema, JsonDict, utc_now
+from .research_run_artifact import DeploymentSnapshot
 
 
 _FORBIDDEN_TRADING_TRUTH_FIELDS = frozenset(
@@ -30,6 +31,10 @@ class ResearchEvidenceSchema(DomainSchema):
     Research may explain, score, and support promotion decisions. It cannot own
     live broker/order/position truth.
     """
+
+    artifact_id: UUID | None = None
+    deployment_snapshot_id: UUID | None = None
+    deployment_snapshot: DeploymentSnapshot | None = None
 
     @model_validator(mode="before")
     @classmethod

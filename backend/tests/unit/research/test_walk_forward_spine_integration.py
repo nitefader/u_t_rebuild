@@ -29,8 +29,14 @@ from backend.app.domain import (
     RiskPlanTier,
     RiskPlanVersion,
     SignalRule,
+    StrategyControlsVersion,
     StrategyVersion,
+    ExecutionStyleVersion,
+    OrderType,
+    TimeInForce,
 )
+from backend.app.domain.execution_style import BracketSpec
+from backend.app.execution_plans.persistence import ExecutionPlanRepository
 from backend.app.features import NormalizedBar
 from backend.app.persistence import SQLiteRuntimeStore
 from backend.app.research.walk_forward import (
@@ -42,6 +48,7 @@ from backend.app.research.walk_forward.service import (
     WalkForwardSweepParameter,
 )
 from backend.app.research.walk_forward.window_planner import LengthSpec
+from backend.app.strategy_controls.persistence import StrategyControlsRepository
 
 
 def _strategy_payload(strategy_id, version_id) -> StrategyVersion:
@@ -124,6 +131,29 @@ def _save_risk_plan(store: SQLiteRuntimeStore):
     return version
 
 
+def _save_components(store: SQLiteRuntimeStore) -> tuple:
+    db_path = store._session_factory.path
+    controls = StrategyControlsVersion(
+        id=uuid4(),
+        strategy_controls_id=uuid4(),
+        version=1,
+        name="Walk-Forward 1d Controls",
+        timeframe="1d",
+    )
+    execution = ExecutionStyleVersion(
+        id=uuid4(),
+        execution_style_id=uuid4(),
+        version=1,
+        name="Walk-Forward Execution Plan",
+        entry_order_type=OrderType.MARKET,
+        time_in_force=TimeInForce.DAY,
+        bracket=BracketSpec(enabled=False),
+    )
+    StrategyControlsRepository(db_path).save_version(controls)
+    ExecutionPlanRepository(db_path).save_version(execution)
+    return controls.id, execution.id
+
+
 def test_walk_forward_runs_folds_and_emits_recommendation(tmp_path) -> None:
     strategy_id = uuid4()
     version_id = uuid4()
@@ -140,12 +170,15 @@ def test_walk_forward_runs_folds_and_emits_recommendation(tmp_path) -> None:
         risk_decision_sink=store,
     )
     risk_plan_version = _save_risk_plan(store)
+    controls_version_id, execution_plan_version_id = _save_components(store)
 
     start = datetime(2024, 1, 1, tzinfo=timezone.utc)
     end = datetime(2024, 8, 1, tzinfo=timezone.utc)
     req = WalkForwardExecutionRequest(
         strategy_id=strategy_id,
         strategy_version_id=version_id,
+        strategy_controls_version_id=controls_version_id,
+        execution_plan_version_id=execution_plan_version_id,
         symbols=("SPY",),
         start=start,
         end=end,
@@ -172,6 +205,9 @@ def test_walk_forward_runs_folds_and_emits_recommendation(tmp_path) -> None:
     assert run.window_count >= 1
     assert run.metrics["risk_plan_id"] == str(risk_plan_version.risk_plan_id)
     assert run.metrics["risk_plan_version_id"] == str(risk_plan_version.risk_plan_version_id)
+    assert run.metrics["research_artifact"]["strategy_controls_version_id"] == str(controls_version_id)
+    assert run.artifact_id is not None
+    assert store.load_research_run_artifact_for_run(run.run_id).artifact_id == run.artifact_id
     assert run.metrics["recommended_risk_plan"]["candidate_risk_plan_version_id"] == str(
         risk_plan_version.risk_plan_version_id
     )

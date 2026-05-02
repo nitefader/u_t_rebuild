@@ -2,7 +2,7 @@
 
 Walk-Forward and Optimization both compose runs out of "evaluate this
 parameter set on this window" calls. This helper isolates the loop:
-build components → run HistoricalReplayEngine → compute metrics → return.
+run HistoricalReplayEngine → compute metrics → return.
 
 Doctrine: same spine as Backtest. ``mode`` is supplied per call so emitted
 ``RiskDecisionCard`` rows are tagged correctly (``walk_forward`` vs
@@ -15,62 +15,10 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID, uuid4
 
-from backend.app.domain import (
-    ExecutionStyleVersion,
-    OrderType,
-    RiskDecisionMode,
-    RiskProfileVersion,
-    StrategyControlsVersion,
-    StrategyVersion,
-    UniverseSnapshot,
-    UniverseSymbol,
-)
-from backend.app.domain.execution_style import BracketSpec
+from backend.app.domain import RiskDecisionMode
 from backend.app.features import NormalizedBar, ResolvedDeploymentComponents
 from backend.app.research.backtests.metrics_service import BacktestMetricsService, CostModel
 from backend.app.simulation import HistoricalReplayEngine, SimulationReplayResult
-
-
-def build_research_components(
-    *,
-    strategy_payload: StrategyVersion,
-    risk_plan: RiskProfileVersion,
-    symbols: tuple[str, ...],
-    timeframe: str,
-    name_hint: str,
-) -> ResolvedDeploymentComponents:
-    """Assemble a ResolvedDeploymentComponents bundle for research replays.
-
-    Strategy controls / execution style / universe are minted per-call (research
-    runs do not need a persisted Deployment); strategy + risk_plan are caller-
-    supplied so the same bundle can be reused across Backtest/WF/Optimization.
-    """
-    return ResolvedDeploymentComponents(
-        strategy=strategy_payload,
-        strategy_controls=StrategyControlsVersion(
-            id=uuid4(),
-            strategy_controls_id=uuid4(),
-            version=1,
-            name=f"{name_hint} {timeframe} controls",
-            timeframe=timeframe,
-        ),
-        risk_profile=risk_plan,
-        execution_style=ExecutionStyleVersion(
-            id=uuid4(),
-            execution_style_id=uuid4(),
-            version=1,
-            name=f"{name_hint} market entry, signal-driven exit",
-            entry_order_type=OrderType.MARKET,
-            bracket=BracketSpec(enabled=False),
-        ),
-        universe=UniverseSnapshot(
-            id=uuid4(),
-            universe_id=uuid4(),
-            version=1,
-            name=f"{name_hint} universe",
-            symbols=[UniverseSymbol(symbol=s) for s in symbols],
-        ),
-    )
 
 
 def replay_window(

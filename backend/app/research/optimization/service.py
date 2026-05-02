@@ -28,22 +28,25 @@ from backend.app.data_center.ingest_service import (
 )
 from backend.app.domain import (
     OptimizationRun,
+    ResearchDataPolicy,
+    ResearchRunKind,
     RiskDecisionMode,
     RiskProfileVersion,
-    StrategyVersion,
 )
 from backend.app.domain._base import JsonDict, utc_now
 from backend.app.domain.risk_profile import PositionSizingMethod
-from backend.app.features import NormalizedBar
+from backend.app.features import NormalizedBar, ResolvedDeploymentComponents
+from backend.app.research.artifacts import artifact_lineage_payload, build_research_run_artifact
 from backend.app.research.backtests.metrics_service import BacktestMetricsService, CostModel
 from backend.app.research.backtests.monte_carlo import MonteCarloAnalyzer, MonteCarloConfig
+from backend.app.research.components import load_research_components
 from backend.app.research.progress import NULL_REPORTER, ProgressReporter, check_cancel
 from backend.app.research.risk_plan_lookup import load_risk_profile_from_plan_version
 from backend.app.research.walk_forward.selector import (
     SelectionCriterion,
     score_candidate,
 )
-from backend.app.research.window_runner import build_research_components, replay_window
+from backend.app.research.window_runner import replay_window
 
 from .grid_planner import (
     DEFAULT_MAX_CANDIDATES,
@@ -79,6 +82,8 @@ class OptimizationSweepConfig:
 class OptimizationExecutionRequest:
     strategy_id: UUID
     strategy_version_id: UUID
+    strategy_controls_version_id: UUID
+    execution_plan_version_id: UUID
     symbols: tuple[str, ...]
     start: datetime
     end: datetime
@@ -179,9 +184,20 @@ class OptimizationExecutionService:
         except OptimizationGridError as exc:
             raise ValueError(str(exc)) from exc
 
-        # Resolve strategy + base risk plan once
-        strategy_payload = self._resolve_strategy_version(request.strategy_version_id)
         base_risk_plan = self._resolve_base_risk_plan(sweep)
+        base_components = load_research_components(
+            strategy_lookup=self._strategy_lookup,
+            store=self._store,
+            strategy_version_id=request.strategy_version_id,
+            expected_strategy_id=request.strategy_id,
+            strategy_controls_version_id=request.strategy_controls_version_id,
+            execution_plan_version_id=request.execution_plan_version_id,
+            risk_plan_version_id=sweep.base_risk_plan_version_id,
+            symbols=symbols,
+            timeframe=request.timeframe,
+            universe_name="Optimization universe",
+            purpose="OptimizationExecutionService",
+        )
         cost_model = CostModel(
             commission_per_trade=float(request.cost_model.get("commission_per_trade", 0.0)),
             slippage_bps=float(request.cost_model.get("slippage_bps", 0.0)),
@@ -189,9 +205,25 @@ class OptimizationExecutionService:
         metrics_service = BacktestMetricsService()
 
         # Ingest bars once; every candidate replays the same series.
-        bars = self._ingest_full_window(request=request, symbols=symbols)
+        bars, dataset_ids, data_quality_warnings = self._ingest_full_window(request=request, symbols=symbols)
         if not bars:
             raise ValueError("no bars available for optimization window")
+        run_id = uuid4()
+        artifact = build_research_run_artifact(
+            run_id=run_id,
+            run_kind=ResearchRunKind.OPTIMIZATION,
+            components=base_components,
+            data_policy=ResearchDataPolicy(
+                provider=request.source,
+                timeframe=request.timeframe,
+                adjustment_policy=request.adjustment_policy,
+                start=request.start,
+                end=request.end,
+                warmup_start=min((bar.timestamp for bar in bars), default=request.start),
+            ),
+            historical_dataset_ids=dataset_ids,
+            data_quality_warnings=data_quality_warnings,
+        )
 
         # Score every candidate
         candidate_results: list[OptimizationCandidateResult] = []
@@ -205,13 +237,7 @@ class OptimizationExecutionService:
         for index, parameters in enumerate(candidates_grid):
             check_cancel(reporter)
             risk_plan = _apply_sweep(base_risk_plan, parameters)
-            components = build_research_components(
-                strategy_payload=strategy_payload,
-                risk_plan=risk_plan,
-                symbols=symbols,
-                timeframe=request.timeframe,
-                name_hint="Optimization",
-            )
+            components = base_components.model_copy(update={"risk_profile": risk_plan})
             _, metrics, _, trade_ledger, card_ids = replay_window(
                 components=components,
                 bars=list(bars),
@@ -287,13 +313,7 @@ class OptimizationExecutionService:
         monte_carlo_payload: JsonDict | None = None
         if winner is not None and request.monte_carlo and request.monte_carlo.enabled:
             risk_plan = _apply_sweep(base_risk_plan, winner.parameters)
-            components = build_research_components(
-                strategy_payload=strategy_payload,
-                risk_plan=risk_plan,
-                symbols=symbols,
-                timeframe=request.timeframe,
-                name_hint="Optimization MC",
-            )
+            components = base_components.model_copy(update={"risk_profile": risk_plan})
             _, _, _, winner_trades, _ = replay_window(
                 components=components,
                 bars=list(bars),
@@ -356,15 +376,21 @@ class OptimizationExecutionService:
             "risk_plan_id": str(base_risk_plan.risk_profile_id),
             "risk_plan_version_id": str(base_risk_plan.id),
             "base_risk_plan_version_id": str(base_risk_plan.id),
+            "research_artifact": artifact_lineage_payload(artifact),
             "needs_walk_forward_validation": True,
             "follow_up_walk_forward_request": wf_handoff,
             "best_parameters": best_parameters,
             "best_metrics": best_metrics,
             "winner_score": round(winner.score, 6) if winner else None,
         }
+        if self._store is not None and hasattr(self._store, "save_research_run_artifact"):
+            self._store.save_research_run_artifact(artifact)
 
         return OptimizationRun(
-            run_id=uuid4(),
+            run_id=run_id,
+            artifact_id=artifact.artifact_id,
+            deployment_snapshot_id=artifact.deployment_snapshot.snapshot_id,
+            deployment_snapshot=artifact.deployment_snapshot,
             strategy_id=request.strategy_id,
             strategy_version_id=request.strategy_version_id,
             objective=request.selection_criterion,
@@ -378,17 +404,6 @@ class OptimizationExecutionService:
     # Helpers
     # ------------------------------------------------------------------
 
-    def _resolve_strategy_version(self, strategy_version_id: UUID) -> StrategyVersion:
-        if self._strategy_lookup is None:
-            raise ValueError(
-                "OptimizationExecutionService requires a strategy lookup; configure via runtime"
-            )
-        record = self._strategy_lookup.get_version(strategy_version_id)
-        payload = getattr(record, "payload", record)
-        if not isinstance(payload, StrategyVersion):
-            raise ValueError(f"strategy version {strategy_version_id} is not a StrategyVersion")
-        return payload
-
     def _resolve_base_risk_plan(self, sweep: OptimizationSweepConfig) -> RiskProfileVersion:
         return load_risk_profile_from_plan_version(
             store=self._store,
@@ -401,13 +416,15 @@ class OptimizationExecutionService:
         *,
         request: OptimizationExecutionRequest,
         symbols: tuple[str, ...],
-    ) -> tuple[NormalizedBar, ...]:
+    ) -> tuple[tuple[NormalizedBar, ...], tuple[UUID, ...], tuple[str, ...]]:
         if self._ingest_service is None:
             raise ValueError(
                 "OptimizationExecutionService requires an ingest service; configure via runtime"
             )
         warmup = timedelta(days=14)
         merged: list[NormalizedBar] = []
+        dataset_ids: list[UUID] = []
+        warnings: list[str] = []
         for symbol in symbols:
             result = self._ingest_service.ensure_bars(
                 HistoricalBarIngestRequest(
@@ -419,9 +436,11 @@ class OptimizationExecutionService:
                     adjustment_policy=request.adjustment_policy,
                 )
             )
+            dataset_ids.append(result.dataset_id)
+            warnings.extend(result.data_quality_warnings)
             merged.extend(result.bars)
         merged.sort(key=lambda b: (b.timestamp, b.symbol))
-        return tuple(merged)
+        return tuple(merged), tuple(dataset_ids), tuple(warnings)
 
     @staticmethod
     def _build_wf_handoff(
@@ -446,6 +465,8 @@ class OptimizationExecutionService:
         return {
             "strategy_id": str(request.strategy_id),
             "strategy_version_id": str(request.strategy_version_id),
+            "strategy_controls_version_id": str(request.strategy_controls_version_id),
+            "execution_plan_version_id": str(request.execution_plan_version_id),
             "symbols": list(symbols),
             "start": request.start.isoformat(),
             "end": request.end.isoformat(),

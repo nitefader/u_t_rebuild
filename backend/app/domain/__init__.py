@@ -23,6 +23,14 @@ from .research_job import (
     is_terminal as research_job_is_terminal,
     job_summary as research_job_summary,
 )
+from .research_run_artifact import (
+    DeploymentSnapshot,
+    DeploymentSnapshotSource,
+    ResearchDataPolicy,
+    ResearchRunArtifact,
+    ResearchRunKind,
+    SnapshotComponentPayload,
+)
 from .risk_decision_card import (
     RiskCalculationStep,
     RiskDecisionCard,
@@ -133,6 +141,12 @@ __all__ = [
     "ResearchJobKind",
     "ResearchJobProgress",
     "ResearchJobStatus",
+    "ResearchDataPolicy",
+    "ResearchRunArtifact",
+    "ResearchRunKind",
+    "DeploymentSnapshot",
+    "DeploymentSnapshotSource",
+    "SnapshotComponentPayload",
     "research_job_is_terminal",
     "research_job_summary",
     "RiskCalculationStep",

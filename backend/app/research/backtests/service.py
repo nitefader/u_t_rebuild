@@ -7,9 +7,8 @@ No simulated or real order may be created without that RiskDecisionCard.
 
 This service replaces the prior synthetic ``_simulate()`` engine. It:
 
-1. Resolves the saved StrategyVersion + assembles ``ResolvedDeploymentComponents``
-   (StrategyControls / ExecutionStyle / Universe synthesised from the request;
-   RiskProfile derived from the supplied ``risk_plan_version_id``).
+1. Resolves the saved StrategyVersion, Strategy Control, Execution Plan, and
+   Risk Plan versions, then assembles ``ResolvedDeploymentComponents``.
 2. Calls ``HistoricalBarIngestService.ensure_bars`` for each requested symbol;
    matching cache hits short-circuit the provider call.
 3. Calls ``HistoricalReplayEngine.run`` (mode=``backtest``) — the same spine
@@ -36,21 +35,17 @@ from backend.app.data_center.ingest_service import (
 )
 from backend.app.domain import (
     BacktestRun,
-    ExecutionStyleVersion,
-    OrderType,
+    ResearchDataPolicy,
+    ResearchRunKind,
     RiskDecisionMode,
-    RiskProfileVersion,
-    StrategyControlsVersion,
     StrategyVersion,
-    UniverseSnapshot,
-    UniverseSymbol,
 )
 from backend.app.domain._base import JsonDict, utc_now
-from backend.app.domain.execution_style import BracketSpec
 from backend.app.features import NormalizedBar, ResolvedDeploymentComponents
 from backend.app.simulation import HistoricalReplayEngine
 
-from backend.app.research.risk_plan_lookup import load_risk_profile_from_plan_version
+from backend.app.research.artifacts import artifact_lineage_payload, build_research_run_artifact
+from backend.app.research.components import load_research_components
 
 from .metrics_service import BacktestMetricsService, CostModel
 from .monte_carlo import MonteCarloAnalyzer, MonteCarloConfig
@@ -87,6 +82,8 @@ class BacktestExecutionRequest:
     initial_capital: float
     cost_model: JsonDict
     risk_plan_version_id: UUID | None = None
+    strategy_controls_version_id: UUID | None = None
+    execution_plan_version_id: UUID | None = None
     source: Literal["alpaca", "yahoo"] = "yahoo"
     timeframe: str = "1d"
     adjustment_policy: Literal[
@@ -145,6 +142,28 @@ class BacktestExecutionService:
             evidence_recorder=self._store,
         )
         run_id = uuid4()
+        artifact = build_research_run_artifact(
+            run_id=run_id,
+            run_kind=ResearchRunKind.BACKTEST,
+            components=components,
+            data_policy=ResearchDataPolicy(
+                provider=request.source,
+                timeframe=request.timeframe,
+                adjustment_policy=request.adjustment_policy,
+                start=request.start,
+                end=request.end,
+                warmup_start=min((bar.timestamp for bar in bars), default=request.start),
+            ),
+            historical_dataset_ids=(result.dataset_id for result in ingest_results),
+            data_quality_warnings=(
+                warning
+                for result in ingest_results
+                for warning in result.data_quality_warnings
+            ),
+            watchlist_snapshot_ids=(
+                (request.watchlist_snapshot_id,) if request.watchlist_snapshot_id else ()
+            ),
+        )
         replay = replay_engine.run(
             components=components,
             bars=bars,
@@ -215,11 +234,17 @@ class BacktestExecutionService:
                 "historical_dataset_ids": [str(r.dataset_id) for r in ingest_results],
                 "risk_decision_card_ids": list(risk_decision_card_ids),
                 "monte_carlo": monte_carlo_payload,
+                "research_artifact": artifact_lineage_payload(artifact),
             }
         )
+        if self._store is not None and hasattr(self._store, "save_research_run_artifact"):
+            self._store.save_research_run_artifact(artifact)
 
         return BacktestRun(
             run_id=run_id,
+            artifact_id=artifact.artifact_id,
+            deployment_snapshot_id=artifact.deployment_snapshot.snapshot_id,
+            deployment_snapshot=artifact.deployment_snapshot,
             strategy_id=request.strategy_id,
             strategy_version_id=request.strategy_version_id,
             watchlist_snapshot_id=request.watchlist_snapshot_id,
@@ -270,32 +295,22 @@ class BacktestExecutionService:
         symbols: tuple[str, ...],
     ) -> ResolvedDeploymentComponents:
         strategy_payload = self._resolve_strategy_version(request.strategy_version_id)
-        risk_profile = self._resolve_risk_profile(request.risk_plan_version_id)
-        return ResolvedDeploymentComponents(
-            strategy=strategy_payload,
-            strategy_controls=StrategyControlsVersion(
-                id=uuid4(),
-                strategy_controls_id=uuid4(),
-                version=1,
-                name=f"Backtest {request.timeframe} controls",
-                timeframe=request.timeframe,
-            ),
-            risk_profile=risk_profile,
-            execution_style=ExecutionStyleVersion(
-                id=uuid4(),
-                execution_style_id=uuid4(),
-                version=1,
-                name="Backtest market bracket",
-                entry_order_type=OrderType.MARKET,
-                bracket=BracketSpec(enabled=True, take_profit_r_multiple=2, stop_loss_r_multiple=1),
-            ),
-            universe=UniverseSnapshot(
-                id=uuid4(),
-                universe_id=uuid4(),
-                version=1,
-                name="Backtest universe",
-                symbols=[UniverseSymbol(symbol=symbol) for symbol in symbols],
-            ),
+        if request.strategy_controls_version_id is None:
+            raise ValueError("backtest requires strategy_controls_version_id")
+        if request.execution_plan_version_id is None:
+            raise ValueError("backtest requires execution_plan_version_id")
+        return load_research_components(
+            strategy_lookup=self._strategy_lookup,
+            store=self._store,
+            strategy_version_id=strategy_payload.id,
+            expected_strategy_id=request.strategy_id,
+            strategy_controls_version_id=request.strategy_controls_version_id,
+            execution_plan_version_id=request.execution_plan_version_id,
+            risk_plan_version_id=request.risk_plan_version_id,
+            symbols=symbols,
+            timeframe=request.timeframe,
+            universe_name="Backtest universe",
+            purpose="BacktestExecutionService",
         )
 
     def _resolve_strategy_version(self, strategy_version_id: UUID) -> StrategyVersion:
@@ -308,13 +323,6 @@ class BacktestExecutionService:
         if not isinstance(payload, StrategyVersion):
             raise ValueError(f"strategy version {strategy_version_id} is not a StrategyVersion")
         return payload
-
-    def _resolve_risk_profile(self, risk_plan_version_id: UUID | None) -> RiskProfileVersion:
-        return load_risk_profile_from_plan_version(
-            store=self._store,
-            risk_plan_version_id=risk_plan_version_id,
-            purpose="BacktestExecutionService",
-        )
 
     def _ingest_bars(
         self,

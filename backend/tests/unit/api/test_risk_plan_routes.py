@@ -176,6 +176,27 @@ def test_risk_plan_lifecycle_routes_create_version_activate_archive(tmp_path) ->
     assert UUID(first_version_id)
 
 
+def test_research_derived_risk_plan_create_requires_source_run_id(tmp_path) -> None:
+    store = _store(tmp_path)
+    client = _http_client(store)
+
+    response = client.post(
+        "/api/v1/risk-plans",
+        json={
+            "name": "Optimization Winner",
+            "description": "Research generated draft.",
+            "risk_score": 5,
+            "risk_tier": "balanced",
+            "source": "optimization_generated",
+            "config": _risk_config_payload(),
+        },
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == "research-derived Risk Plans require source_run_id"
+    assert store.list_risk_plans() == ()
+
+
 def test_account_default_risk_plan_routes_assign_and_read(tmp_path) -> None:
     store = _store(tmp_path)
     client = _http_client(store)

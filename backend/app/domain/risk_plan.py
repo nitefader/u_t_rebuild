@@ -9,7 +9,7 @@ from uuid import UUID, uuid4
 
 from pydantic import Field, model_validator
 
-from ._base import DomainSchema, utc_now
+from ._base import DomainSchema, JsonDict, utc_now
 from .risk_profile import PositionSizingMethod, RiskProfileVersion
 
 
@@ -149,11 +149,34 @@ class RiskPlan(DomainSchema):
     ai_generated: bool = False
     ai_summary: str | None = None
     source: RiskPlanSource = RiskPlanSource.MANUAL
+    source_run_id: UUID | None = None
+    source_evidence_type: str | None = None
+    evidence_lineage: JsonDict = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def validate_source_flags(self) -> RiskPlan:
         if self.source == RiskPlanSource.AI_GENERATED and not self.ai_generated:
             raise ValueError("ai_generated must be true when source is ai_generated")
+        if self.source in {
+            RiskPlanSource.OPTIMIZATION_GENERATED,
+            RiskPlanSource.WALK_FORWARD_RECOMMENDED,
+        }:
+            if self.source_run_id is None:
+                raise ValueError("research-derived RiskPlans require source_run_id")
+            if not self.evidence_lineage:
+                raise ValueError("research-derived RiskPlans require evidence_lineage")
+            required_lineage = {
+                "source_run_id",
+                "source_evidence_type",
+                "artifact_id",
+                "deployment_snapshot_id",
+            }
+            missing = sorted(required_lineage.difference(self.evidence_lineage))
+            if missing:
+                raise ValueError(
+                    "research-derived RiskPlans require immutable evidence lineage "
+                    f"fields: {missing}"
+                )
         return self
 
 

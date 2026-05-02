@@ -12,6 +12,8 @@ from backend.app.domain import (
     ExecutionStyleVersion,
     OrderType,
     ProgramVersion,
+    ResearchDataPolicy,
+    ResearchRunKind,
     RiskProfileVersion,
     StrategyControlsVersion,
     StrategyVersion,
@@ -20,7 +22,13 @@ from backend.app.domain import (
 )
 from backend.app.domain.risk_profile import PositionSizingMethod
 from backend.app.domain.strategy import CandidateSide, IntentType, SignalRule
-from backend.app.features import IncrementalFeatureEngine, NormalizedBar, ResolvedDeploymentComponents
+from backend.app.features import (
+    IncrementalFeatureEngine,
+    NormalizedBar,
+    ResolvedDeploymentComponents,
+    build_feature_refs_plan,
+)
+from backend.app.research.artifacts import build_research_run_artifact
 
 
 class RecordingResearchEvidenceStore:
@@ -143,6 +151,26 @@ def _bars(close: float) -> list[NormalizedBar]:
     ]
 
 
+def _intraday_bars(count: int = 60) -> list[NormalizedBar]:
+    start = datetime(2026, 1, 3, 14, 30, tzinfo=timezone.utc)
+    bars: list[NormalizedBar] = []
+    for index in range(count):
+        price = 100.0 + index
+        bars.append(
+            NormalizedBar(
+                symbol="SPY",
+                timeframe="5m",
+                timestamp=start + timedelta(minutes=5 * index),
+                open=price,
+                high=price + 1,
+                low=price - 1,
+                close=price + 0.5,
+                volume=100_000 + index,
+            )
+        )
+    return bars
+
+
 def _preview(close: float, feature_engine: IncrementalFeatureEngine | None = None):
     components = _components()
     bars = _bars(close)
@@ -214,46 +242,58 @@ def test_chart_lab_response_has_no_execution_artifacts() -> None:
         assert forbidden not in bar.model_dump()
 
 
-def test_chart_lab_preview_strategy_uses_strategy_only_plan() -> None:
+def test_chart_lab_preview_program_attaches_research_artifact() -> None:
     components = _components()
     bars = _bars(101)
     store = RecordingResearchEvidenceStore()
+    artifact = build_research_run_artifact(
+        run_id=uuid4(),
+        run_kind=ResearchRunKind.CHART_LAB,
+        components=components,
+        data_policy=ResearchDataPolicy(
+            provider="alpaca",
+            timeframe="5m",
+            start=bars[0].timestamp,
+            end=bars[-1].timestamp + timedelta(minutes=5),
+        ),
+        producer="chart_lab_preview",
+    )
 
-    response = ChartLabPreviewService(evidence_recorder=store).preview_strategy(
-        strategy=components.strategy,
+    response = ChartLabPreviewService(evidence_recorder=store).preview_program(
+        components=components,
         bars=bars,
         symbol="SPY",
         timeframe="5m",
         start=bars[0].timestamp,
         end=bars[-1].timestamp + timedelta(minutes=5),
+        artifact=artifact,
     )
 
     assert response.session.strategy_version_id == components.strategy.id
     assert response.feature_plan.symbols == ("SPY",)
-    feature_kinds = {spec.kind for spec in response.feature_plan.feature_specs}
-    assert feature_kinds == {"close", "high"}
     assert response.bars[0].signal_markers[0].marker_type == "candidate_entry"
     assert response.evidence is not None
+    assert response.evidence.evidence_id == artifact.run_id
+    assert response.evidence.artifact_id == artifact.artifact_id
+    assert response.evidence.deployment_snapshot_id == artifact.deployment_snapshot.snapshot_id
+    assert response.evidence.deployment_snapshot is not None
     assert response.evidence.signal_marker_count == 1
+    assert store.saved == [response.evidence]
 
 
-def test_chart_lab_preview_strategy_works_for_draft_version() -> None:
+def test_chart_lab_preview_requires_resolved_strategy() -> None:
     components = _components()
     bars = _bars(101)
 
-    response = ChartLabPreviewService().preview_strategy(
-        strategy=components.strategy,
-        bars=bars,
-        symbol="SPY",
-        timeframe="5m",
-        start=bars[0].timestamp,
-        end=bars[-1].timestamp + timedelta(minutes=5),
-    )
-
-    # No StrategyControls / RiskProfile / ExecutionStyle / Universe required.
-    assert response.feature_plan.consumer == "chart_lab"
-    assert any(spec.timeframe == "5m" for spec in response.feature_plan.feature_specs)
-    assert any(spec.timeframe == "1d" for spec in response.feature_plan.feature_specs)
+    with pytest.raises(ValueError, match="requires a resolved StrategyVersion"):
+        ChartLabPreviewService().preview_program(
+            components=components.model_copy(update={"strategy": None}),
+            bars=bars,
+            symbol="SPY",
+            timeframe="5m",
+            start=bars[0].timestamp,
+            end=bars[-1].timestamp + timedelta(minutes=5),
+        )
 
 
 def test_chart_lab_preview_saves_research_evidence() -> None:
@@ -275,6 +315,37 @@ def test_chart_lab_preview_saves_research_evidence() -> None:
     assert response.evidence.strategy_version_id == components.strategy.id
     assert response.evidence.signal_marker_count == 1
     assert store.saved == [response.evidence]
+
+
+def test_chart_lab_feature_explorer_has_no_strategy_or_evidence() -> None:
+    bars = _intraday_bars()
+    plan = build_feature_refs_plan(
+        strategy_version_id=uuid4(),
+        feature_refs=("5m.rsi:length=14",),
+        symbols=("SPY",),
+        default_timeframe="5m",
+    )
+    store = RecordingResearchEvidenceStore()
+
+    response = ChartLabPreviewService(evidence_recorder=store).preview_plan(
+        strategy=None,
+        plan=plan,
+        bars=bars,
+        symbol="SPY",
+        timeframe="5m",
+        start=bars[5].timestamp,
+        end=bars[-1].timestamp + timedelta(minutes=5),
+        feature_origins={plan.feature_keys[0]: "manual"},
+    )
+
+    assert response.session.strategy_version_id is None
+    assert response.evidence is None
+    assert store.saved == []
+    assert response.features[0].origin == "manual"
+    assert response.features[0].badge == "Manual"
+    assert response.bars[0].is_warmup is True
+    assert response.bars[-1].feature_values[0].value is not None
+    assert all(bar.signal_markers == () for bar in response.bars)
 
 
 # ---------------------------------------------------------------------------

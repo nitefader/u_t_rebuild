@@ -19,6 +19,7 @@ from backend.app.domain import (
     RiskPlanTier,
     RiskPlanVersion,
     RiskPlanVersionStatus,
+    ResearchRunKind,
 )
 from backend.app.domain._base import utc_now
 from backend.app.persistence import SQLiteRuntimeStore
@@ -39,6 +40,9 @@ class RiskPlanCreateRequest(BaseModel):
     ai_generated: bool = False
     ai_summary: str | None = None
     source: RiskPlanSource = RiskPlanSource.MANUAL
+    source_run_id: UUID | None = None
+    source_evidence_type: str | None = None
+    evidence_lineage: dict[str, Any] = Field(default_factory=dict)
 
 
 class RiskPlanPatchRequest(BaseModel):
@@ -193,6 +197,64 @@ RiskPlanStoreDependency = Annotated[Any, _dependency(get_risk_plan_store)]
 RiskPlanAICatalogDependency = Annotated[Any, _dependency(get_risk_plan_ai_catalog)]
 
 
+def _research_source_lineage(
+    *,
+    request: RiskPlanCreateRequest,
+    store: SQLiteRuntimeStore,
+) -> tuple[UUID | None, str | None, dict[str, Any]]:
+    research_sources = {
+        RiskPlanSource.OPTIMIZATION_GENERATED: ("OptimizationRun", ResearchRunKind.OPTIMIZATION),
+        RiskPlanSource.WALK_FORWARD_RECOMMENDED: ("WalkForwardRun", ResearchRunKind.WALK_FORWARD),
+    }
+    if request.source not in research_sources:
+        return request.source_run_id, request.source_evidence_type, dict(request.evidence_lineage)
+
+    if request.source_run_id is None:
+        raise HTTPException(
+            status_code=422,
+            detail="research-derived Risk Plans require source_run_id",
+        )
+    try:
+        artifact = store.load_research_run_artifact_for_run(request.source_run_id)
+    except KeyError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "research-derived Risk Plans require immutable evidence lineage: "
+                f"no ResearchRunArtifact found for source_run_id {request.source_run_id}"
+            ),
+        ) from exc
+
+    snapshot = artifact.deployment_snapshot
+    default_evidence_type, expected_kind = research_sources[request.source]
+    if artifact.run_kind != expected_kind:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"{request.source.value} Risk Plans require {expected_kind.value} evidence; "
+                f"artifact {artifact.artifact_id} is {artifact.run_kind.value}"
+            ),
+        )
+    source_evidence_type = request.source_evidence_type or default_evidence_type
+    lineage = dict(request.evidence_lineage)
+    lineage.update(
+        {
+            "source_run_id": str(request.source_run_id),
+            "source_evidence_type": source_evidence_type,
+            "artifact_id": str(artifact.artifact_id),
+            "deployment_snapshot_id": str(snapshot.snapshot_id),
+            "research_run_kind": artifact.run_kind.value,
+            "strategy_id": str(snapshot.strategy_id),
+            "strategy_version_id": str(snapshot.strategy_version_id),
+            "strategy_controls_version_id": str(snapshot.strategy_controls_version_id),
+            "execution_plan_version_id": str(snapshot.execution_plan_version_id),
+            "risk_plan_version_id": str(snapshot.risk_plan_version_id),
+            "symbols": list(snapshot.symbols),
+        }
+    )
+    return request.source_run_id, source_evidence_type, lineage
+
+
 @router.get("/api/v1/risk-plans", response_model=RiskPlanListResponse)
 def list_risk_plans(
     store: RiskPlanStoreDependency,
@@ -218,6 +280,10 @@ def create_risk_plan(
     store: RiskPlanStoreDependency,
 ) -> RiskPlanDetailResponse:
     now = utc_now()
+    source_run_id, source_evidence_type, evidence_lineage = _research_source_lineage(
+        request=request,
+        store=store,
+    )
     risk_plan = RiskPlan(
         name=request.name,
         description=request.description,
@@ -231,6 +297,9 @@ def create_risk_plan(
         ai_generated=request.ai_generated,
         ai_summary=request.ai_summary,
         source=request.source,
+        source_run_id=source_run_id,
+        source_evidence_type=source_evidence_type,
+        evidence_lineage=evidence_lineage,
     )
     version = RiskPlanVersion(
         risk_plan_id=risk_plan.risk_plan_id,

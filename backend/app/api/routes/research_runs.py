@@ -24,6 +24,8 @@ from backend.app.data_center.ingest_service import (
 from backend.app.domain import (
     BacktestRun,
     OptimizationRun,
+    ResearchDataPolicy,
+    ResearchRunKind,
     RiskPlan,
     RiskPlanConfig,
     RiskPlanSource,
@@ -36,7 +38,9 @@ from backend.app.domain import (
 )
 from backend.app.domain._base import JsonDict, utc_now
 from backend.app.persistence import SQLiteRuntimeStore
+from backend.app.research.artifacts import artifact_lineage_payload, build_research_run_artifact
 from backend.app.research.backtests import BacktestExecutionRequest, BacktestExecutionService
+from backend.app.research.components import load_research_components
 from backend.app.research.sim_lab import SimLabBatchRunRequest, SimLabBatchRunService
 from backend.app.simulation import HistoricalReplayEngine
 from backend.app.simulation.models import (
@@ -106,6 +110,8 @@ class BacktestRunRequest(BaseModel):
 
     strategy_id: UUID
     strategy_version_id: UUID
+    strategy_controls_version_id: UUID | None = None
+    execution_plan_version_id: UUID | None = None
     risk_plan_version_id: UUID | None = None
     watchlist_snapshot_id: UUID | None = None
     universe: tuple[str, ...] = ()
@@ -152,6 +158,9 @@ class SimLabBatchRunApiRequest(BaseModel):
 
     strategy_id: UUID
     strategy_version_id: UUID
+    strategy_controls_version_id: UUID | None = None
+    execution_plan_version_id: UUID | None = None
+    risk_plan_version_id: UUID | None = None
     scenario_name: str = Field(min_length=1)
     universe: tuple[str, ...] = Field(min_length=1)
     timeframe: str = "5m"
@@ -178,6 +187,8 @@ class OptimizationRunRequest(BaseModel):
 
     strategy_id: UUID
     strategy_version_id: UUID
+    strategy_controls_version_id: UUID | None = None
+    execution_plan_version_id: UUID | None = None
     # Spine-driven optimization: when symbols + sweep are supplied, the service
     # runs a parameter search on one window via HistoricalReplayEngine and
     # produces a candidate landscape + recommended-with-WF-validation winner.
@@ -210,6 +221,8 @@ class WalkForwardRunRequest(BaseModel):
 
     strategy_id: UUID
     strategy_version_id: UUID
+    strategy_controls_version_id: UUID | None = None
+    execution_plan_version_id: UUID | None = None
     # Spine-driven WF: when symbols are supplied, the service runs IS+OOS
     # folds via HistoricalReplayEngine and produces a real recommendation.
     symbols: tuple[str, ...] = ()
@@ -317,6 +330,16 @@ def create_backtest_run(request: BacktestRunRequest, store: ResearchStoreDepende
                 BacktestExecutionRequest(
                     strategy_id=request.strategy_id,
                     strategy_version_id=request.strategy_version_id,
+                    strategy_controls_version_id=_required_component_id(
+                        request.strategy_controls_version_id,
+                        "strategy_controls_version_id",
+                        "backtest",
+                    ),
+                    execution_plan_version_id=_required_component_id(
+                        request.execution_plan_version_id,
+                        "execution_plan_version_id",
+                        "backtest",
+                    ),
                     risk_plan_version_id=request.risk_plan_version_id,
                     watchlist_snapshot_id=request.watchlist_snapshot_id,
                     symbols=symbols,
@@ -333,17 +356,12 @@ def create_backtest_run(request: BacktestRunRequest, store: ResearchStoreDepende
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
     else:
-        run = BacktestRun(
-            run_id=uuid4(),
-            strategy_id=request.strategy_id,
-            strategy_version_id=request.strategy_version_id,
-            watchlist_snapshot_id=request.watchlist_snapshot_id,
-            start=request.start,
-            end=request.end,
-            bar_count=request.bar_count,
-            signal_plan_count=request.signal_plan_count,
-            simulated_trade_count=request.simulated_trade_count,
-            metrics=_with_status(request.metrics, "recorded"),
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "backtest research evidence must be produced by the research spine; "
+                "provide symbols/watchlist input instead of client-authored counts"
+            ),
         )
     return store.save_research_evidence(run)
 
@@ -352,6 +370,15 @@ def _get_strategy_lookup() -> Any:
     from backend.app.api.routes.strategies import get_strategy_service
 
     return get_strategy_service()
+
+
+def _required_component_id(value: UUID | None, field_name: str, run_kind: str) -> UUID:
+    if value is None:
+        raise HTTPException(
+            status_code=422,
+            detail=f"{field_name} is required for spine-driven {run_kind} runs",
+        )
+    return value
 
 
 @router.get("/api/v1/backtests/{run_id}", response_model=BacktestRun)
@@ -407,19 +434,13 @@ def list_sim_lab_sessions(store: ResearchStoreDependency) -> SimulationSessionLi
 
 @router.post("/api/v1/sim-lab/sessions", response_model=SimulationRunEvidence)
 def create_sim_lab_session(request: SimulationSessionRequest, store: ResearchStoreDependency) -> SimulationRunEvidence:
-    evidence = SimulationRunEvidence(
-        run_id=uuid4(),
-        strategy_id=request.strategy_id,
-        strategy_version_id=request.strategy_version_id,
-        scenario_name=request.scenario_name,
-        start=request.start,
-        end=request.end,
-        signal_plan_count=request.signal_plan_count,
-        simulated_order_count=request.simulated_order_count,
-        simulated_fill_count=request.simulated_fill_count,
-        metrics=_with_status(request.metrics, "created"),
+    raise HTTPException(
+        status_code=422,
+        detail=(
+            "sim lab evidence must be produced by the research spine; "
+            "use /api/v1/research/sim_lab/runs instead of client-authored sessions"
+        ),
     )
-    return store.save_research_evidence(evidence)
 
 
 @router.get("/api/v1/sim-lab/sessions/{session_id}", response_model=SimulationRunEvidence)
@@ -440,16 +461,13 @@ def run_sim_lab_session(
     request: SimulationRunRequest,
     store: ResearchStoreDependency,
 ) -> SimulationRunEvidence:
-    evidence = _load_typed(store, session_id, SimulationRunEvidence)
-    completed = evidence.model_copy(
-        update={
-            "signal_plan_count": request.signal_plan_count,
-            "simulated_order_count": request.simulated_order_count,
-            "simulated_fill_count": request.simulated_fill_count,
-            "metrics": _with_status(request.metrics, "completed"),
-        }
+    raise HTTPException(
+        status_code=422,
+        detail=(
+            "sim lab evidence must be produced by the research spine; "
+            "use /api/v1/research/sim_lab/runs instead of client-authored sessions"
+        ),
     )
-    return store.save_research_evidence(completed)
 
 
 @router.get("/api/v1/sim-lab/sessions/{session_id}/results", response_model=SimulationRunEvidence)
@@ -463,6 +481,32 @@ def create_sim_lab_batch_run(
     store: ResearchStoreDependency,
 ) -> SimLabBatchRunResponse:
     try:
+        run_id = uuid4()
+        components = load_research_components(
+            strategy_lookup=_get_strategy_lookup(),
+            store=store,
+            strategy_version_id=request.strategy_version_id,
+            expected_strategy_id=request.strategy_id,
+            strategy_controls_version_id=_required_component_id(
+                request.strategy_controls_version_id,
+                "strategy_controls_version_id",
+                "sim lab",
+            ),
+            execution_plan_version_id=_required_component_id(
+                request.execution_plan_version_id,
+                "execution_plan_version_id",
+                "sim lab",
+            ),
+            risk_plan_version_id=_required_component_id(
+                request.risk_plan_version_id,
+                "risk_plan_version_id",
+                "sim lab",
+            ),
+            symbols=tuple(symbol.strip().upper() for symbol in request.universe if symbol.strip()),
+            timeframe=request.timeframe,
+            universe_name="Sim Lab universe",
+            purpose="SimLabBatchRunService",
+        )
         result = SimLabBatchRunService(
             replay_engine=HistoricalReplayEngine(evidence_recorder=store)
         ).create_run(
@@ -476,14 +520,43 @@ def create_sim_lab_batch_run(
                 timeframe=request.timeframe,
                 initial_cash=request.initial_cash,
                 bar_count=request.bar_count,
-            )
+            ),
+            components=components,
+            run_id=run_id,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     if result.evidence is None:  # pragma: no cover - engine always returns evidence.
         raise HTTPException(status_code=500, detail="sim lab batch run did not produce evidence")
+    artifact = build_research_run_artifact(
+        run_id=result.evidence.run_id,
+        run_kind=ResearchRunKind.SIM_LAB,
+        components=components,
+        data_policy=ResearchDataPolicy(
+            provider="simulated",
+            timeframe=request.timeframe,
+            adjustment_policy="raw",
+            start=request.start,
+            end=request.end,
+        ),
+        producer="historical_replay",
+    )
+    store.save_research_run_artifact(artifact)
+    evidence = result.evidence.model_copy(
+        update={
+            "artifact_id": artifact.artifact_id,
+            "deployment_snapshot_id": artifact.deployment_snapshot.snapshot_id,
+            "deployment_snapshot": artifact.deployment_snapshot,
+            "metrics": {
+                **result.evidence.metrics,
+                "research_artifact": artifact_lineage_payload(artifact),
+            },
+        }
+    )
+    store.save_research_evidence(evidence)
+    result = result.model_copy(update={"evidence": evidence})
     return SimLabBatchRunResponse(
-        run=result.evidence,
+        run=evidence,
         events=result.events,
         orders=result.orders,
         fills=result.fills,
@@ -497,8 +570,77 @@ def create_sim_lab_batch_run(
 async def stream_sim_lab_batch_run(websocket: WebSocket) -> None:
     await websocket.accept()
     try:
-        request = _sim_lab_stream_request(websocket)
-        messages = SimLabBatchRunService(replay_engine=HistoricalReplayEngine()).stream_messages(request)
+        api_request = _sim_lab_stream_request(websocket)
+        request = SimLabBatchRunRequest(
+            strategy_id=api_request.strategy_id,
+            strategy_version_id=api_request.strategy_version_id,
+            scenario_name=api_request.scenario_name,
+            start=api_request.start,
+            end=api_request.end,
+            universe=api_request.universe,
+            timeframe=api_request.timeframe,
+            initial_cash=api_request.initial_cash,
+            bar_count=api_request.bar_count,
+        )
+        store = SQLiteRuntimeStore(get_runtime_db_path())
+        components = load_research_components(
+            strategy_lookup=_get_strategy_lookup(),
+            store=store,
+            strategy_version_id=api_request.strategy_version_id,
+            expected_strategy_id=api_request.strategy_id,
+            strategy_controls_version_id=_required_stream_component_id(
+                api_request.strategy_controls_version_id,
+                "strategy_controls_version_id",
+            ),
+            execution_plan_version_id=_required_stream_component_id(
+                api_request.execution_plan_version_id,
+                "execution_plan_version_id",
+            ),
+            risk_plan_version_id=_required_stream_component_id(
+                api_request.risk_plan_version_id,
+                "risk_plan_version_id",
+            ),
+            symbols=api_request.universe,
+            timeframe=api_request.timeframe,
+            universe_name="Sim Lab stream universe",
+            purpose="SimLabBatchRunService",
+        )
+        run_id = uuid4()
+        messages, result = SimLabBatchRunService(
+            replay_engine=HistoricalReplayEngine(evidence_recorder=store)
+        ).stream_result(
+            request,
+            components=components,
+            run_id=run_id,
+        )
+        if result.evidence is None:  # pragma: no cover
+            raise ValueError("sim lab stream run did not produce evidence")
+        artifact = build_research_run_artifact(
+            run_id=result.evidence.run_id,
+            run_kind=ResearchRunKind.SIM_LAB,
+            components=components,
+            data_policy=ResearchDataPolicy(
+                provider="simulated",
+                timeframe=request.timeframe,
+                adjustment_policy="raw",
+                start=request.start,
+                end=request.end,
+            ),
+            producer="historical_replay",
+        )
+        store.save_research_run_artifact(artifact)
+        evidence = result.evidence.model_copy(
+            update={
+                "artifact_id": artifact.artifact_id,
+                "deployment_snapshot_id": artifact.deployment_snapshot.snapshot_id,
+                "deployment_snapshot": artifact.deployment_snapshot,
+                "metrics": {
+                    **result.evidence.metrics,
+                    "research_artifact": artifact_lineage_payload(artifact),
+                },
+            }
+        )
+        store.save_research_evidence(evidence)
     except ValueError as exc:
         await websocket.send_json({"type": "error", "code": "invalid_sim_lab_stream_request", "message": str(exc)})
         await websocket.close(code=1008)
@@ -563,6 +705,16 @@ def create_optimization_run(request: OptimizationRunRequest, store: ResearchStor
         opt_request = OptimizationExecutionRequest(
             strategy_id=request.strategy_id,
             strategy_version_id=request.strategy_version_id,
+            strategy_controls_version_id=_required_component_id(
+                request.strategy_controls_version_id,
+                "strategy_controls_version_id",
+                "optimization",
+            ),
+            execution_plan_version_id=_required_component_id(
+                request.execution_plan_version_id,
+                "execution_plan_version_id",
+                "optimization",
+            ),
             symbols=symbols,
             start=request.start,
             end=request.end,
@@ -591,20 +743,13 @@ def create_optimization_run(request: OptimizationRunRequest, store: ResearchStor
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         return store.save_research_evidence(run)
-    # Legacy placeholder path
-    legacy_keys = {
-        "strategy_id",
-        "strategy_version_id",
-        "objective",
-        "candidate_count",
-        "best_parameters",
-        "best_metrics",
-    }
-    payload = {k: v for k, v in request.model_dump().items() if k in legacy_keys}
-    if not payload.get("candidate_count"):
-        payload["candidate_count"] = 1
-    run = OptimizationRun(run_id=uuid4(), **payload)
-    return store.save_research_evidence(run)
+    raise HTTPException(
+        status_code=422,
+        detail=(
+            "optimization research evidence must be produced by the research spine; "
+            "provide symbols and a sweep instead of client-authored counts"
+        ),
+    )
 
 
 @router.get("/api/v1/optimization/runs/{run_id}", response_model=OptimizationRun)
@@ -698,6 +843,16 @@ def create_walk_forward_run(request: WalkForwardRunRequest, store: ResearchStore
         wf_request = WalkForwardExecutionRequest(
             strategy_id=request.strategy_id,
             strategy_version_id=request.strategy_version_id,
+            strategy_controls_version_id=_required_component_id(
+                request.strategy_controls_version_id,
+                "strategy_controls_version_id",
+                "walk-forward",
+            ),
+            execution_plan_version_id=_required_component_id(
+                request.execution_plan_version_id,
+                "execution_plan_version_id",
+                "walk-forward",
+            ),
             symbols=symbols,
             start=request.start,
             end=request.end,
@@ -728,13 +883,13 @@ def create_walk_forward_run(request: WalkForwardRunRequest, store: ResearchStore
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         return store.save_research_evidence(run)
-    # Legacy placeholder path: callers who only want to record an evidence row.
-    legacy_keys = {"strategy_id", "strategy_version_id", "window_count", "passed_window_count", "metrics"}
-    payload = {k: v for k, v in request.model_dump().items() if k in legacy_keys}
-    if not payload.get("window_count"):
-        payload["window_count"] = 1
-    run = WalkForwardRun(run_id=uuid4(), **payload)
-    return store.save_research_evidence(run)
+    raise HTTPException(
+        status_code=422,
+        detail=(
+            "walk-forward research evidence must be produced by the research spine; "
+            "provide symbols/window inputs instead of client-authored counts"
+        ),
+    )
 
 
 @router.get("/api/v1/walk-forward/runs/{run_id}", response_model=WalkForwardRun)
@@ -785,6 +940,12 @@ def _save_recommended_risk_plan(
 ) -> SaveRiskPlanDraftResponse:
     now = utc_now()
     config = _risk_plan_config_from_recommendation(parameters)
+    evidence_lineage = _risk_plan_evidence_lineage(
+        store=store,
+        source_run_id=source_run_id,
+        source=source,
+        parameters=parameters,
+    )
     risk_plan = RiskPlan(
         name=name,
         description=description,
@@ -798,6 +959,9 @@ def _save_recommended_risk_plan(
         ai_generated=False,
         ai_summary=ai_summary,
         source=source,
+        source_run_id=source_run_id,
+        source_evidence_type=evidence_lineage.get("source_evidence_type"),
+        evidence_lineage=evidence_lineage,
     )
     version = RiskPlanVersion(
         risk_plan_id=risk_plan.risk_plan_id,
@@ -813,6 +977,64 @@ def _save_recommended_risk_plan(
         risk_plan_version=version,
         source_run_id=source_run_id,
     )
+
+
+def _risk_plan_evidence_lineage(
+    *,
+    store: Any,
+    source_run_id: UUID,
+    source: RiskPlanSource,
+    parameters: dict[str, Any],
+) -> JsonDict:
+    try:
+        evidence = store.load_research_evidence(source_run_id)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(
+            status_code=422,
+            detail=f"cannot save research-derived RiskPlan without source evidence: {source_run_id}",
+        ) from exc
+    lineage: JsonDict = {
+        "source_run_id": str(source_run_id),
+        "source": source.value,
+        "source_evidence_type": evidence.__class__.__name__,
+        "strategy_id": str(evidence.strategy_id),
+        "strategy_version_id": str(evidence.strategy_version_id),
+        "parameters": dict(parameters),
+    }
+    artifact_id = getattr(evidence, "artifact_id", None)
+    deployment_snapshot_id = getattr(evidence, "deployment_snapshot_id", None)
+    if artifact_id is not None:
+        lineage["artifact_id"] = str(artifact_id)
+    if deployment_snapshot_id is not None:
+        lineage["deployment_snapshot_id"] = str(deployment_snapshot_id)
+    artifact = None
+    if hasattr(store, "load_research_run_artifact_for_run"):
+        try:
+            artifact = store.load_research_run_artifact_for_run(source_run_id)
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "cannot save research-derived RiskPlan without immutable "
+                    f"ResearchRunArtifact lineage: {source_run_id}"
+                ),
+            ) from exc
+    if artifact is None:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "cannot save research-derived RiskPlan without immutable "
+                f"ResearchRunArtifact lineage: {source_run_id}"
+            ),
+        )
+    snapshot = artifact.deployment_snapshot
+    lineage["artifact_id"] = str(artifact.artifact_id)
+    lineage["deployment_snapshot_id"] = str(snapshot.snapshot_id)
+    lineage["strategy_controls_version_id"] = str(snapshot.strategy_controls_version_id)
+    lineage["execution_plan_version_id"] = str(snapshot.execution_plan_version_id)
+    lineage["risk_plan_version_id"] = str(snapshot.risk_plan_version_id)
+    lineage["symbols"] = list(snapshot.symbols)
+    return lineage
 
 
 def _risk_plan_config_from_recommendation(parameters: dict[str, Any]) -> RiskPlanConfig:
@@ -909,20 +1131,30 @@ def _with_status(metrics: JsonDict, status: str, *, reason: str | None = None) -
     return updated
 
 
-def _sim_lab_stream_request(websocket: WebSocket) -> SimLabBatchRunRequest:
+def _sim_lab_stream_request(websocket: WebSocket) -> SimLabBatchRunApiRequest:
     query = websocket.query_params
     universe = tuple(symbol.strip().upper() for symbol in (query.get("universe") or "").split(",") if symbol.strip())
-    return SimLabBatchRunRequest(
-        strategy_id=UUID(_required_query(query, "strategy_id")),
-        strategy_version_id=UUID(_required_query(query, "strategy_version_id")),
-        scenario_name=_required_query(query, "scenario_name"),
-        universe=universe,
-        timeframe=query.get("timeframe") or "5m",
-        start=datetime.fromisoformat(_required_query(query, "start")),
-        end=datetime.fromisoformat(_required_query(query, "end")),
-        initial_cash=float(query.get("initial_cash") or 100_000),
-        bar_count=int(query.get("bar_count") or 12),
-    )
+    payload = {
+        "strategy_id": _required_query(query, "strategy_id"),
+        "strategy_version_id": _required_query(query, "strategy_version_id"),
+        "strategy_controls_version_id": _required_query(query, "strategy_controls_version_id"),
+        "execution_plan_version_id": _required_query(query, "execution_plan_version_id"),
+        "risk_plan_version_id": _required_query(query, "risk_plan_version_id"),
+        "scenario_name": _required_query(query, "scenario_name"),
+        "universe": universe,
+        "timeframe": query.get("timeframe") or "5m",
+        "start": _required_query(query, "start"),
+        "end": _required_query(query, "end"),
+        "initial_cash": float(query.get("initial_cash") or 100_000),
+        "bar_count": int(query.get("bar_count") or 12),
+    }
+    return SimLabBatchRunApiRequest.model_validate(payload)
+
+
+def _required_stream_component_id(value: UUID | None, field_name: str) -> UUID:
+    if value is None:
+        raise ValueError(f"{field_name} is required for spine-driven sim lab streams")
+    return value
 
 
 def _required_query(query: Any, name: str) -> str:

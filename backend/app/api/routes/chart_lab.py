@@ -28,7 +28,7 @@ import asyncio
 import json
 import os
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Annotated, Any, Literal
 from uuid import UUID, uuid4
 
@@ -36,7 +36,11 @@ from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisco
 from pydantic import BaseModel, ConfigDict, Field
 
 from backend.app.api.system_settings_store import setting
-from backend.app.chart_lab import ChartLabPreviewResponse, ChartLabPreviewService
+from backend.app.chart_lab import (
+    ChartLabFeatureDescriptor,
+    ChartLabPreviewResponse,
+    ChartLabPreviewService,
+)
 from backend.app.chart_lab.preview_service import ChartLabTimeframeMismatchError
 from backend.app.config.runtime_paths import get_runtime_db_path
 from backend.app.data_center.historical_catalog import configure_persistence
@@ -46,8 +50,17 @@ from backend.app.data_center.ingest_service import (
     YahooBarsSource,
     alpaca_bars_source_from_runtime,
 )
-from backend.app.domain import StrategyVersion
-from backend.app.features import FeaturePlanError, NormalizedBar
+from backend.app.features import (
+    FeaturePlan,
+    FeaturePlanError,
+    NormalizedBar,
+    build_feature_refs_plan,
+    build_strategy_only_feature_plan,
+    make_feature_key,
+)
+from backend.app.features.incremental import SUPPORTED_BATCH_KINDS
+from backend.app.features.registry import registry as feature_registry
+from backend.app.features.spec import FeatureNamespace, FeatureScope, FeatureSpec
 from backend.app.market_data import (
     AlpacaMarketDataAdapter,
     MarketDataStreamHub,
@@ -55,6 +68,7 @@ from backend.app.market_data import (
     ServicePurpose,
 )
 from backend.app.persistence import SQLiteRuntimeStore
+from backend.app.research.components import load_strategy_version
 
 
 try:  # pragma: no cover - alpaca-py optional in tests.
@@ -292,7 +306,8 @@ RuntimeStoreDep = Annotated[Any, _dependency(_runtime_store)]
 class ChartLabPreviewRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    strategy_version_id: UUID
+    strategy_version_id: UUID | None = None
+    manual_feature_refs: tuple[str, ...] = ()
     symbol: str = Field(min_length=1)
     timeframe: str = Field(min_length=1)
     start: datetime
@@ -303,63 +318,139 @@ class ChartLabPreviewRequest(BaseModel):
     ] = "split_dividend_adjusted"
 
 
+class ChartLabFeatureLibraryResponse(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    timeframe: str
+    features: tuple[ChartLabFeatureDescriptor, ...]
+
+
+_FEATURE_EXPLORATION_PLAN_ID = UUID("00000000-0000-0000-0000-000000000000")
+
+
+@router.get("/features", response_model=ChartLabFeatureLibraryResponse)
+def chart_lab_feature_library(timeframe: str = "5m") -> ChartLabFeatureLibraryResponse:
+    features: list[ChartLabFeatureDescriptor] = []
+    for entry in feature_registry.catalog():
+        kind = str(entry["kind"])
+        namespace = str(entry["namespace"])
+        scope = str(entry["scope"])
+        if kind not in SUPPORTED_BATCH_KINDS:
+            continue
+        if namespace not in {FeatureNamespace.PRICE.value, FeatureNamespace.TECHNICAL.value}:
+            continue
+        if scope != FeatureScope.SYMBOL.value:
+            continue
+        if timeframe not in set(entry["supported_timeframes"]):
+            continue
+        try:
+            spec = feature_registry.create_spec(
+                kind=kind,
+                timeframe=timeframe,
+                params=dict(entry["default_params"]),
+            )
+        except ValueError:
+            continue
+        features.append(_descriptor_for_spec(spec, origin="manual"))
+    return ChartLabFeatureLibraryResponse(
+        timeframe=timeframe,
+        features=tuple(sorted(features, key=lambda item: (item.group, item.name))),
+    )
+
+
 @router.post("/preview", response_model=ChartLabPreviewResponse)
 def chart_lab_preview(
     request: ChartLabPreviewRequest,
     store: RuntimeStoreDep,
 ) -> ChartLabPreviewResponse:
-    """Replay a saved StrategyVersion against historical bars and return
-    auto-derived features per bar so the operator can plot + verify visually.
+    """Replay ChartLab's signal/feature verification package.
 
-    Strategy-only: no Deployment binding required. Drafts and frozen versions
-    both work — Chart Lab is research, not deployment.
+    Strategy is optional. When present, the FeatureEngine derives the Strategy's
+    requirements from StrategyVersion. Manual features are FeatureEngine refs
+    too. ChartLab never reads or writes Account, Order, Position, or broker truth.
     """
     if request.start >= request.end:
         raise HTTPException(status_code=422, detail="start must be before end")
 
-    lookup = _strategy_lookup()
+    symbol = request.symbol.strip().upper()
+    if not symbol:
+        raise HTTPException(status_code=422, detail="symbol is required")
+
     try:
-        record = lookup.get_version(request.strategy_version_id)
-    except Exception as exc:  # noqa: BLE001 - operator-readable surface
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    payload = getattr(record, "payload", record)
-    if not isinstance(payload, StrategyVersion):
-        raise HTTPException(
-            status_code=422,
-            detail=f"strategy_version {request.strategy_version_id} is not a StrategyVersion",
+        strategy = (
+            load_strategy_version(
+                strategy_lookup=_strategy_lookup(),
+                strategy_version_id=request.strategy_version_id,
+                purpose="ChartLab",
+            )
+            if request.strategy_version_id is not None
+            else None
         )
+        plan, origins = _build_chart_lab_plan(
+            strategy=strategy,
+            manual_feature_refs=request.manual_feature_refs,
+            symbol=symbol,
+            timeframe=request.timeframe,
+        )
+    except FeaturePlanError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     sources = {"yahoo": YahooBarsSource(), "alpaca": alpaca_bars_source_from_runtime(store)}
     ingest_service = HistoricalBarIngestService(store=store, sources=sources)
+    all_bars: list[NormalizedBar] = []
+    dataset_ids: list[UUID] = []
+    data_quality_warnings: list[str] = []
     try:
-        ingest_result = ingest_service.ensure_bars(
-            HistoricalBarIngestRequest(
-                provider=request.source,
-                symbol=request.symbol,
-                timeframe=request.timeframe,
-                start=request.start,
-                end=request.end,
-                adjustment_policy=request.adjustment_policy,
+        for timeframe in _required_timeframes(plan, request.timeframe):
+            ingest_result = ingest_service.ensure_bars(
+                HistoricalBarIngestRequest(
+                    provider=request.source,
+                    symbol=symbol,
+                    timeframe=timeframe,
+                    start=_warmup_start(
+                        request.start,
+                        timeframe=timeframe,
+                        warmup_bars=plan.warmup_by_timeframe.get(timeframe, 0),
+                    ),
+                    end=request.end,
+                    adjustment_policy=request.adjustment_policy,
+                )
             )
-        )
+            dataset_ids.append(ingest_result.dataset_id)
+            all_bars.extend(ingest_result.bars)
+            data_quality_warnings.extend(ingest_result.data_quality_warnings)
     except (ValueError, RuntimeError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
-    if not ingest_result.bars:
+    if not any(bar.symbol.upper() == symbol and bar.timeframe == request.timeframe for bar in all_bars):
         raise HTTPException(
             status_code=422,
-            detail=f"no bars available for {request.symbol} {request.timeframe} in window",
+            detail=f"no bars available for {symbol} {request.timeframe} in window",
         )
 
     service = ChartLabPreviewService(evidence_recorder=store)
     try:
-        return service.preview_strategy(
-            strategy=payload,
-            bars=ingest_result.bars,
-            symbol=request.symbol,
+        response = service.preview_plan(
+            strategy=strategy,
+            plan=plan,
+            bars=tuple(all_bars),
+            symbol=symbol,
             timeframe=request.timeframe,
             start=request.start,
             end=request.end,
+            feature_origins=origins,
+        )
+        metadata = {
+            **response.session.metadata,
+            "provider": request.source,
+            "adjustment_policy": request.adjustment_policy,
+            "historical_dataset_ids": [str(dataset_id) for dataset_id in dataset_ids],
+            "data_quality_warnings": list(dict.fromkeys(data_quality_warnings)),
+        }
+        return response.model_copy(
+            update={"session": response.session.model_copy(update={"metadata": metadata})}
         )
     except ChartLabTimeframeMismatchError as exc:
         raise HTTPException(
@@ -371,6 +462,179 @@ def chart_lab_preview(
         ) from exc
     except FeaturePlanError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+def _build_chart_lab_plan(
+    *,
+    strategy: Any | None,
+    manual_feature_refs: tuple[str, ...],
+    symbol: str,
+    timeframe: str,
+) -> tuple[FeaturePlan, dict[str, Literal["derived", "manual"]]]:
+    plans: list[tuple[FeaturePlan, Literal["derived", "manual"]]] = []
+    if strategy is not None:
+        plans.append(
+            (
+                build_strategy_only_feature_plan(
+                    strategy,
+                    default_timeframe=timeframe,
+                    consumer="chart_lab",
+                ).model_copy(update={"symbols": (symbol,)}),
+                "derived",
+            )
+        )
+    if manual_feature_refs:
+        plan_id = strategy.id if strategy is not None else _FEATURE_EXPLORATION_PLAN_ID
+        plans.append(
+            (
+                build_feature_refs_plan(
+                    strategy_version_id=plan_id,
+                    feature_refs=manual_feature_refs,
+                    symbols=(symbol,),
+                    default_timeframe=timeframe,
+                    consumer="chart_lab",
+                ),
+                "manual",
+            )
+        )
+    if not plans:
+        return (
+            build_feature_refs_plan(
+                strategy_version_id=(
+                    strategy.id if strategy is not None else _FEATURE_EXPLORATION_PLAN_ID
+                ),
+                feature_refs=(),
+                symbols=(symbol,),
+                default_timeframe=timeframe,
+                consumer="chart_lab",
+            ),
+            {},
+        )
+
+    feature_specs: dict[str, FeatureSpec] = {}
+    origins: dict[str, Literal["derived", "manual"]] = {}
+    data_requirements = {}
+    for plan, origin in plans:
+        for spec, feature_key, requirement in zip(
+            plan.feature_specs,
+            plan.feature_keys,
+            plan.data_requirements,
+            strict=True,
+        ):
+            if feature_key in feature_specs:
+                continue
+            feature_specs[feature_key] = spec
+            origins[feature_key] = origin
+            data_requirements[feature_key] = requirement
+
+    feature_keys = tuple(sorted(feature_specs))
+    specs = tuple(feature_specs[key] for key in feature_keys)
+    warmup_by_timeframe: dict[str, int] = {}
+    for plan, _origin in plans:
+        for tf, warmup in plan.warmup_by_timeframe.items():
+            warmup_by_timeframe[tf] = max(warmup_by_timeframe.get(tf, 0), warmup)
+
+    return (
+        FeaturePlan(
+            strategy_version_id=strategy.id if strategy is not None else _FEATURE_EXPLORATION_PLAN_ID,
+            consumer="chart_lab",
+            symbols=(symbol,),
+            timeframes=tuple(sorted({spec.timeframe for spec in specs})),
+            feature_specs=specs,
+            feature_keys=feature_keys,
+            warmup_by_timeframe=warmup_by_timeframe,
+            data_requirements=tuple(data_requirements[key] for key in feature_keys),
+        ),
+        origins,
+    )
+
+
+def _required_timeframes(plan: FeaturePlan, base_timeframe: str) -> tuple[str, ...]:
+    return tuple(sorted({base_timeframe, *plan.timeframes}))
+
+
+def _warmup_start(start: datetime, *, timeframe: str, warmup_bars: int) -> datetime:
+    if warmup_bars <= 0:
+        return start
+    return start - (_timeframe_delta(timeframe) * max(warmup_bars, 1) * 2)
+
+
+def _timeframe_delta(timeframe: str) -> timedelta:
+    mapping = {
+        "1m": timedelta(minutes=1),
+        "5m": timedelta(minutes=5),
+        "15m": timedelta(minutes=15),
+        "30m": timedelta(minutes=30),
+        "1h": timedelta(hours=1),
+        "4h": timedelta(hours=4),
+        "1d": timedelta(days=1),
+        "1w": timedelta(weeks=1),
+        "1mo": timedelta(days=31),
+    }
+    return mapping.get(timeframe, timedelta(days=1))
+
+
+def _descriptor_for_spec(
+    spec: FeatureSpec,
+    *,
+    origin: Literal["derived", "manual"],
+) -> ChartLabFeatureDescriptor:
+    return ChartLabFeatureDescriptor(
+        feature_key=make_feature_key(spec),
+        feature_ref=_feature_ref(spec),
+        name=_feature_name(spec),
+        timeframe=spec.timeframe,
+        indicator_type=f"{spec.namespace.value}.{spec.kind}",
+        group=_feature_group(spec),
+        origin=origin,
+        badge="Derived from Strategy" if origin == "derived" else "Manual",
+    )
+
+
+def _feature_ref(spec: FeatureSpec) -> str:
+    params = ",".join(f"{key}={value}" for key, value in dict(spec.params).items())
+    param_segment = f":{params}" if params else ""
+    lookback_segment = f"[{spec.lookback}]" if spec.lookback else ""
+    return f"{spec.timeframe}.{spec.kind}{param_segment}{lookback_segment}"
+
+
+def _feature_name(spec: FeatureSpec) -> str:
+    params = dict(spec.params)
+    if "length" in params:
+        return f"{_title_feature(spec.kind)} {params['length']}"
+    if spec.kind == "macd":
+        return f"MACD {str(params.get('output', 'line')).title()}"
+    return _title_feature(spec.kind)
+
+
+def _title_feature(kind: str) -> str:
+    known = {
+        "rsi": "RSI",
+        "sma": "SMA",
+        "ema": "EMA",
+        "atr": "ATR",
+        "vwap": "VWAP",
+        "macd": "MACD",
+        "roc": "ROC",
+        "ibs": "IBS",
+    }
+    return known.get(kind, kind.replace("_", " ").title())
+
+
+def _feature_group(
+    spec: FeatureSpec,
+) -> Literal["Trend", "Momentum", "Volatility", "Volume", "Price", "Time"]:
+    if spec.kind == "volume":
+        return "Volume"
+    if spec.namespace.value == "price":
+        return "Price"
+    if spec.namespace.value == "session":
+        return "Time"
+    if spec.kind in {"atr", "fvg_up", "fvg_down"}:
+        return "Volatility"
+    if spec.kind in {"rsi", "macd", "roc", "down_streak", "ibs", "chikou_span"}:
+        return "Momentum"
+    return "Trend"
 
 
 @router.websocket("/stream")
