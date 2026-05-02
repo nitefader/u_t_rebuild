@@ -4,13 +4,9 @@ import {
   Brain,
   ChevronLeft,
   ChevronRight,
-  Database,
   Filter,
-  FlaskConical,
-  Gauge,
   HardDrive,
   Layers,
-  LineChart,
   List,
   Code2,
   Sliders,
@@ -21,7 +17,6 @@ import {
   Shield,
   Sun,
   Moon,
-  TrendingUp,
   Zap,
   type LucideIcon,
 } from "lucide-react";
@@ -62,16 +57,6 @@ const GROUPS: NavGroup[] = [
       { to: "/risk-plans", label: "Risk Plans", Icon: Shield },
       { to: "/watchlists", label: "Watchlists", Icon: List },
       { to: "/screeners", label: "Screeners", Icon: Filter },
-    ],
-  },
-  {
-    label: "Research",
-    items: [
-      { to: "/chart-lab", label: "Chart Lab", Icon: Database },
-      { to: "/sim-lab", label: "Sim Lab", Icon: FlaskConical },
-      { to: "/backtests", label: "Backtests", Icon: LineChart },
-      { to: "/optimization", label: "Optimization", Icon: Gauge },
-      { to: "/walk-forward", label: "Walk-Forward", Icon: TrendingUp },
     ],
   },
   {

@@ -11,7 +11,7 @@ import type { RoadmapItem } from "./RoadmapCard";
 
 const RUN_LIFECYCLE: RoadmapItem = {
   title: "Async job queue + per-fold/per-candidate progress + cancel",
-  status: "shipped",
+  status: "planned",
   category: "Run lifecycle",
   description:
     "Drawer POSTs to /api/v1/research/jobs/{kind}, returns immediately with a job_id, and closes. The JobMonitor pulse-dot in each research page header shows active + recent jobs with progress bars, status badges, per-job Cancel button, and a link to the result run when complete. Walk-Forward emits per-fold progress; Optimization emits per-candidate progress; Backtest reports run-level status. Cancellation is cooperative — services check between iterations and abort cleanly. Polls every 2s when active jobs exist, every 15s when terminal. You can navigate freely or close the browser; the job keeps running and the JobMonitor catches up.",
@@ -19,7 +19,7 @@ const RUN_LIFECYCLE: RoadmapItem = {
 
 const NOTIFICATIONS: RoadmapItem = {
   title: "Completion toast + Dashboard 'last 10 runs' card",
-  status: "shipped",
+  status: "planned",
   category: "Run lifecycle",
   description:
     "Global JobToaster mounted at the AppShell level fires a toast whenever any research job transitions to a terminal state (completed → 'View results' link to the right surface; failed → error preview with link; canceled → muted confirmation). The Dashboard 'Recent research runs' hub card (ResearchJobsHubCard) shows the latest 10 runs across all kinds with the same progress-bar + per-row Cancel + click-through to surface — operators see recent runs without navigating to a research page first. Polls 2s when active jobs exist, 15s when terminal.",
@@ -31,14 +31,14 @@ export const BACKTESTS_ROADMAP: RoadmapItem[] = [
   // — Adjacent research surfaces (already shipped or in design)
   {
     title: "Walk-Forward (rolling-window validation + recommended risk plan)",
-    status: "shipped",
+    status: "planned",
     category: "Adjacent research surfaces",
     description:
       "Same engine; per-fold IS+OOS replays; recommended risk plan emerges from the sweep; ship/no-ship recommendation enum with max-DD gates. Live now under Walk-Forward.",
   },
   {
     title: "Optimization (parameter sweep on one window + landscape + WF handoff)",
-    status: "shipped",
+    status: "planned",
     category: "Adjacent research surfaces",
     description:
       "Grid + random search across a parameter grid; full landscape with heatmap when 2 dimensions; explicit 'needs walk-forward validation' banner; one-click handoff to WF with the top-K candidates pre-filled. Live now under Optimization.",
@@ -46,7 +46,7 @@ export const BACKTESTS_ROADMAP: RoadmapItem[] = [
   // — Strategy + RiskPlan authoring
   {
     title: "Risk Plan picker + product-facing Risk Plan model",
-    status: "shipped",
+    status: "planned",
     category: "Strategy + Risk Plan authoring",
     description:
       "Risk Plans have a first-class list, 10-tab detail, full Create/Edit drawer with §9.4 validation feedback, AI-draft section, Account-default assignment, and Compare two plans. The Backtest / Walk-Forward / Optimization drawers all accept a Risk Plan via picker (no more UUID paste). Per RISK_PLAN_SIGNALPLAN_BACKTEST_BACKEND_CONTRACT §4 + §8 + §9 + §10.",
@@ -145,28 +145,28 @@ export const WALK_FORWARD_ROADMAP: RoadmapItem[] = [
   // — Validation surfaces already scaffolded but awaiting backend data
   {
     title: "Per-fold IS / OOS chart with shading",
-    status: "in_design",
+    status: "planned",
     category: "Visualisations awaiting backend evidence",
     description:
       "Frontend scaffold exists behind AwaitingApiOrError; backend serves per-fold metrics on WalkForwardRun.metrics.folds. Planned: a dedicated chart component that plots IS/OOS Sharpe + return per fold with IS/OOS shading on the equity curve.",
   },
   {
     title: "Parameter stability heatmap",
-    status: "in_design",
+    status: "planned",
     category: "Visualisations awaiting backend evidence",
     description:
       "Show how often each parameter combination won across folds — the candidate landscape from the Optimization slice can drive this directly.",
   },
   {
     title: "OOS regime breakdown",
-    status: "in_design",
+    status: "planned",
     category: "Visualisations awaiting backend evidence",
     description:
       "Break down OOS performance per regime (bull / bear / chop / volatile / trending) so operators can gate deployment on regime fit.",
   },
   {
     title: "Equity curve with IS/OOS shading",
-    status: "in_design",
+    status: "planned",
     category: "Visualisations awaiting backend evidence",
     description:
       "Single equity curve across the full window with shaded bands marking each fold's IS vs OOS region.",
@@ -174,7 +174,7 @@ export const WALK_FORWARD_ROADMAP: RoadmapItem[] = [
   // — Recommendation persistence
   {
     title: "Save recommended Risk Plan as a real RiskPlanVersion",
-    status: "shipped",
+    status: "planned",
     category: "Recommendation persistence",
     description:
       "The 'Save as Risk Plan' button on the WF RecommendedRiskPlanCard opens the Risk Plan Create drawer pre-filled with the recommendation parameters and source=walk_forward_recommended. Operator reviews, tightens, and saves explicitly — AI / research never silently mints a Risk Plan (per non-negotiable §13).",
@@ -232,7 +232,7 @@ export const OPTIMIZATION_ROADMAP: RoadmapItem[] = [
   // — Recommendation persistence
   {
     title: "Save winner as a draft Risk Plan version",
-    status: "shipped",
+    status: "planned",
     category: "Recommendation persistence",
     description:
       "The 'Save winner as Risk Plan' button on the Optimization detail page opens the Risk Plan Create drawer pre-filled with the best parameters and source=optimization_generated. Operator must review, validate with Walk-Forward, and click Save — the button is enabled even when WF validation hasn't been run yet, but the drawer carries the 'hypothesis only' AI note prominently.",

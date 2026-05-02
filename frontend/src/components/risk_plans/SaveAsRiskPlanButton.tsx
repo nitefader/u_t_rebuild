@@ -4,6 +4,7 @@ import { Button, type ButtonVariant } from "@/components/ui/Button";
 import type { RiskPlanSource } from "@/api/schemas/riskPlans";
 import { RiskPlanDrawer } from "./RiskPlanDrawer";
 import type { RiskPlanFormState } from "./riskPlanForm";
+import { isResearchOfflineRiskPlanSource } from "./recommendationPrefill";
 
 /**
  * SaveAsRiskPlanButton.
@@ -57,13 +58,14 @@ export function SaveAsRiskPlanButton({
   evidenceLineage,
 }: SaveAsRiskPlanButtonProps): JSX.Element {
   const [open, setOpen] = useState(false);
+  const researchOffline = isResearchOfflineRiskPlanSource(source);
   return (
     <>
       <Button
         size="sm"
         variant={variant}
         leftIcon={<Save className="h-3.5 w-3.5" aria-hidden="true" />}
-        disabled={disabled}
+        disabled={disabled || researchOffline}
         onClick={() => setOpen(true)}
       >
         {label}
