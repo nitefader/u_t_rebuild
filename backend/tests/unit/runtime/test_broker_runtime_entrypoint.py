@@ -77,10 +77,11 @@ def test_account_scoped_alpaca_adapter_routes_submit_by_order_account(monkeypatc
     class RecordingAlpacaAdapter:
         constructed: list[tuple[TradingMode, str, str]] = []
 
-        def __init__(self, *, mode, api_key, secret_key):  # type: ignore[no-untyped-def]
+        def __init__(self, *, mode, api_key, secret_key, allow_live=False):  # type: ignore[no-untyped-def]
             self.mode = mode
             self.api_key = api_key
             self.secret_key = secret_key
+            self.allow_live = allow_live
             self.constructed.append((mode, api_key, secret_key))
 
         def submit_order(self, order):  # type: ignore[no-untyped-def]
@@ -552,3 +553,10 @@ def test_runtime_historical_warmup_source_fetches_alpaca_recent_window_and_retur
         fixed_now - timedelta(minutes=15),
     ]
     assert [bar.symbol for bar in result] == ["TQQQ", "TQQQ", "TQQQ"]
+
+
+def test_startup_warmup_window_scales_for_weekly_and_monthly_timeframes() -> None:
+    from datetime import timedelta
+
+    assert account_trading_entrypoint._startup_warmup_window(timeframe="1w", warmup_bars=20) >= timedelta(days=20 * 7)
+    assert account_trading_entrypoint._startup_warmup_window(timeframe="1mo", warmup_bars=20) >= timedelta(days=20 * 31)

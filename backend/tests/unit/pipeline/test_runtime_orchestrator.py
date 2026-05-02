@@ -47,7 +47,7 @@ from backend.app.domain.strategy_v4 import (
     StrategyStopV4,
     StrategyVersionV4,
 )
-from backend.app.features import IncrementalFeatureEngine, NormalizedBar, ResolvedDeploymentComponents
+from backend.app.features import FeatureHydrationBarsRequest, IncrementalFeatureEngine, NormalizedBar, ResolvedDeploymentComponents
 from backend.app.governor import BrokerSyncFreshness, GovernorPolicy, PortfolioGovernor, PortfolioSnapshot
 from backend.app.orders import InternalOrder, InternalOrderIntent, InternalOrderStatus, OrderManager, OrderOrigin
 from backend.app.pipeline import PipelineEventType, RuntimeOrchestrator
@@ -333,6 +333,16 @@ class PositionReader:
         return tuple(position for position in self.positions if position.deployment_id == deployment_id)
 
 
+class HydrationBarsSource:
+    def __init__(self, bars_by_key: dict[tuple[str, str], tuple[NormalizedBar, ...]]) -> None:
+        self.bars_by_key = bars_by_key
+        self.requests: list[FeatureHydrationBarsRequest] = []
+
+    def fetch_bars(self, request: FeatureHydrationBarsRequest):
+        self.requests.append(request)
+        return self.bars_by_key.get((request.symbol.upper(), request.timeframe), ())
+
+
 class ExitOnlySignalEngine:
     def evaluate(self, strategy, snapshot, *, position_contexts=None):  # type: ignore[no-untyped-def]
         # Honor the new doctrine: exit candidates only fire when there's an
@@ -604,6 +614,56 @@ def test_deployment_exit_signal_plan_comes_from_account_position() -> None:
     assert result.signal_plans[0].opening_signal_plan_id == opening_signal_plan_id
     assert result.signal_plans[0].related_position_lineage_id == position_lineage_id
     assert result.orders[0].position_lineage_id == position_lineage_id
+    assert result.orders[0].intent == InternalOrderIntent.LOGICAL_EXIT
+    assert len(broker.submitted_orders) == 1
+
+
+def test_logical_exit_feature_condition_can_fire_on_first_live_bar_after_hydration() -> None:
+    components = _components(include_exit_rule=True)
+    exit_rule = components.strategy.exit_rules[0].model_copy(
+        update={
+            "condition": ConditionNode(
+                left_feature="5m.close[0]",
+                operator=ConditionOperator.LESS_THAN,
+                right_feature="5m.low[1]",
+            )
+        }
+    )
+    components = components.model_copy(
+        update={
+            "strategy": components.strategy.model_copy(update={"exit_rules": (exit_rule,)})
+        }
+    )
+    opening_signal_plan_id = uuid4()
+    position_lineage_id = uuid4()
+    position = _position(
+        strategy_id=components.strategy.strategy_id,
+        opening_signal_plan_id=opening_signal_plan_id,
+        position_lineage_id=position_lineage_id,
+    )
+    broker = FakeBrokerAdapter([BrokerOrderStatus.ACCEPTED])
+    pipeline = _orchestrator(
+        components=components,
+        broker_adapter=broker,
+        position_reader=PositionReader((position,)),
+    )
+    warmup_bars = (
+        _bar(0, open_=100, close=105),
+        _bar(1, open_=100, close=105),
+    )
+
+    hydration = pipeline.hydrate_features(
+        symbols=("SPY",),
+        as_of=warmup_bars[-1].timestamp,
+        bars_source=HydrationBarsSource({("SPY", "5m"): warmup_bars}),
+    )
+    result = pipeline.process_bar(_bar(2, open_=100, close=97))
+
+    assert hydration.success is True
+    assert len(result.signal_plans) == 1
+    assert result.signal_plans[0].intent == SignalPlanIntent.LOGICAL_EXIT
+    assert result.signal_plans[0].opening_signal_plan_id == opening_signal_plan_id
+    assert result.signal_plans[0].related_position_lineage_id == position_lineage_id
     assert result.orders[0].intent == InternalOrderIntent.LOGICAL_EXIT
     assert len(broker.submitted_orders) == 1
 

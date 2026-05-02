@@ -455,3 +455,65 @@ def test_routes_do_not_call_direct_broker_or_create_orders_or_mutate_broker_trut
     assert "save_broker_account_snapshot" not in source
     assert "save_broker_open_order_snapshot" not in source
     assert "save_broker_sync_freshness" not in source
+
+
+# ---------------------------------------------------------------------------
+# M10: RiskResolver detail in operations evaluation response
+# ---------------------------------------------------------------------------
+
+
+def test_list_evaluations_response_includes_risk_resolver_result() -> None:
+    """M10: Operations evaluation list response exposes risk_resolver_result at top level.
+
+    The AccountSignalPlanEvaluation domain object carries risk_resolver_result
+    as a first-class field.  The API response serializes it directly — no
+    separate extraction step needed.  This test pins that the field is non-None
+    and accessible from the response object (not buried inside a sub-object).
+    """
+    from backend.app.domain import RiskResolverResult
+    from uuid import uuid4
+
+    signal_plan_id = uuid4()
+    strategy_id = uuid4()
+    risk_result = RiskResolverResult(
+        account_id=ACCOUNT_ID,
+        signal_plan_id=signal_plan_id,
+        allowed=True,
+        resolved_quantity=10.0,
+        violations=(),
+        warnings=(),
+    )
+    evaluation = AccountSignalPlanEvaluation(
+        evaluation_id=uuid4(),
+        account_id=ACCOUNT_ID,
+        signal_plan_id=signal_plan_id,
+        deployment_id=DEPLOYMENT_ID,
+        strategy_id=strategy_id,
+        status=AccountEvaluationStatus.ACCEPTED,
+        participation_decision=AccountParticipationDecision.PARTICIPATE,
+        risk_resolver_result=risk_result,
+    )
+
+    class RiskDetailService(RecordingOperationsService):
+        def list_account_signal_plan_evaluations(self, **kwargs: object) -> tuple[AccountSignalPlanEvaluation, ...]:
+            return (evaluation,)
+
+    response = operations.list_account_signal_plan_evaluations(
+        account_id=ACCOUNT_ID,
+        deployment_id=None,
+        signal_plan_id=None,
+        limit=10,
+        service=RiskDetailService(),
+    )
+
+    assert len(response.evaluations) == 1
+    returned_evaluation = response.evaluations[0]
+    # risk_resolver_result is a top-level field on AccountSignalPlanEvaluation.
+    assert returned_evaluation.risk_resolver_result is not None
+    assert returned_evaluation.risk_resolver_result.allowed is True
+    assert returned_evaluation.risk_resolver_result.resolved_quantity == 10.0
+    # Verify it serializes to JSON without losing the field.
+    serialized = response.model_dump(mode="json")
+    first_eval = serialized["evaluations"][0]
+    assert "risk_resolver_result" in first_eval
+    assert first_eval["risk_resolver_result"]["allowed"] is True

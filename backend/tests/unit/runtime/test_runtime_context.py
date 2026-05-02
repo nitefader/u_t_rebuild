@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import threading
+import time
 from typing import Any
 from unittest.mock import MagicMock
 from uuid import uuid4
@@ -633,3 +634,214 @@ def test_ensure_account_trade_sync_started_uses_registered_manual_trade_stack() 
     assert started is True
     assert dispatcher is not None
     assert dispatcher.is_running is True
+
+
+# ---------------------------------------------------------------------------
+# S2 / M1 — split-cadence scheduler tests
+# ---------------------------------------------------------------------------
+
+
+def test_broker_sync_split_cadence_orders_fires_more_often_than_positions() -> None:
+    """Orders reconcile (30 s) should fire more often than positions+account (60 s)."""
+    account_id = uuid4()
+    orders_calls: list[float] = []
+    positions_calls: list[float] = []
+    stop_event = threading.Event()
+
+    class _SyncService:
+        def reconcile_open_orders(self, _account_id):  # type: ignore[no-untyped-def]
+            orders_calls.append(time.monotonic())
+
+        def reconcile_positions_and_account(self, _account_id):  # type: ignore[no-untyped-def]
+            positions_calls.append(time.monotonic())
+
+        def reconcile(self, _account_id):  # type: ignore[no-untyped-def]
+            pass
+
+    # Very short intervals so the test completes in < 2 s.
+    dispatcher = TradeEventDispatcher(
+        account_id=account_id,
+        broker_sync_service=_SyncService(),
+        sync_poll_orders_interval_s=0.05,
+        sync_poll_positions_account_interval_s=0.20,
+        sync_poll_degraded_interval_s=0.05,
+        _jitter_seed=0,  # deterministic: no jitter
+    )
+    # Override jitter so the loop starts immediately.
+    dispatcher._jitter_offset_s = 0.0
+
+    thread = threading.Thread(
+        target=dispatcher._broker_sync_poll_loop,
+        args=(stop_event,),
+        daemon=True,
+    )
+    thread.start()
+
+    # Run for ~0.5 s then stop.
+    time.sleep(0.5)
+    stop_event.set()
+    thread.join(timeout=2.0)
+
+    # Orders should have fired at least twice as often as positions.
+    assert len(orders_calls) >= 2, f"orders_calls={len(orders_calls)}"
+    assert len(positions_calls) >= 1, f"positions_calls={len(positions_calls)}"
+    assert len(orders_calls) > len(positions_calls), (
+        f"expected orders > positions: {len(orders_calls)} > {len(positions_calls)}"
+    )
+
+
+def test_broker_sync_jitter_offsets_per_account() -> None:
+    """Two dispatchers with different jitter seeds must have different first-tick offsets."""
+    account_a = uuid4()
+    account_b = uuid4()
+
+    dispatcher_a = TradeEventDispatcher(
+        account_id=account_a,
+        sync_poll_orders_interval_s=30.0,
+        _jitter_seed=1,
+    )
+    dispatcher_b = TradeEventDispatcher(
+        account_id=account_b,
+        sync_poll_orders_interval_s=30.0,
+        _jitter_seed=999,
+    )
+
+    # Both jitter offsets must be within [0, 5.0].
+    assert 0.0 <= dispatcher_a._jitter_offset_s <= 5.0
+    assert 0.0 <= dispatcher_b._jitter_offset_s <= 5.0
+    # Different seeds → different offsets (statistically certain for these seeds).
+    assert dispatcher_a._jitter_offset_s != dispatcher_b._jitter_offset_s
+
+
+def test_broker_sync_degraded_stream_uses_faster_orders_cadence() -> None:
+    """When the stream runner is not running, orders cadence drops to degraded_interval_s."""
+    account_id = uuid4()
+    orders_calls: list[float] = []
+    stop_event = threading.Event()
+
+    class _SyncService:
+        def reconcile_open_orders(self, _account_id):  # type: ignore[no-untyped-def]
+            orders_calls.append(time.monotonic())
+
+        def reconcile_positions_and_account(self, _account_id):  # type: ignore[no-untyped-def]
+            pass
+
+        def reconcile(self, _account_id):  # type: ignore[no-untyped-def]
+            pass
+
+    dispatcher = TradeEventDispatcher(
+        account_id=account_id,
+        broker_sync_service=_SyncService(),
+        sync_poll_orders_interval_s=60.0,       # healthy — would never fire in test window
+        sync_poll_positions_account_interval_s=60.0,
+        sync_poll_degraded_interval_s=0.05,     # degraded — should fire quickly
+        _jitter_seed=0,
+    )
+    dispatcher._jitter_offset_s = 0.0
+    # _runner is None → stream is degraded
+
+    thread = threading.Thread(
+        target=dispatcher._broker_sync_poll_loop,
+        args=(stop_event,),
+        daemon=True,
+    )
+    thread.start()
+
+    time.sleep(0.4)
+    stop_event.set()
+    thread.join(timeout=2.0)
+
+    # With degraded cadence 50ms over 400ms window, at least 4 orders calls.
+    assert len(orders_calls) >= 4, (
+        f"expected >=4 degraded orders calls, got {len(orders_calls)}"
+    )
+
+
+def test_broker_sync_split_methods_update_freshness_independently_on_BrokerSyncService(
+    tmp_path,
+) -> None:
+    """reconcile_open_orders and reconcile_positions_and_account update timestamps independently."""
+    from datetime import datetime, timezone
+    from backend.app.brokers.sync import BrokerSyncService
+    from backend.app.brokers import BrokerAccountSnapshot, FakeBrokerAdapter
+    from backend.app.domain import TradingMode
+    from backend.app.persistence import SQLiteOrderLedger
+
+    account_id = uuid4()
+    account_snapshot = BrokerAccountSnapshot(
+        account_id=account_id,
+        provider="fake",
+        mode=TradingMode.BROKER_PAPER,
+        equity=10_000.0,
+        cash=10_000.0,
+        buying_power=10_000.0,
+        timestamp=datetime.now(timezone.utc),
+    )
+    adapter = FakeBrokerAdapter(account_snapshots={account_id: account_snapshot})
+    ledger = SQLiteOrderLedger(tmp_path / "split_freshness.db")
+    service = BrokerSyncService(
+        adapter=adapter,
+        broker_sync=MagicMock(),
+        order_ledger=ledger,
+    )
+
+    # Before any reconcile, both timestamps are None.
+    assert service._last_poll_sync_at_by_account.get(account_id) is None
+
+    service.reconcile_open_orders(account_id)
+    after_orders = service._last_poll_sync_at_by_account.get(account_id)
+    assert after_orders is not None
+    assert service._last_successful_sync_at_by_account.get(account_id) is not None
+    assert service._stale_reason_by_account.get(account_id) is None
+
+    service.reconcile_positions_and_account(account_id)
+    after_positions = service._last_poll_sync_at_by_account.get(account_id)
+    assert after_positions is not None
+    # Each call advances the timestamp independently.
+    assert after_positions >= after_orders
+
+
+def test_broker_sync_poll_loop_continues_on_reconcile_failure() -> None:
+    """A split method raising must not crash the loop; error is captured."""
+    account_id = uuid4()
+    call_count = 0
+    stop_event = threading.Event()
+
+    class _FailingSyncService:
+        def reconcile_open_orders(self, _account_id):  # type: ignore[no-untyped-def]
+            nonlocal call_count
+            call_count += 1
+            raise RuntimeError("broker timeout")
+
+        def reconcile_positions_and_account(self, _account_id):  # type: ignore[no-untyped-def]
+            pass
+
+        def reconcile(self, _account_id):  # type: ignore[no-untyped-def]
+            pass
+
+    dispatcher = TradeEventDispatcher(
+        account_id=account_id,
+        broker_sync_service=_FailingSyncService(),
+        sync_poll_orders_interval_s=0.05,
+        sync_poll_positions_account_interval_s=60.0,
+        sync_poll_degraded_interval_s=0.05,
+        _jitter_seed=0,
+    )
+    dispatcher._jitter_offset_s = 0.0
+
+    thread = threading.Thread(
+        target=dispatcher._broker_sync_poll_loop,
+        args=(stop_event,),
+        daemon=True,
+    )
+    thread.start()
+
+    time.sleep(0.3)
+    stop_event.set()
+    thread.join(timeout=2.0)
+
+    # Loop must have survived and called reconcile_open_orders multiple times.
+    assert call_count >= 3, f"expected >=3 calls, got {call_count}"
+    # Error is captured on the dispatcher.
+    assert dispatcher._last_error is not None
+    assert "broker_sync_poll_failed" in dispatcher._last_error

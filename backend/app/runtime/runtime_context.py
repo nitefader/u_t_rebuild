@@ -25,7 +25,10 @@ Lifecycle:
 from __future__ import annotations
 
 import logging
+import os
+import random
 import threading
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -159,7 +162,19 @@ class TradeEventDispatcher:
         adapter_resolver: Callable[[UUID], AlpacaBrokerAdapter] | None = None,
         broker_sync_service: Any | None = None,
         broker_sync_service_resolver: Callable[[UUID], Any] | None = None,
-        sync_poll_interval_seconds: float = 20.0,
+        # Kept for backward compatibility — existing callers pass this; the new
+        # scheduler ignores it in favour of the three fine-grained intervals.
+        sync_poll_interval_seconds: float = 20.0,  # noqa: ARG002 (deprecated; kept for compat)
+        sync_poll_orders_interval_s: float = float(
+            os.getenv("BROKER_SYNC_ORDERS_INTERVAL_S", "30.0")
+        ),
+        sync_poll_positions_account_interval_s: float = float(
+            os.getenv("BROKER_SYNC_POSITIONS_INTERVAL_S", "60.0")
+        ),
+        sync_poll_degraded_interval_s: float = float(
+            os.getenv("BROKER_SYNC_DEGRADED_INTERVAL_S", "5.0")
+        ),
+        _jitter_seed: float | None = None,
     ) -> None:
         self._account_id = account_id
         self._broker_adapter = broker_adapter
@@ -181,7 +196,16 @@ class TradeEventDispatcher:
         self._last_error: str | None = None
         self._started_at: datetime | None = None
         self._operator_paused_at: datetime | None = None
-        self._sync_poll_interval_seconds = sync_poll_interval_seconds
+        # Split-cadence poll intervals
+        self._sync_poll_orders_interval_s = sync_poll_orders_interval_s
+        self._sync_poll_positions_account_interval_s = sync_poll_positions_account_interval_s
+        self._sync_poll_degraded_interval_s = sync_poll_degraded_interval_s
+        # Per-Account jitter so 10 Accounts started simultaneously don't all
+        # fire their first poll at the same wall-clock boundary.
+        rng = random.Random(_jitter_seed)  # deterministic in tests; wall-clock in prod
+        self._jitter_offset_s: float = rng.uniform(
+            0.0, min(self._sync_poll_orders_interval_s, 5.0)
+        )
         self._broker_sync_poll_stop: threading.Event | None = None
         self._broker_sync_poll_thread: threading.Thread | None = None
         self._lock = threading.Lock()
@@ -379,11 +403,128 @@ class TradeEventDispatcher:
         thread.start()
 
     def _broker_sync_poll_loop(self, stop_event: threading.Event) -> None:
+        """Adaptive scheduler: separate cadences for orders vs positions+account.
+
+        Cadence (env-configurable, see constructor):
+          - Orders:            30 s healthy / 5 s degraded  (stream is down)
+          - Positions+account: 60 s always
+
+        Jitter: per-Account ``_jitter_offset_s`` staggers the *second* poll
+        (and beyond) so 10 Accounts started at the same wall-clock boundary
+        don't all re-fire at the same interval boundary. The very first poll
+        fires immediately after the loop starts — jitter is applied to the
+        effective last-fire timestamp *after* the first reconcile, shifting
+        subsequent calls by ``jitter_offset_s`` seconds relative to a
+        zero-jitter dispatcher.
+
+        Loop wakes at ``_wake_s`` intervals to check the stop event; actual
+        reconcile calls are gated by elapsed time since the last call.
+        """
+        # Both tracks fire on the first wakeup (last_* = 0, now > orders_interval
+        # is always true on first check since monotonic() >> 0).
+        last_orders_at: float = 0.0
+        last_positions_at: float = 0.0
+        _first_orders_done: bool = False
+
+        # Wake interval: 1 s in production; shrunk to the smallest configured
+        # interval when that is < 1 s (used in tests with short cadences).
+        _wake_s = min(
+            1.0,
+            self._sync_poll_degraded_interval_s,
+            self._sync_poll_orders_interval_s,
+        )
+
         while not stop_event.is_set():
+            now = time.monotonic()
+
+            # Determine whether the stream is healthy.
+            with self._lock:
+                stream_healthy = self._runner is not None and self._runner.is_running
+
+            orders_interval = (
+                self._sync_poll_orders_interval_s
+                if stream_healthy
+                else self._sync_poll_degraded_interval_s
+            )
+
+            if now - last_orders_at >= orders_interval:
+                self._run_orders_reconcile_once()
+                t = time.monotonic()
+                if not _first_orders_done:
+                    # Apply jitter to subsequent cycles: shift the recorded
+                    # last-fire time backwards by jitter_offset_s so the next
+                    # fire is delayed by that amount relative to zero-jitter.
+                    # Clamp to avoid negative sleep (jitter > interval).
+                    last_orders_at = t - max(0.0, self._jitter_offset_s)
+                    _first_orders_done = True
+                else:
+                    last_orders_at = t
+
+            if now - last_positions_at >= self._sync_poll_positions_account_interval_s:
+                self._run_positions_account_reconcile_once()
+                last_positions_at = time.monotonic()
+
+            stop_event.wait(_wake_s)
+
+    def _run_orders_reconcile_once(self) -> None:
+        """Call ``reconcile_open_orders`` on the sync service; log + record error on failure."""
+        with self._lock:
+            self._ensure_broker_router_locked()
+            service = self._broker_sync_service
+        if service is None:
+            return
+        if not hasattr(service, "reconcile_open_orders"):
+            # Fall back to combined reconcile for services that have not been
+            # updated yet (e.g. lightweight test stubs).
             self._run_broker_sync_poll_once()
-            stop_event.wait(self._sync_poll_interval_seconds)
+            return
+        try:
+            service.reconcile_open_orders(self._account_id)
+        except Exception as exc:  # noqa: BLE001 - surface but keep loop alive
+            with self._lock:
+                self._last_error = f"broker_sync_poll_failed:{exc}"
+            logger.warning(
+                "broker sync orders reconcile failed for account %s: %s",
+                self._account_id,
+                exc,
+                exc_info=True,
+            )
+            return
+        with self._lock:
+            if self._last_error and self._last_error.startswith("broker_sync_poll_failed:"):
+                self._last_error = None
+
+    def _run_positions_account_reconcile_once(self) -> None:
+        """Call ``reconcile_positions_and_account``; log + record error on failure."""
+        with self._lock:
+            self._ensure_broker_router_locked()
+            service = self._broker_sync_service
+        if service is None:
+            return
+        if not hasattr(service, "reconcile_positions_and_account"):
+            return
+        try:
+            service.reconcile_positions_and_account(self._account_id)
+        except Exception as exc:  # noqa: BLE001 - surface but keep loop alive
+            with self._lock:
+                self._last_error = f"broker_sync_poll_failed:{exc}"
+            logger.warning(
+                "broker sync positions+account reconcile failed for account %s: %s",
+                self._account_id,
+                exc,
+                exc_info=True,
+            )
+            return
+        with self._lock:
+            if self._last_error and self._last_error.startswith("broker_sync_poll_failed:"):
+                self._last_error = None
 
     def _run_broker_sync_poll_once(self) -> None:
+        """Force-reconcile all three broker data sets (orders + positions + account).
+
+        Used by: on-stream-reconnect path, existing tests that call this directly,
+        and as the fallback when a sync service predates the split-method API.
+        """
         with self._lock:
             self._ensure_broker_router_locked()
             service = self._broker_sync_service
@@ -730,7 +871,12 @@ def bootstrap_streams(broker_account_service: Any | None = None) -> dict[str, An
         target = next((a for a in broker_account_service.list_broker_accounts() if a.id == account_id), None)
         if target is None:
             raise RuntimeError(f"unknown account {account_id}")
-        return AlpacaBrokerAdapter(mode=target.mode, api_key=api_key, secret_key=api_secret)
+        return AlpacaBrokerAdapter(
+            mode=target.mode,
+            api_key=api_key,
+            secret_key=api_secret,
+            allow_live=getattr(target, "allow_live", False),
+        )
 
     registry = trade_dispatcher_registry()
     registry.set_adapter_resolver(adapter_resolver)
@@ -794,6 +940,7 @@ def register_account_in_manual_trade_registry(broker_account_service: Any, accou
         mode=account.mode,
         api_key=api_key,
         secret_key=api_secret,
+        allow_live=getattr(account, "allow_live", False),
     )
     db_path = get_runtime_db_path()
     runtime_store = SQLiteRuntimeStore(db_path)
@@ -859,7 +1006,12 @@ def ensure_account_trade_sync_started(
             target = next((a for a in broker_account_service.list_broker_accounts() if a.id == account_id), None)
             if target is None:
                 raise RuntimeError(f"unknown account {account_id}")
-            return AlpacaBrokerAdapter(mode=target.mode, api_key=api_key, secret_key=api_secret)
+            return AlpacaBrokerAdapter(
+                mode=target.mode,
+                api_key=api_key,
+                secret_key=api_secret,
+                allow_live=getattr(target, "allow_live", False),
+            )
 
         registry.set_adapter_resolver(adapter_resolver)
 

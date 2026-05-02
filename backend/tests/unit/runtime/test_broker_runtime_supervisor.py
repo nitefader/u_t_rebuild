@@ -1,13 +1,13 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from uuid import UUID, uuid4
 
 import pytest
 
 from backend.app.broker_accounts.models import BrokerAccount, BrokerAccountValidationStatus
-from backend.app.brokers import BrokerOrderStatus, BrokerSync, FakeBrokerAdapter
+from backend.app.brokers import BrokerOrderStatus, BrokerPositionSide, BrokerPositionSnapshot, BrokerSync, FakeBrokerAdapter
 from backend.app.control_plane import ControlPlane
 from backend.app.domain import (
     CandidateSide,
@@ -129,7 +129,7 @@ def _bar(symbol: str = "SPY", *, close: float = 100, open_: float = 99) -> Norma
     return NormalizedBar(
         symbol=symbol,
         timeframe="5m",
-        timestamp=datetime(2026, 1, 2, 14, 30, tzinfo=timezone.utc),
+        timestamp=datetime.now(timezone.utc),
         open=open_,
         high=max(open_, close) + 2,
         low=min(open_, close) - 2,
@@ -176,6 +176,19 @@ def _build_runtime(tmp_path, *, deployments) -> tuple[BrokerRuntimeOrchestrator,
     adapter = FakeBrokerAdapter([BrokerOrderStatus.ACCEPTED])
     manager = OrderManager(ledger=ledger)
     sync = BrokerSync(ledger=ledger, adapter=adapter, runtime_store=store, provider="alpaca")
+    class StartupWarmupSource:
+        def fetch_bars_for_hydration(self, _entry, request):  # type: ignore[no-untyped-def]
+            bars = max(int(request.warmup_bars), 1)
+            return tuple(
+                _bar(request.symbol).model_copy(
+                    update={
+                        "timeframe": request.timeframe,
+                        "timestamp": request.as_of - timedelta(minutes=5 * (bars - index)),
+                    }
+                )
+                for index in range(bars)
+            )
+
     runtime = BrokerRuntimeOrchestrator(
         deployments=deployments,
         runtime_store=store,
@@ -183,6 +196,7 @@ def _build_runtime(tmp_path, *, deployments) -> tuple[BrokerRuntimeOrchestrator,
         broker_sync=sync,
         order_manager=manager,
         control_plane=ControlPlane(state_store=store),
+        startup_warmup_bars_source=StartupWarmupSource(),
     )
     return runtime, store
 
@@ -275,6 +289,37 @@ def test_supervisor_registers_with_hub_and_dispatches_bars_via_hub(tmp_path) -> 
         supervisor.stop()
         assert supervisor.consumer_id not in hub.consumer_ids
         assert broker_runner.stopped is True
+
+
+def test_supervisor_subscribes_to_deployment_owned_position_symbols_outside_watchlist(tmp_path) -> None:
+    components = _components(symbol="SPY")
+    deployment = BrokerRuntimeDeployment(
+        deployment=_deployment(DEPLOYMENT_ID_A, components),
+        components=components,
+        account_id=ACCOUNT_ID,
+    )
+    runtime, store = _build_runtime(tmp_path, deployments=(deployment,))
+    store.save_broker_position_snapshot(
+        BrokerPositionSnapshot(
+            account_id=ACCOUNT_ID,
+            symbol="TQQQ",
+            qty=3.0,
+            side=BrokerPositionSide.LONG,
+            avg_entry_price=65.0,
+            market_value=195.0,
+            deployment_id=DEPLOYMENT_ID_A,
+            status="open",
+        )
+    )
+    hub = _make_hub()
+    supervisor = BrokerRuntimeSupervisor(account_trading=runtime, market_data_hub=hub)
+
+    supervisor.start((deployment,))
+    try:
+        assert hub.subscribed_symbols == ("SPY", "TQQQ")
+        assert supervisor.subscribed_symbols == ("SPY", "TQQQ")
+    finally:
+        supervisor.stop()
 
 
 def test_multiple_consumers_share_the_same_hub_subscription(tmp_path) -> None:

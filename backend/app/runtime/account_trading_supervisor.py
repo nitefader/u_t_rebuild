@@ -16,8 +16,8 @@ Scope:
   wired in.
 - One broker account per supervisor instance (one ``BrokerStreamRunner``,
   one set of credentials). Multiple accounts → multiple supervisors.
-- Each deployment's universe symbols are registered with the hub under
-  one consumer id per supervisor; bars route into
+- Each deployment's universe symbols plus active Deployment-owned position
+  symbols are registered with the hub under one consumer id per supervisor; bars route into
   ``BrokerRuntimeOrchestrator.process_completed_bar``.
 
 What it does NOT own:
@@ -206,4 +206,6 @@ class BrokerRuntimeSupervisor:
             self._account_trading.process_completed_bar(deployment_id, bar)
 
     def _symbols_for(self, entry: BrokerRuntimeDeployment) -> tuple[str, ...]:
+        if hasattr(self._account_trading, "runtime_subscription_symbols"):
+            return tuple(self._account_trading.runtime_subscription_symbols(entry))
         return tuple(symbol.symbol.upper() for symbol in entry.components.universe.symbols)

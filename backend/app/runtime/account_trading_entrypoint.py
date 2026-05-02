@@ -36,12 +36,16 @@ from backend.app.brokers import (
     BrokerSync,
 )
 from backend.app.control_plane import ControlPlane
-from backend.app.governor import PortfolioSnapshot, PositionSummary
+from backend.app.governor import (
+    PortfolioSnapshot,
+    PositionSummary,
+    UnmanagedPositionSummary,
+)
 from backend.app.market_data import MarketDataStreamHub
 from backend.app.orders import OrderManager
 from backend.app.config.runtime_paths import get_runtime_db_path
 from backend.app.domain._base import utc_now
-from backend.app.features import NormalizedBar
+from backend.app.features import FeatureHydrationBarsRequest, NormalizedBar
 from backend.app.persistence import SQLiteOrderLedger, SQLiteRuntimeStore
 
 from .account_trading_orchestrator import BrokerRuntimeDeployment, BrokerRuntimeOrchestrator
@@ -104,6 +108,7 @@ class AccountScopedAlpacaBrokerAdapter:
             mode=account.mode,
             api_key=api_key,
             secret_key=api_secret,
+            allow_live=getattr(account, "allow_live", False),
         )
         self._adapters_by_account_id[account_id] = adapter
         return adapter
@@ -144,14 +149,29 @@ class RuntimeHistoricalWarmupBarsSource:
         timeframe: str,
         warmup_bars: int,
     ) -> tuple[NormalizedBar, ...]:
+        return self.fetch_bars_for_hydration(
+            entry,
+            FeatureHydrationBarsRequest(
+                symbol=symbol,
+                timeframe=timeframe,
+                warmup_bars=warmup_bars,
+                as_of=utc_now(),
+            ),
+        )
+
+    def fetch_bars_for_hydration(
+        self,
+        entry: BrokerRuntimeDeployment,  # noqa: ARG002 - source is deployment-scoped for future provider routing.
+        request: FeatureHydrationBarsRequest,
+    ) -> tuple[NormalizedBar, ...]:
         from backend.app.data_center.ingest_service import (
             HistoricalBarIngestRequest,
             HistoricalBarIngestService,
             alpaca_bars_source_from_runtime,
         )
 
-        end = utc_now()
-        start = end - _startup_warmup_window(timeframe=timeframe, warmup_bars=warmup_bars)
+        end = request.as_of
+        start = end - _startup_warmup_window(timeframe=request.timeframe, warmup_bars=request.warmup_bars)
         service = HistoricalBarIngestService(
             store=self._runtime_store,
             sources={"alpaca": alpaca_bars_source_from_runtime(self._runtime_store)},
@@ -159,8 +179,8 @@ class RuntimeHistoricalWarmupBarsSource:
         result = service.ensure_bars(
             HistoricalBarIngestRequest(
                 provider="alpaca",
-                symbol=symbol,
-                timeframe=timeframe,
+                symbol=request.symbol,
+                timeframe=request.timeframe,
                 start=start,
                 end=end,
             )
@@ -170,24 +190,32 @@ class RuntimeHistoricalWarmupBarsSource:
                 (
                     bar
                     for bar in result.bars
-                    if bar.symbol.upper() == symbol.upper() and bar.timeframe == timeframe
+                    if bar.symbol.upper() == request.symbol.upper() and bar.timeframe == request.timeframe
                 ),
                 key=lambda bar: bar.timestamp,
             )
         )
-        return bars[-max(int(warmup_bars), 1):]
+        return bars[-max(int(request.warmup_bars), 1):]
 
 
 def _startup_warmup_window(*, timeframe: str, warmup_bars: int) -> timedelta:
     bars = max(int(warmup_bars), 1)
-    if timeframe.endswith("m") and timeframe[:-1].isdigit():
-        minutes = int(timeframe[:-1])
+    normalized = timeframe.strip().lower()
+    if normalized.endswith("mo") and normalized[:-2].isdigit():
+        months = int(normalized[:-2])
+        return timedelta(days=months * 31 * bars * 4 + 31)
+    if normalized.endswith("m") and normalized[:-1].isdigit():
+        minutes = int(normalized[:-1])
         return max(timedelta(minutes=minutes * bars * 4), timedelta(days=7))
-    if timeframe.endswith("h") and timeframe[:-1].isdigit():
-        hours = int(timeframe[:-1])
+    if normalized.endswith("h") and normalized[:-1].isdigit():
+        hours = int(normalized[:-1])
         return max(timedelta(hours=hours * bars * 4), timedelta(days=30))
-    if timeframe == "1d":
-        return timedelta(days=bars * 3 + 14)
+    if normalized.endswith("d") and normalized[:-1].isdigit():
+        days = int(normalized[:-1])
+        return timedelta(days=days * bars * 4 + 14)
+    if normalized.endswith("w") and normalized[:-1].isdigit():
+        weeks = int(normalized[:-1])
+        return timedelta(days=weeks * 7 * bars * 4 + 14)
     return timedelta(days=max(bars * 3, 14))
 
 
@@ -225,7 +253,31 @@ def build_portfolio_snapshot_factory(runtime_store: SQLiteRuntimeStore):
         equity = float(account_snapshot.equity)
         if equity <= 0:
             return PortfolioSnapshot()
-        return PortfolioSnapshot(equity=equity)
+        # M2 (HARD.MD P0-2) — surface unmanaged broker positions so per-Account
+        # concentration / gross / net caps cannot be silently bypassed by
+        # manual or unknown-origin positions. Managed positions are
+        # intentionally NOT projected here yet (the existing concentration
+        # path projects via candidate_market_value); unmanaged is the gap.
+        unmanaged: list[UnmanagedPositionSummary] = []
+        if hasattr(runtime_store, "list_broker_position_snapshots"):
+            try:
+                snapshots = runtime_store.list_broker_position_snapshots(account_id)
+            except Exception:  # noqa: BLE001 - fail-closed: empty unmanaged is safe
+                snapshots = ()
+            for snap in snapshots:
+                if not getattr(snap, "unmanaged_broker_position", False):
+                    continue
+                if snap.qty == 0:
+                    continue
+                unmanaged.append(
+                    UnmanagedPositionSummary(
+                        account_id=snap.account_id,
+                        symbol=snap.symbol,
+                        quantity=float(snap.qty),
+                        market_value=float(snap.market_value),
+                    )
+                )
+        return PortfolioSnapshot(equity=equity, unmanaged_positions=tuple(unmanaged))
 
     return _factory
 

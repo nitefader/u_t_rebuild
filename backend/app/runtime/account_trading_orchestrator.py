@@ -22,10 +22,12 @@ from backend.app.domain._base import utc_now
 from backend.app.features import (
     FeatureAvailability,
     FeatureCache,
+    FeatureHydrationBarsRequest,
+    FeatureHydrationResult,
+    FeatureHydrationService,
     IncrementalFeatureEngine,
     NormalizedBar,
     ResolvedDeploymentComponents,
-    build_feature_plan,
 )
 from backend.app.broker_accounts.models import AccountRiskConfig
 from backend.app.domain.risk_plan import RiskPlanConfig
@@ -77,6 +79,22 @@ class _StartupFeatureRecoveryError(RuntimeError):
         super().__init__(reason)
         self.reason = reason
         self.details = details
+
+
+@dataclass(frozen=True)
+class _DeploymentHydrationBarsSource:
+    entry: BrokerRuntimeDeployment
+    source: StartupWarmupBarsSource
+
+    def fetch_bars(self, request: FeatureHydrationBarsRequest) -> Iterable[NormalizedBar]:
+        if hasattr(self.source, "fetch_bars_for_hydration"):
+            return self.source.fetch_bars_for_hydration(self.entry, request)  # type: ignore[attr-defined]
+        return self.source(self.entry, request.symbol, request.timeframe, request.warmup_bars)
+
+
+class _MissingStartupHydrationBarsSource:
+    def fetch_bars(self, request: FeatureHydrationBarsRequest) -> Iterable[NormalizedBar]:
+        raise RuntimeError("missing_historical_bars_source")
 
 
 class BrokerRuntimeOrchestrator:
@@ -133,6 +151,7 @@ class BrokerRuntimeOrchestrator:
         self._feature_caches: dict[UUID, FeatureCache] = {}
         self._latest_events: list[PipelineEvent] = []
         self._recovery_completed: set[UUID] = set()
+        self._feature_hydrated: set[UUID] = set()
         # T-7: daily risk state aggregator + boot-load from persisted store.
         self._daily_aggregator = DailyAccountStateAggregator()
         self._daily_states: dict[UUID, DailyAccountState] = self._boot_load_daily_states()
@@ -154,13 +173,17 @@ class BrokerRuntimeOrchestrator:
         blocked = self._preflight(entry, require_recovery=True)
         if blocked is not None:
             return blocked
-        self._pipeline_for(entry)
+        hydration_blocked = self._ensure_startup_features_hydrated(entry, as_of=utc_now())
+        if hydration_blocked is not None:
+            return hydration_blocked
         self._recover_startup_position_protection(entry)
         state = self._save_state(deployment_id, status=RuntimeStatus.RUNNING, last_error=None)
         return self._status_from_state(state)
 
     def stop_deployment_runtime(self, deployment_id: UUID) -> BrokerRuntimeLoopStatus:
         self._pipelines.pop(deployment_id, None)
+        self._feature_caches.pop(deployment_id, None)
+        self._feature_hydrated.discard(deployment_id)
         state = self._save_state(deployment_id, status=RuntimeStatus.STOPPED)
         return self._status_from_state(state)
 
@@ -170,6 +193,8 @@ class BrokerRuntimeOrchestrator:
         # operator rebinds (Controls / ExecutionPlan / Strategy) to force a
         # fresh load without restarting the API process.
         self._pipelines.pop(deployment_id, None)
+        self._feature_caches.pop(deployment_id, None)
+        self._feature_hydrated.discard(deployment_id)
         self._deployments.pop(deployment_id, None)
         if self._runtime_store is not None and hasattr(self._runtime_store, "list_active_account_deployments"):
             for entry in self._runtime_store.list_active_account_deployments():
@@ -201,8 +226,21 @@ class BrokerRuntimeOrchestrator:
         if getattr(normalized_bar, "is_complete", True) is False:
             self._block(deployment_id, "incomplete_bar")
             return None
+        runtime_state = self._load_state(deployment_id)
+        if runtime_state.status in {
+            RuntimeStatus.BLOCKED,
+            RuntimeStatus.BLOCKED_RECOVERY,
+            RuntimeStatus.ERROR,
+            RuntimeStatus.KILLED,
+            RuntimeStatus.PAUSED,
+            RuntimeStatus.STOPPED,
+        }:
+            return None
         blocked = self._preflight(entry, require_recovery=True)
         if blocked is not None:
+            return None
+        hydration_blocked = self._ensure_startup_features_hydrated(entry, as_of=normalized_bar.timestamp)
+        if hydration_blocked is not None:
             return None
         if self._already_processed(entry.deployment.deployment_id, normalized_bar):
             return None
@@ -235,6 +273,124 @@ class BrokerRuntimeOrchestrator:
         if sync_state is None or sync_state.is_stale:
             self._block(deployment_id, "broker_sync_stale_after_submit")
         return result
+
+    def _reset_deployment_feature_runtime(self, deployment_id: UUID) -> None:
+        self._pipelines.pop(deployment_id, None)
+        self._feature_caches[deployment_id] = FeatureCache()
+        self._feature_hydrated.discard(deployment_id)
+
+    def _ensure_startup_features_hydrated(
+        self,
+        entry: BrokerRuntimeDeployment,
+        *,
+        as_of: datetime,
+    ) -> BrokerRuntimeLoopStatus | None:
+        deployment_id = entry.deployment.deployment_id
+        if deployment_id in self._feature_hydrated:
+            return None
+        self._reset_deployment_feature_runtime(deployment_id)
+        pipeline = self._pipeline_for(entry)
+        hydration = self._hydrate_startup_features(entry=entry, pipeline=pipeline, as_of=as_of)
+        if not hydration.success:
+            self._record_startup_feature_hydration_blockers(entry, hydration)
+            return self._block(deployment_id, self._hydration_failure_reason(hydration))
+        self._feature_hydrated.add(deployment_id)
+        return None
+
+    def _hydrate_startup_features(
+        self,
+        *,
+        entry: BrokerRuntimeDeployment,
+        pipeline: RuntimeOrchestrator,
+        as_of: datetime,
+    ) -> FeatureHydrationResult:
+        symbols = self._startup_feature_symbols(entry)
+        if not pipeline.feature_plan.feature_keys:
+            return FeatureHydrationResult(
+                success=True,
+                warmup_by_timeframe=dict(pipeline.feature_plan.warmup_by_timeframe),
+            )
+        if self._startup_warmup_bars_source is None:
+            return pipeline.hydrate_features(
+                symbols=symbols,
+                as_of=as_of,
+                bars_source=_MissingStartupHydrationBarsSource(),
+            )
+        return pipeline.hydrate_features(
+            symbols=symbols,
+            as_of=as_of,
+            bars_source=_DeploymentHydrationBarsSource(entry=entry, source=self._startup_warmup_bars_source),
+        )
+
+    def runtime_subscription_symbols(self, entry: BrokerRuntimeDeployment) -> tuple[str, ...]:
+        return self._startup_feature_symbols(entry)
+
+    def _startup_feature_symbols(self, entry: BrokerRuntimeDeployment) -> tuple[str, ...]:
+        symbols = {symbol.symbol.upper() for symbol in entry.components.universe.symbols}
+        if self._runtime_store is not None and hasattr(self._runtime_store, "list_broker_position_snapshots_by_deployment"):
+            try:
+                positions = self._runtime_store.list_broker_position_snapshots_by_deployment(
+                    entry.deployment.deployment_id
+                )
+            except Exception:  # noqa: BLE001 - startup protection will surface position-truth issues.
+                positions = ()
+            for position in positions:
+                if self._broker_position_is_active(position):
+                    symbols.add(position.symbol.upper())
+        return tuple(sorted(symbols))
+
+    def _record_startup_feature_hydration_blockers(
+        self,
+        entry: BrokerRuntimeDeployment,
+        hydration: FeatureHydrationResult,
+    ) -> None:
+        for blocker in hydration.blockers:
+            self._latest_events.append(
+                PipelineEvent(
+                    sequence=len(self._latest_events) + 1,
+                    timestamp=utc_now(),
+                    deployment_id=entry.deployment.deployment_id,
+                    event_type=PipelineEventType.SIGNAL_BLOCKED,
+                    symbol=blocker.symbol,
+                    message="startup feature hydration blocked runtime start",
+                    details={
+                        "reason": blocker.reason,
+                        "symbol": blocker.symbol,
+                        "timeframe": blocker.timeframe,
+                        "feature_key": blocker.feature_key,
+                        "warmup_bars": blocker.warmup_bars,
+                        "bars_seen": blocker.bars_seen,
+                        "availability": None if blocker.availability is None else blocker.availability.value,
+                        "error_type": blocker.error_type,
+                        "error": blocker.error,
+                        **blocker.metadata,
+                    },
+                )
+            )
+
+    @staticmethod
+    def _hydration_failure_reason(hydration: FeatureHydrationResult) -> str:
+        first = hydration.blockers[0] if hydration.blockers else None
+        if first is None:
+            return "startup_feature_warmup_failed"
+        parts = [first.reason]
+        if first.feature_key:
+            parts.append(f"feature_key={first.feature_key}")
+        if first.symbol:
+            parts.append(f"symbol={first.symbol}")
+        if first.timeframe:
+            parts.append(f"timeframe={first.timeframe}")
+        if first.warmup_bars is not None:
+            parts.append(f"warmup_bars={first.warmup_bars}")
+        if first.bars_seen is not None:
+            parts.append(f"bars_seen={first.bars_seen}")
+        if first.availability is not None:
+            parts.append(f"availability={first.availability.value}")
+        if first.error_type:
+            parts.append(f"error_type={first.error_type}")
+        if first.error:
+            parts.append(f"error={first.error}")
+        return "; ".join(parts)
 
     def loop_status(self, deployment_id: UUID) -> BrokerRuntimeLoopStatus:
         return self._status_from_state(self._load_state(deployment_id))
@@ -403,9 +559,8 @@ class BrokerRuntimeOrchestrator:
                 error=str(exc),
             )
             return
-        signal_plan = self._startup_signal_plan_with_component_intent(entry, signal_plan)
         try:
-            signal_plan = self._startup_signal_plan_with_recomputed_pricing_context(
+            signal_plan = self._startup_signal_plan_with_hydrated_feature_snapshot(
                 entry=entry,
                 signal_plan=signal_plan,
             )
@@ -444,198 +599,51 @@ class BrokerRuntimeOrchestrator:
         if child.status == InternalOrderStatus.CREATED:
             self._submit_startup_protective_child(entry=entry, parent=parent, child=child)
 
-    @staticmethod
-    def _startup_signal_plan_with_component_intent(
-        entry: BrokerRuntimeDeployment,
-        signal_plan,
-    ):
-        """Recover pre-fix v4 ATR stop rules without mutating persisted truth."""
-
-        if signal_plan.stop is None or signal_plan.stop.rule:
-            return signal_plan
-        if str(signal_plan.stop.type).lower() != "atr":
-            return signal_plan
-        strategy_v4 = getattr(entry.components, "strategy_version_v4", None)
-        if strategy_v4 is None:
-            return signal_plan
-        for stop in getattr(strategy_v4, "stops", ()):
-            if getattr(stop, "mode", None) != "simple":
-                continue
-            if getattr(stop, "simple_type", None) != "ATR":
-                continue
-            value = getattr(stop, "simple_value", None)
-            if value is None:
-                continue
-            try:
-                multiple = float(value)
-            except (TypeError, ValueError):
-                continue
-            if multiple <= 0:
-                continue
-            return signal_plan.model_copy(
-                update={
-                    "stop": signal_plan.stop.model_copy(
-                        update={"rule": f"atr:{multiple}"}
-                    )
-                }
-            )
-        return signal_plan
-
-    def _startup_signal_plan_with_recomputed_pricing_context(
+    def _startup_signal_plan_with_hydrated_feature_snapshot(
         self,
         *,
         entry: BrokerRuntimeDeployment,
         signal_plan,
     ):
-        if not self._signal_plan_has_atr_pricing_intent(signal_plan):
-            return signal_plan
-        if self._signal_plan_has_available_atr_value(signal_plan):
-            return signal_plan
-        if self._startup_warmup_bars_source is None:
-            raise _StartupFeatureRecoveryError(
-                "startup_atr_recompute_bars_source_missing",
-                symbol=signal_plan.symbol,
-            )
-        try:
-            plan = build_feature_plan(entry.components, consumer="runtime")
-        except Exception as exc:  # noqa: BLE001 - exact blocker belongs in Operations.
-            raise _StartupFeatureRecoveryError(
-                "startup_atr_feature_plan_failed",
-                symbol=signal_plan.symbol,
-                error_type=type(exc).__name__,
-                error=str(exc),
-            ) from exc
-
         symbol = signal_plan.symbol.upper()
-        if symbol not in plan.symbols:
-            plan = plan.model_copy(update={"symbols": tuple(sorted({*plan.symbols, symbol}))})
+        pipeline = self._pipelines.get(entry.deployment.deployment_id)
+        if pipeline is None:
+            return signal_plan
 
-        atr_specs = tuple(
-            (spec, feature_key)
-            for spec, feature_key in zip(plan.feature_specs, plan.feature_keys, strict=True)
-            if spec.kind == "atr"
-        )
-        if not atr_specs:
-            raise _StartupFeatureRecoveryError(
-                "startup_atr_feature_requirement_missing",
-                symbol=symbol,
-            )
-
-        cache = FeatureCache()
-        engine = self._feature_engine_factory()
-        bars_seen_by_timeframe: dict[str, int] = {}
-        for timeframe in sorted({spec.timeframe for spec, _key in atr_specs}):
-            warmup_bars = max(int(plan.warmup_by_timeframe.get(timeframe, 0)), 1)
-            try:
-                bars = tuple(
-                    bar.model_copy(update={"symbol": bar.symbol.upper()})
-                    for bar in self._startup_warmup_bars_source(entry, symbol, timeframe, warmup_bars)
-                    if bar.symbol.upper() == symbol and bar.timeframe == timeframe
-                )
-            except Exception as exc:  # noqa: BLE001 - per-position recovery must fail closed.
-                raise _StartupFeatureRecoveryError(
-                    "startup_atr_warmup_bars_fetch_failed",
-                    symbol=symbol,
-                    timeframe=timeframe,
-                    warmup_bars=warmup_bars,
-                    error_type=type(exc).__name__,
-                    error=str(exc),
-                ) from exc
-
-            deduped = self._dedupe_bars_by_timestamp(bars)
-            bars_seen_by_timeframe[timeframe] = len(deduped)
-            for bar in deduped:
-                try:
-                    engine.update(plan=plan, bar=bar, cache=cache)
-                except Exception as exc:  # noqa: BLE001
-                    raise _StartupFeatureRecoveryError(
-                        "startup_atr_feature_replay_failed",
-                        symbol=symbol,
-                        timeframe=timeframe,
-                        warmup_bars=warmup_bars,
-                        bars_seen=len(deduped),
-                        error_type=type(exc).__name__,
-                        error=str(exc),
-                    ) from exc
-
-        recomputed_values: dict[str, object] = {}
+        hydrated_values: dict[str, object] = {}
         unavailable: list[dict[str, object]] = []
-        for spec, feature_key in atr_specs:
-            snapshot = cache.latest_snapshot_at_or_before(
-                symbol=symbol,
-                timeframe=spec.timeframe,
-                timestamp=datetime.max.replace(tzinfo=timezone.utc),
-            )
-            feature_value = None if snapshot is None else snapshot.values.get(feature_key)
-            if (
-                feature_value is not None
-                and feature_value.availability == FeatureAvailability.AVAILABLE
-                and feature_value.value is not None
-                and feature_value.value > 0
-            ):
-                recomputed_values[feature_key] = float(feature_value.value)
+        for feature_key, feature_value, snapshot in FeatureHydrationService.latest_feature_values(
+            plan=pipeline.feature_plan,
+            cache=pipeline.feature_cache,
+            symbol=symbol,
+            as_of=utc_now(),
+        ):
+            if feature_value.availability == FeatureAvailability.AVAILABLE and feature_value.value is not None:
+                hydrated_values[feature_key] = float(feature_value.value)
                 continue
             unavailable.append(
                 {
                     "feature_key": feature_key,
-                    "timeframe": spec.timeframe,
-                    "availability": None if feature_value is None else feature_value.availability.value,
-                    "bars_seen": bars_seen_by_timeframe.get(spec.timeframe, 0),
-                    "warmup_bars": max(int(plan.warmup_by_timeframe.get(spec.timeframe, 0)), 1),
+                    "availability": feature_value.availability.value,
+                    "snapshot_timestamp": None if snapshot is None else snapshot.timestamp.isoformat(),
                 }
             )
 
-        if not recomputed_values:
+        if unavailable:
             raise _StartupFeatureRecoveryError(
-                "startup_atr_recompute_unavailable",
+                "startup_feature_values_unavailable",
                 symbol=symbol,
-                unavailable_atr_features=unavailable,
+                unavailable_features=unavailable,
             )
 
         return signal_plan.model_copy(
             update={
                 "feature_snapshot": {
                     **dict(signal_plan.feature_snapshot),
-                    **recomputed_values,
+                    **hydrated_values,
                 }
             }
         )
-
-    @staticmethod
-    def _dedupe_bars_by_timestamp(bars: tuple[NormalizedBar, ...]) -> tuple[NormalizedBar, ...]:
-        by_timestamp: dict[datetime, NormalizedBar] = {}
-        for bar in bars:
-            by_timestamp[bar.timestamp] = bar
-        return tuple(by_timestamp[timestamp] for timestamp in sorted(by_timestamp))
-
-    @staticmethod
-    def _signal_plan_has_atr_pricing_intent(signal_plan) -> bool:
-        stop_rule = signal_plan.stop.rule if signal_plan.stop is not None else None
-        if BrokerRuntimeOrchestrator._is_atr_rule(stop_rule):
-            return True
-        if any(BrokerRuntimeOrchestrator._is_atr_rule(target.rule) for target in signal_plan.targets):
-            return True
-        return signal_plan.runner is not None and BrokerRuntimeOrchestrator._is_atr_rule(signal_plan.runner.trail_rule)
-
-    @staticmethod
-    def _is_atr_rule(rule: str | None) -> bool:
-        return bool(rule and rule.strip().lower().startswith("atr:"))
-
-    @staticmethod
-    def _signal_plan_has_available_atr_value(signal_plan) -> bool:
-        for key, raw in signal_plan.feature_snapshot.items():
-            key_l = key.lower()
-            if not (
-                key_l.startswith("atr")
-                or ".atr" in key_l
-                or "technical.atr" in key_l
-            ):
-                continue
-            if isinstance(raw, bool) or not isinstance(raw, (int, float)):
-                continue
-            if float(raw) > 0:
-                return True
-        return False
 
     def _submit_created_protective_children(
         self,

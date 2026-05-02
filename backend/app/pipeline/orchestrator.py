@@ -57,6 +57,9 @@ from backend.app.features import (
     FeatureAvailability,
     FeatureCache,
     FeatureFrame,
+    FeatureHydrationBarsSource,
+    FeatureHydrationResult,
+    FeatureHydrationService,
     FeaturePlan,
     FeatureSnapshot,
     FeatureValue,
@@ -191,6 +194,13 @@ class RuntimeOrchestrator:
         self._account_ids = tuple(dict.fromkeys(account_ids or (account_id,)))
         self._deployment = deployment
         self._components = components
+        # M7 null-guard (P1-6): a Deployment whose components.strategy is None
+        # AND has no v4 strategy is misconfigured. Fail at construction time so
+        # the error is discovered before market hours, not on the first bar.
+        if components.strategy is None and components.strategy_version_v4 is None:
+            raise RuntimeError(
+                f"deployment_strategy_unset:{deployment.deployment_id}"
+            )
         self._initial_cash = initial_cash
         self._feature_engine = feature_engine or IncrementalFeatureEngine()
         self._signal_engine = signal_engine or SignalEngine()
@@ -334,6 +344,26 @@ class RuntimeOrchestrator:
     @property
     def feature_plan(self) -> FeaturePlan:
         return self._feature_plan
+
+    def hydrate_features(
+        self,
+        *,
+        symbols: tuple[str, ...],
+        as_of: datetime,
+        bars_source: FeatureHydrationBarsSource,
+        hydration_service: FeatureHydrationService | None = None,
+    ) -> FeatureHydrationResult:
+        normalized_symbols = tuple(sorted({symbol.upper() for symbol in (*self._feature_plan.symbols, *symbols)}))
+        if normalized_symbols != self._feature_plan.symbols:
+            self._feature_plan = self._feature_plan.model_copy(update={"symbols": normalized_symbols})
+        return (hydration_service or FeatureHydrationService()).hydrate(
+            plan=self._feature_plan,
+            symbols=normalized_symbols,
+            as_of=as_of,
+            bars_source=bars_source,
+            feature_engine=self._feature_engine,
+            feature_cache=self._feature_cache,
+        )
 
     def process_bar(self, bar: NormalizedBar) -> PipelineResult:
         self._reset_positions_cache()

@@ -61,6 +61,7 @@ ACCOUNT_ID = UUID("11111111-2222-3333-4444-555555555555")
 OTHER_ACCOUNT_ID = UUID("22222222-3333-4444-5555-666666666666")
 DEPLOYMENT_ID = UUID("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
 OTHER_DEPLOYMENT_ID = UUID("bbbbbbbb-cccc-dddd-eeee-ffffffffffff")
+_DEFAULT_STARTUP_WARMUP_SOURCE = object()
 
 
 def _components(*, symbol: str = "SPY") -> ResolvedDeploymentComponents:
@@ -166,6 +167,11 @@ def _components_with_v4_atr(*, symbol: str = "SPY") -> ResolvedDeploymentCompone
         feature_requirements=("1m.close", "1m.open", "atr:length=14[0]"),
     )
     return components.model_copy(update={"strategy_version_v4": strategy_v4})
+
+
+def _components_without_feature_requirements(*, symbol: str = "SPY") -> ResolvedDeploymentComponents:
+    components = _components(symbol=symbol)
+    return components.model_copy(update={"strategy": components.strategy.model_copy(update={"entry_rules": ()})})
 
 
 def _deployment(
@@ -295,6 +301,40 @@ def _broker_position(*, account_id: UUID = ACCOUNT_ID, symbol: str = "SPY", qty:
     )
 
 
+class _StartupWarmupSource:
+    def __call__(self, _entry, symbol: str, timeframe: str, warmup_bars: int):
+        bars = max(int(warmup_bars), 1)
+        return tuple(
+            _bar(index - bars, symbol=symbol, open_=100.0, close=100.0).model_copy(update={"timeframe": timeframe})
+            for index in range(bars)
+        )
+
+    def fetch_bars_for_hydration(self, _entry, request):
+        bars = max(int(request.warmup_bars), 1)
+        step = timedelta(minutes=self._minutes_for_timeframe(request.timeframe))
+        return tuple(
+            _bar(index, symbol=request.symbol, open_=100.0, close=100.0).model_copy(
+                update={
+                    "timeframe": request.timeframe,
+                    "timestamp": request.as_of - step * (bars - index),
+                }
+            )
+            for index in range(bars)
+        )
+
+    @staticmethod
+    def _minutes_for_timeframe(timeframe: str) -> int:
+        normalized = timeframe.strip().lower()
+        if normalized.endswith("m") and normalized[:-1].isdigit():
+            return max(int(normalized[:-1]), 1)
+        if normalized.endswith("h") and normalized[:-1].isdigit():
+            return max(int(normalized[:-1]) * 60, 1)
+        return 5
+
+
+_startup_warmup_source = _StartupWarmupSource()
+
+
 def _runtime(
     tmp_path,
     *,
@@ -307,13 +347,15 @@ def _runtime(
     order_manager: OrderManager | None = None,
     broker_sync: BrokerSync | None = None,
     bar_source=None,
-    startup_warmup_bars_source=None,
+    startup_warmup_bars_source=_DEFAULT_STARTUP_WARMUP_SOURCE,
     mode: TradingMode = TradingMode.BROKER_PAPER,
     live_order_submission_enabled: bool = False,
 ) -> tuple[BrokerRuntimeOrchestrator, SQLiteRuntimeStore, FakeBrokerAdapter]:
     store = SQLiteRuntimeStore(tmp_path / f"{deployment_id}.sqlite")
     _seed_account(store, account_id, mode=mode)
     resolved = components or _components()
+    if startup_warmup_bars_source is _DEFAULT_STARTUP_WARMUP_SOURCE:
+        startup_warmup_bars_source = _startup_warmup_source
     try:
         store.load_deployment_runtime_state(deployment_id)
     except KeyError:
@@ -502,6 +544,7 @@ def test_broker_sync_is_called_after_broker_submit_result(tmp_path) -> None:
         broker_sync=sync,
         order_manager=OrderManager(ledger=ledger),
         control_plane=ControlPlane(state_store=store),
+        startup_warmup_bars_source=_startup_warmup_source,
         portfolio_snapshot_factory=lambda _aid: PortfolioSnapshot(equity=100_000),
     )
 
@@ -523,6 +566,7 @@ def test_broker_sync_failure_marks_runtime_degraded_and_blocks_further_opens(tmp
         broker_sync=FailingBrokerSync(ledger=ledger, adapter=broker, runtime_store=store),
         order_manager=OrderManager(ledger=ledger),
         control_plane=ControlPlane(state_store=store),
+        startup_warmup_bars_source=_startup_warmup_source,
         portfolio_snapshot_factory=lambda _aid: PortfolioSnapshot(equity=100_000),
     )
 
@@ -549,6 +593,7 @@ def _degraded_runtime(tmp_path, *, last_error: str) -> tuple[BrokerRuntimeOrches
         broker_sync=BrokerSync(ledger=ledger, adapter=broker, runtime_store=store, provider="alpaca"),
         order_manager=OrderManager(ledger=ledger),
         control_plane=ControlPlane(state_store=store),
+        startup_warmup_bars_source=_startup_warmup_source,
         portfolio_snapshot_factory=lambda _aid: PortfolioSnapshot(equity=100_000),
     )
     runtime._recovery_completed.add(DEPLOYMENT_ID)
@@ -645,7 +690,39 @@ def test_startup_places_protective_oco_for_naked_filled_deployment_position(tmp_
     assert any(event.event_type.value == "protection_placed" for event in runtime.latest_events)
 
 
-def test_startup_recovers_pre_fix_v4_atr_stop_rule_from_deployment_components(tmp_path) -> None:
+def test_startup_allows_empty_feature_plan_without_warmup_source(tmp_path) -> None:
+    components = _components_without_feature_requirements()
+    store = SQLiteRuntimeStore(tmp_path / "runtime.db")
+    _seed_account(store)
+    store.save_deployment_runtime_state(RuntimeState(deployment_id=DEPLOYMENT_ID, status=RuntimeStatus.RECOVERED_READY))
+    broker = FakeBrokerAdapter([BrokerOrderStatus.ACCEPTED], positions_by_account={ACCOUNT_ID: ()})
+    ledger = SQLiteOrderLedger(tmp_path / "runtime.db")
+    order_manager = OrderManager(ledger=ledger)
+    runtime = BrokerRuntimeOrchestrator(
+        deployments=(
+            BrokerRuntimeDeployment(
+                deployment=_deployment(components),
+                components=components,
+                account_id=ACCOUNT_ID,
+            ),
+        ),
+        runtime_store=store,
+        broker_adapter=broker,
+        broker_sync=BrokerSync(ledger=ledger, adapter=broker, runtime_store=store, provider="alpaca"),
+        order_manager=order_manager,
+        control_plane=ControlPlane(state_store=store),
+        startup_warmup_bars_source=None,
+        portfolio_snapshot_factory=lambda _aid: PortfolioSnapshot(equity=100_000),
+    )
+
+    status = runtime.start_deployment_runtime(DEPLOYMENT_ID)
+
+    assert status.running is True
+    assert status.last_error is None
+    assert not [event for event in runtime.latest_events if event.event_type.value == "signal_blocked"]
+
+
+def test_startup_protection_uses_signal_plan_feature_snapshot_without_atr_replay(tmp_path) -> None:
     components = _components_with_v4_atr(symbol="TQQQ")
     position = _broker_position(symbol="TQQQ", qty=1.0)
     broker = FakeBrokerAdapter(
@@ -655,7 +732,7 @@ def test_startup_recovers_pre_fix_v4_atr_stop_rule_from_deployment_components(tm
     runtime, store, broker = _runtime(tmp_path, components=components, broker=broker)
     signal_plan = _bracket_signal_plan(components, symbol="TQQQ").model_copy(
         update={
-            "stop": SignalPlanStop(type="atr", required=True),
+            "stop": SignalPlanStop(type="atr", rule="atr:2.0", required=True),
             "targets": (
                 SignalPlanTarget(
                     label="t1",
@@ -682,7 +759,7 @@ def test_startup_recovers_pre_fix_v4_atr_stop_rule_from_deployment_components(tm
     assert child.bracket_stop_loss_stop_price == 97.5
 
 
-def test_startup_recomputes_missing_v4_atr_from_recent_warmup_bars(tmp_path) -> None:
+def test_startup_prices_atr_protection_from_hydrated_feature_cache(tmp_path) -> None:
     components = _components_with_v4_atr(symbol="TQQQ")
     position = _broker_position(symbol="TQQQ", qty=1.0)
     broker = FakeBrokerAdapter(
@@ -690,22 +767,14 @@ def test_startup_recomputes_missing_v4_atr_from_recent_warmup_bars(tmp_path) -> 
         positions_by_account={ACCOUNT_ID: (position,)},
     )
 
-    def warmup_source(_entry, symbol: str, timeframe: str, warmup_bars: int):
-        return tuple(
-            _bar(index, symbol=symbol, open_=100.0, close=100.0)
-            .model_copy(update={"timeframe": timeframe})
-            for index in range(warmup_bars)
-        )
-
     runtime, store, broker = _runtime(
         tmp_path,
         components=components,
         broker=broker,
-        startup_warmup_bars_source=warmup_source,
     )
     signal_plan = _bracket_signal_plan(components, symbol="TQQQ").model_copy(
         update={
-            "stop": SignalPlanStop(type="atr", required=True),
+            "stop": SignalPlanStop(type="atr", rule="atr:2.0", required=True),
             "targets": (
                 SignalPlanTarget(
                     label="t1",
@@ -732,11 +801,11 @@ def test_startup_recomputes_missing_v4_atr_from_recent_warmup_bars(tmp_path) -> 
     assert child.bracket_stop_loss_stop_price == 92.0
     persisted_plan = store.load_signal_plan(signal_plan.signal_plan_id)
     assert persisted_plan.stop is not None
-    assert persisted_plan.stop.rule is None
+    assert persisted_plan.stop.rule == "atr:2.0"
     assert persisted_plan.feature_snapshot == {"1m.close": 65.1, "1m.open": 66.0}
 
 
-def test_startup_reports_exact_blocker_when_atr_cannot_be_recomputed(tmp_path) -> None:
+def test_startup_reports_exact_blocker_when_hydrated_features_are_unavailable(tmp_path) -> None:
     components = _components_with_v4_atr(symbol="TQQQ")
     position = _broker_position(symbol="TQQQ", qty=1.0)
     broker = FakeBrokerAdapter(
@@ -744,18 +813,23 @@ def test_startup_reports_exact_blocker_when_atr_cannot_be_recomputed(tmp_path) -
         positions_by_account={ACCOUNT_ID: (position,)},
     )
 
-    def insufficient_source(_entry, symbol: str, timeframe: str, _warmup_bars: int):
-        return tuple(
-            _bar(index, symbol=symbol, open_=100.0, close=100.0)
-            .model_copy(update={"timeframe": timeframe})
-            for index in range(5)
-        )
+    class InsufficientSource:
+        def fetch_bars_for_hydration(self, _entry, request):
+            return tuple(
+                _bar(index, symbol=request.symbol, open_=100.0, close=100.0).model_copy(
+                    update={
+                        "timeframe": request.timeframe,
+                        "timestamp": request.as_of - timedelta(minutes=5 * (5 - index)),
+                    }
+                )
+                for index in range(5)
+            )
 
     runtime, store, broker = _runtime(
         tmp_path,
         components=components,
         broker=broker,
-        startup_warmup_bars_source=insufficient_source,
+        startup_warmup_bars_source=InsufficientSource(),
     )
     signal_plan = _bracket_signal_plan(components, symbol="TQQQ").model_copy(
         update={
@@ -776,18 +850,92 @@ def test_startup_reports_exact_blocker_when_atr_cannot_be_recomputed(tmp_path) -
 
     status = runtime.start_deployment_runtime(DEPLOYMENT_ID)
 
-    assert status.running is True
+    assert status.running is False
+    assert status.state == RuntimeStatus.BLOCKED
+    assert status.last_error is not None
+    assert "missing_historical_bars" in status.last_error
+    assert "symbol=TQQQ" in status.last_error
+    assert "timeframe=5m" in status.last_error
+    assert "warmup_bars=42" in status.last_error
+    assert "bars_seen=5" in status.last_error
     assert broker.submitted_orders == []
-    naked_events = [event for event in runtime.latest_events if event.event_type.value == "protection_naked"]
-    assert naked_events
-    details = naked_events[-1].details
-    assert details["reason"] == "startup_atr_recompute_unavailable"
+    blocked_events = [event for event in runtime.latest_events if event.event_type.value == "signal_blocked"]
+    assert blocked_events
+    details = next(event.details for event in blocked_events if event.details["reason"] == "missing_historical_bars")
     assert details["symbol"] == "TQQQ"
-    unavailable = details["unavailable_atr_features"]
-    assert isinstance(unavailable, list)
-    assert unavailable[0]["availability"] == "warmup"
-    assert unavailable[0]["bars_seen"] == 5
-    assert unavailable[0]["warmup_bars"] == 42
+    assert details["timeframe"] == "5m"
+    assert details["bars_seen"] == 5
+    assert details["warmup_bars"] == 42
+    assert runtime.process_completed_bar(DEPLOYMENT_ID, _bar(100, symbol="TQQQ")) is None
+    assert runtime.loop_status(DEPLOYMENT_ID).last_bar_timestamp is None
+    assert runtime.loop_status(DEPLOYMENT_ID).last_error == status.last_error
+
+
+def test_startup_reports_exact_blocker_when_warmup_source_is_missing(tmp_path) -> None:
+    runtime, store, broker = _runtime(tmp_path, startup_warmup_bars_source=None)
+
+    status = runtime.start_deployment_runtime(DEPLOYMENT_ID)
+
+    assert status.running is False
+    assert status.state == RuntimeStatus.BLOCKED
+    assert status.last_error is not None
+    assert "startup_feature_warmup_failed" in status.last_error
+    assert "feature_key=" in status.last_error
+    assert "symbol=SPY" in status.last_error
+    assert "timeframe=5m" in status.last_error
+    assert "warmup_bars=1" in status.last_error
+    assert "bars_seen=0" in status.last_error
+    assert "missing_historical_bars_source" in status.last_error
+    blocked_events = [event for event in runtime.latest_events if event.event_type.value == "signal_blocked"]
+    assert blocked_events
+    first = blocked_events[0].details
+    assert first["reason"] == "startup_feature_warmup_failed"
+    assert first["symbol"] == "SPY"
+    assert first["timeframe"] == "5m"
+    assert first["feature_key"] is not None
+    assert first["warmup_bars"] == 1
+    assert first["bars_seen"] == 0
+    assert first["error"] == "missing_historical_bars_source"
+    assert broker.submitted_orders == []
+    assert store.load_deployment_runtime_state(DEPLOYMENT_ID).last_error == status.last_error
+
+
+def test_blocked_startup_hydration_state_is_not_retried_by_live_bar(tmp_path) -> None:
+    calls = 0
+
+    class FailsOnceWarmupSource:
+        def fetch_bars_for_hydration(self, _entry, request):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                return ()
+            return _startup_warmup_source.fetch_bars_for_hydration(_entry, request)
+
+    runtime, store, broker = _runtime(tmp_path, startup_warmup_bars_source=FailsOnceWarmupSource())
+    status = runtime.start_deployment_runtime(DEPLOYMENT_ID)
+    assert status.state == RuntimeStatus.BLOCKED
+    assert status.last_error is not None
+    assert "missing_historical_bars" in status.last_error
+
+    assert runtime.process_completed_bar(DEPLOYMENT_ID, _bar(100)) is None
+
+    state = store.load_deployment_runtime_state(DEPLOYMENT_ID)
+    assert state.status == RuntimeStatus.BLOCKED
+    assert state.last_error == status.last_error
+    assert state.last_bar_timestamp_by_symbol_timeframe == {}
+    assert broker.submitted_orders == []
+
+
+def test_stopped_runtime_state_is_not_restarted_by_live_bar(tmp_path) -> None:
+    runtime, store, broker = _runtime(tmp_path)
+
+    runtime.stop_deployment_runtime(DEPLOYMENT_ID)
+
+    assert runtime.process_completed_bar(DEPLOYMENT_ID, _bar()) is None
+    state = store.load_deployment_runtime_state(DEPLOYMENT_ID)
+    assert state.status == RuntimeStatus.STOPPED
+    assert state.last_bar_timestamp_by_symbol_timeframe == {}
+    assert broker.submitted_orders == []
 
 
 def test_startup_protection_is_idempotent_after_oco_is_accepted(tmp_path) -> None:
@@ -897,6 +1045,7 @@ def test_one_deployment_can_fan_out_signal_plan_to_multiple_accounts(tmp_path) -
         broker_sync=BrokerSync(ledger=order_manager.ledger, adapter=broker, runtime_store=store),
         order_manager=order_manager,
         control_plane=ControlPlane(state_store=store),
+        startup_warmup_bars_source=_startup_warmup_source,
         portfolio_snapshot_factory=lambda _aid: PortfolioSnapshot(equity=100_000),
     )
 
