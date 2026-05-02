@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ResearchJobsApi } from "@/api/researchJobs";
 import { StrategiesApi } from "@/api/strategies";
+import { StrategyControlsApi } from "@/api/strategyControls";
+import { ExecutionPlansApi } from "@/api/executionPlans";
 import {
   Drawer,
   DrawerBody,
@@ -15,6 +17,8 @@ import { Select } from "@/components/ui/Select";
 import { TextField } from "@/components/ui/TextField";
 import { Banner } from "@/components/ui/Banner";
 import { RiskPlanPicker } from "@/components/risk_plans/RiskPlanPicker";
+
+type AdjustmentPolicy = "split_dividend_adjusted" | "split_only" | "raw";
 
 /**
  * RunBacktestDrawer.
@@ -45,9 +49,21 @@ export function RunBacktestDrawer({
     queryFn: () => StrategiesApi.list(),
     enabled: open,
   });
+  const strategyControls = useQuery({
+    queryKey: ["strategy-controls", "list"],
+    queryFn: () => StrategyControlsApi.list(),
+    enabled: open,
+  });
+  const executionPlans = useQuery({
+    queryKey: ["execution-plans", "list"],
+    queryFn: () => ExecutionPlansApi.list(),
+    enabled: open,
+  });
 
   const [strategyId, setStrategyId] = useState<string>("");
   const [versionId, setVersionId] = useState<string>("");
+  const [strategyControlsVersionId, setStrategyControlsVersionId] = useState<string>("");
+  const [executionPlanVersionId, setExecutionPlanVersionId] = useState<string>("");
   const [riskPlanVersionId, setRiskPlanVersionId] = useState<string>(
     defaultRiskPlanVersionId ?? "",
   );
@@ -69,6 +85,8 @@ export function RunBacktestDrawer({
   const [commission, setCommission] = useState<string>("0");
   const [slippageBps, setSlippageBps] = useState<string>("0");
   const [source, setSource] = useState<"yahoo" | "alpaca">("yahoo");
+  const [adjustmentPolicy, setAdjustmentPolicy] =
+    useState<AdjustmentPolicy>("split_dividend_adjusted");
   const [mcEnabled, setMcEnabled] = useState<boolean>(true);
   const [mcMethod, setMcMethod] = useState<"trade_bootstrap" | "block_bootstrap">(
     "trade_bootstrap",
@@ -96,13 +114,33 @@ export function RunBacktestDrawer({
     }
   }, [versionsQuery.data, versionId]);
 
+  useEffect(() => {
+    if (!strategyControlsVersionId && strategyControls.data?.libraries?.length) {
+      const preferred =
+        strategyControls.data.libraries.find((library) => library.is_default) ??
+        strategyControls.data.libraries[0];
+      setStrategyControlsVersionId(preferred.head_version_id ?? "");
+    }
+  }, [strategyControls.data, strategyControlsVersionId]);
+
+  useEffect(() => {
+    if (!executionPlanVersionId && executionPlans.data?.libraries?.length) {
+      const preferred =
+        executionPlans.data.libraries.find((library) => library.is_default) ??
+        executionPlans.data.libraries[0];
+      setExecutionPlanVersionId(preferred.head_version_id ?? "");
+    }
+  }, [executionPlans.data, executionPlanVersionId]);
+
   const create = useMutation({
     mutationFn: () =>
       ResearchJobsApi.submitBacktest({
         request: {
           strategy_id: strategyId,
           strategy_version_id: versionId,
-          risk_plan_version_id: riskPlanVersionId || undefined,
+          strategy_controls_version_id: strategyControlsVersionId,
+          execution_plan_version_id: executionPlanVersionId,
+          risk_plan_version_id: riskPlanVersionId,
           symbols: symbols
             .split(",")
             .map((s) => s.trim().toUpperCase())
@@ -116,6 +154,7 @@ export function RunBacktestDrawer({
             slippage_bps: Number(slippageBps) || 0,
           },
           source,
+          adjustment_policy: adjustmentPolicy,
           monte_carlo: mcEnabled
             ? {
                 enabled: true,
@@ -139,6 +178,8 @@ export function RunBacktestDrawer({
   const canSubmit =
     Boolean(strategyId) &&
     Boolean(versionId) &&
+    Boolean(strategyControlsVersionId) &&
+    Boolean(executionPlanVersionId) &&
     Boolean(riskPlanVersionId) &&
     symbols.trim().length > 0 &&
     start < end &&
@@ -183,6 +224,44 @@ export function RunBacktestDrawer({
             ))}
           </Select>
 
+          <Select
+            label="Strategy Control"
+            value={strategyControlsVersionId}
+            onChange={(e) => setStrategyControlsVersionId(e.target.value)}
+            hint="Pins the exact entry permissions, timeframe, sessions, and trade limits for this research snapshot."
+          >
+            <option value="">-- pick a Strategy Control --</option>
+            {(strategyControls.data?.libraries ?? []).map((library) => (
+              <option
+                key={library.strategy_controls_id}
+                value={library.head_version_id ?? ""}
+                disabled={!library.head_version_id}
+              >
+                {library.name} v{library.head_version_number}
+                {library.is_default ? " · default" : ""}
+              </option>
+            ))}
+          </Select>
+
+          <Select
+            label="Execution Plan"
+            value={executionPlanVersionId}
+            onChange={(e) => setExecutionPlanVersionId(e.target.value)}
+            hint="Pins the exact order types, brackets, retry, and cancel behavior for the research snapshot."
+          >
+            <option value="">-- pick an Execution Plan --</option>
+            {(executionPlans.data?.libraries ?? []).map((library) => (
+              <option
+                key={library.execution_plan_id}
+                value={library.head_version_id ?? ""}
+                disabled={!library.head_version_id}
+              >
+                {library.name} v{library.head_version_number}
+                {library.is_default ? " · default" : ""}
+              </option>
+            ))}
+          </Select>
+
           <RiskPlanPicker
             label="Risk Plan"
             required
@@ -213,7 +292,7 @@ export function RunBacktestDrawer({
             />
           </div>
 
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-3 gap-3">
             <Select
               label="Timeframe"
               value={timeframe}
@@ -232,6 +311,15 @@ export function RunBacktestDrawer({
             >
               <option value="yahoo">Yahoo</option>
               <option value="alpaca">Alpaca</option>
+            </Select>
+            <Select
+              label="Adjustment policy"
+              value={adjustmentPolicy}
+              onChange={(e) => setAdjustmentPolicy(e.target.value as AdjustmentPolicy)}
+            >
+              <option value="split_dividend_adjusted">Split + dividend adjusted</option>
+              <option value="split_only">Split adjusted</option>
+              <option value="raw">Raw</option>
             </Select>
           </div>
 

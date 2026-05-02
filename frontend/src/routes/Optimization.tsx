@@ -288,6 +288,14 @@ function OptimizationDetail({
               aiWarnings={[
                 "Optimization output is hypothesis only — Walk-Forward validation required before deployment.",
               ]}
+              sourceRunId={live.run_id}
+              sourceEvidenceType="OptimizationRun"
+              evidenceLineage={{
+                parameters: live.best_parameters,
+                best_metrics: live.best_metrics,
+                candidate_count: live.candidate_count,
+                objective: live.objective,
+              }}
               label="Save winner as Risk Plan"
             />
           </CardHeader>

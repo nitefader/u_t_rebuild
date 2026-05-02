@@ -15,6 +15,9 @@ const ResearchRunBaseSchema = z.object({
   run_id: z.string(),
   strategy_id: z.string(),
   strategy_version_id: z.string(),
+  artifact_id: z.string().nullable().optional(),
+  deployment_snapshot_id: z.string().nullable().optional(),
+  deployment_snapshot: z.record(z.unknown()).nullable().optional(),
   created_at: z.string(),
 });
 
@@ -74,7 +77,9 @@ export const BacktestRunRequestSchema = z
   .object({
     strategy_id: z.string(),
     strategy_version_id: z.string(),
-    risk_plan_version_id: z.string().nullable().optional(),
+    strategy_controls_version_id: z.string().min(1),
+    execution_plan_version_id: z.string().min(1),
+    risk_plan_version_id: z.string().min(1),
     watchlist_snapshot_id: z.string().nullable().optional(),
     universe: z.array(z.string()).default([]),
     symbols: z.array(z.string()).default([]),
@@ -253,6 +258,9 @@ export type SimulationRunRequest = z.infer<typeof SimulationRunRequestSchema>;
 export const SimLabBatchRunRequestSchema = z.object({
   strategy_id: z.string(),
   strategy_version_id: z.string(),
+  strategy_controls_version_id: z.string().min(1),
+  execution_plan_version_id: z.string().min(1),
+  risk_plan_version_id: z.string().min(1),
   scenario_name: z.string().min(1),
   universe: z.array(z.string()).min(1),
   timeframe: z.string().default("5m"),
@@ -364,6 +372,8 @@ export const OptimizationRunRequestSchema = z
   .object({
     strategy_id: z.string(),
     strategy_version_id: z.string(),
+    strategy_controls_version_id: z.string().min(1),
+    execution_plan_version_id: z.string().min(1),
     symbols: z.array(z.string()).default([]),
     start: z.string().nullable().optional(),
     end: z.string().nullable().optional(),
@@ -442,6 +452,8 @@ export const WalkForwardRunRequestSchema = z
   .object({
     strategy_id: z.string(),
     strategy_version_id: z.string(),
+    strategy_controls_version_id: z.string().min(1),
+    execution_plan_version_id: z.string().min(1),
     symbols: z.array(z.string()).default([]),
     start: z.string().nullable().optional(),
     end: z.string().nullable().optional(),

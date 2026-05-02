@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ResearchJobsApi } from "@/api/researchJobs";
 import { StrategiesApi } from "@/api/strategies";
+import { StrategyControlsApi } from "@/api/strategyControls";
+import { ExecutionPlansApi } from "@/api/executionPlans";
 import {
   Drawer,
   DrawerBody,
@@ -15,6 +17,8 @@ import { Select } from "@/components/ui/Select";
 import { TextField } from "@/components/ui/TextField";
 import { Banner } from "@/components/ui/Banner";
 import { RiskPlanPicker } from "@/components/risk_plans/RiskPlanPicker";
+
+type AdjustmentPolicy = "split_dividend_adjusted" | "split_only" | "raw";
 
 /**
  * RunWalkForwardDrawer.
@@ -38,9 +42,21 @@ export function RunWalkForwardDrawer({
     queryFn: () => StrategiesApi.list(),
     enabled: open,
   });
+  const strategyControls = useQuery({
+    queryKey: ["strategy-controls", "list"],
+    queryFn: () => StrategyControlsApi.list(),
+    enabled: open,
+  });
+  const executionPlans = useQuery({
+    queryKey: ["execution-plans", "list"],
+    queryFn: () => ExecutionPlansApi.list(),
+    enabled: open,
+  });
 
   const [strategyId, setStrategyId] = useState<string>("");
   const [versionId, setVersionId] = useState<string>("");
+  const [strategyControlsVersionId, setStrategyControlsVersionId] = useState<string>("");
+  const [executionPlanVersionId, setExecutionPlanVersionId] = useState<string>("");
   const [symbols, setSymbols] = useState<string>("SPY");
   const today = useMemo(() => new Date().toISOString().slice(0, 10), []);
   const oneYearAgo = useMemo(() => {
@@ -55,6 +71,8 @@ export function RunWalkForwardDrawer({
   const [commission, setCommission] = useState<string>("0");
   const [slippageBps, setSlippageBps] = useState<string>("0");
   const [source, setSource] = useState<"yahoo" | "alpaca">("yahoo");
+  const [adjustmentPolicy, setAdjustmentPolicy] =
+    useState<AdjustmentPolicy>("split_dividend_adjusted");
   const [windowMode, setWindowMode] = useState<"rolling" | "anchored">("rolling");
   const [isLengthDays, setIsLengthDays] = useState<string>("180");
   const [oosLengthDays, setOosLengthDays] = useState<string>("60");
@@ -112,57 +130,78 @@ export function RunWalkForwardDrawer({
     }
   }, [versionsQuery.data, versionId]);
 
+  useEffect(() => {
+    if (!strategyControlsVersionId && strategyControls.data?.libraries?.length) {
+      const preferred =
+        strategyControls.data.libraries.find((library) => library.is_default) ??
+        strategyControls.data.libraries[0];
+      setStrategyControlsVersionId(preferred.head_version_id ?? "");
+    }
+  }, [strategyControls.data, strategyControlsVersionId]);
+
+  useEffect(() => {
+    if (!executionPlanVersionId && executionPlans.data?.libraries?.length) {
+      const preferred =
+        executionPlans.data.libraries.find((library) => library.is_default) ??
+        executionPlans.data.libraries[0];
+      setExecutionPlanVersionId(preferred.head_version_id ?? "");
+    }
+  }, [executionPlans.data, executionPlanVersionId]);
+
   const create = useMutation({
     mutationFn: () =>
       ResearchJobsApi.submitWalkForward({
         request: {
-        strategy_id: strategyId,
-        strategy_version_id: versionId,
-        symbols: symbols
-          .split(",")
-          .map((s) => s.trim().toUpperCase())
-          .filter(Boolean),
-        start: new Date(`${start}T00:00:00.000Z`).toISOString(),
-        end: new Date(`${end}T00:00:00.000Z`).toISOString(),
-        timeframe,
-        initial_capital: Number(initialCapital) || 100_000,
-        cost_model: {
-          commission_per_trade: Number(commission) || 0,
-          slippage_bps: Number(slippageBps) || 0,
-        },
-        source,
-        window_mode: windowMode,
-        is_length: { unit: "days", value: Number(isLengthDays) || 180 },
-        oos_length: { unit: "days", value: Number(oosLengthDays) || 60 },
-        step: { unit: "days", value: Number(stepDays) || 60 },
-        max_folds: Number(maxFolds) || null,
-        selection_criterion: selectionCriterion,
-        sweep: sweepEnabled
-          ? {
-              enabled: true,
-              base_risk_plan_version_id: baseRiskPlanVersionId ?? undefined,
-              parameters: [
-                {
-                  field: sweepField,
-                  values: sweepValues
-                    .split(",")
-                    .map((v) => Number(v.trim()))
-                    .filter((v) => Number.isFinite(v) && v > 0),
-                },
-              ],
-            }
-          : null,
-        monte_carlo: mcEnabled
-          ? { enabled: true, method: "trade_bootstrap", replications: 1000, block_size: 5, seed: 42 }
-          : null,
-        score_weights: {
-          oos_sharpe_p25: Number(sharpeWeight) || SCORE_DEFAULTS.sharpe,
-          stability: Number(stabilityWeight) || SCORE_DEFAULTS.stability,
-        },
-        ship_thresholds: {
-          ship_oos_max_dd_min: Number(shipMaxDd) || THRESHOLD_DEFAULTS.ship_oos_max_dd_min,
-          do_not_ship_oos_max_dd_max: Number(doNotShipMaxDd) || THRESHOLD_DEFAULTS.do_not_ship_oos_max_dd_max,
-        },
+          strategy_id: strategyId,
+          strategy_version_id: versionId,
+          strategy_controls_version_id: strategyControlsVersionId,
+          execution_plan_version_id: executionPlanVersionId,
+          symbols: symbols
+            .split(",")
+            .map((s) => s.trim().toUpperCase())
+            .filter(Boolean),
+          start: new Date(`${start}T00:00:00.000Z`).toISOString(),
+          end: new Date(`${end}T00:00:00.000Z`).toISOString(),
+          timeframe,
+          initial_capital: Number(initialCapital) || 100_000,
+          cost_model: {
+            commission_per_trade: Number(commission) || 0,
+            slippage_bps: Number(slippageBps) || 0,
+          },
+          source,
+          adjustment_policy: adjustmentPolicy,
+          window_mode: windowMode,
+          is_length: { unit: "days", value: Number(isLengthDays) || 180 },
+          oos_length: { unit: "days", value: Number(oosLengthDays) || 60 },
+          step: { unit: "days", value: Number(stepDays) || 60 },
+          max_folds: Number(maxFolds) || null,
+          selection_criterion: selectionCriterion,
+          sweep: {
+            enabled: true,
+            base_risk_plan_version_id: baseRiskPlanVersionId ?? undefined,
+            parameters: sweepEnabled
+              ? [
+                  {
+                    field: sweepField,
+                    values: sweepValues
+                      .split(",")
+                      .map((v) => Number(v.trim()))
+                      .filter((v) => Number.isFinite(v) && v > 0),
+                  },
+                ]
+              : [],
+          },
+          monte_carlo: mcEnabled
+            ? { enabled: true, method: "trade_bootstrap", replications: 1000, block_size: 5, seed: 42 }
+            : null,
+          score_weights: {
+            oos_sharpe_p25: Number(sharpeWeight) || SCORE_DEFAULTS.sharpe,
+            stability: Number(stabilityWeight) || SCORE_DEFAULTS.stability,
+          },
+          ship_thresholds: {
+            ship_oos_max_dd_min: Number(shipMaxDd) || THRESHOLD_DEFAULTS.ship_oos_max_dd_min,
+            do_not_ship_oos_max_dd_max: Number(doNotShipMaxDd) || THRESHOLD_DEFAULTS.do_not_ship_oos_max_dd_max,
+          },
         },
         metadata: {},
       }),
@@ -177,6 +216,9 @@ export function RunWalkForwardDrawer({
   const canSubmit =
     Boolean(strategyId) &&
     Boolean(versionId) &&
+    Boolean(strategyControlsVersionId) &&
+    Boolean(executionPlanVersionId) &&
+    Boolean(baseRiskPlanVersionId) &&
     symbols.trim().length > 0 &&
     start < end &&
     Number(initialCapital) > 0 &&
@@ -222,6 +264,44 @@ export function RunWalkForwardDrawer({
             ))}
           </Select>
 
+          <Select
+            label="Strategy Control"
+            value={strategyControlsVersionId}
+            onChange={(e) => setStrategyControlsVersionId(e.target.value)}
+            hint="Pins the exact timeframe, sessions, and entry controls used across every fold."
+          >
+            <option value="">-- pick a Strategy Control --</option>
+            {(strategyControls.data?.libraries ?? []).map((library) => (
+              <option
+                key={library.strategy_controls_id}
+                value={library.head_version_id ?? ""}
+                disabled={!library.head_version_id}
+              >
+                {library.name} v{library.head_version_number}
+                {library.is_default ? " · default" : ""}
+              </option>
+            ))}
+          </Select>
+
+          <Select
+            label="Execution Plan"
+            value={executionPlanVersionId}
+            onChange={(e) => setExecutionPlanVersionId(e.target.value)}
+            hint="Pins the exact order behavior used across every fold."
+          >
+            <option value="">-- pick an Execution Plan --</option>
+            {(executionPlans.data?.libraries ?? []).map((library) => (
+              <option
+                key={library.execution_plan_id}
+                value={library.head_version_id ?? ""}
+                disabled={!library.head_version_id}
+              >
+                {library.name} v{library.head_version_number}
+                {library.is_default ? " · default" : ""}
+              </option>
+            ))}
+          </Select>
+
           <TextField
             label="Symbols (comma-separated)"
             value={symbols}
@@ -233,7 +313,7 @@ export function RunWalkForwardDrawer({
             <TextField type="date" label="End" value={end} onChange={(e) => setEnd(e.target.value)} />
           </div>
 
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-3 gap-3">
             <Select label="Timeframe" value={timeframe} onChange={(e) => setTimeframe(e.target.value)}>
               <option value="1m">1m</option>
               <option value="5m">5m</option>
@@ -244,6 +324,15 @@ export function RunWalkForwardDrawer({
             <Select label="Data source" value={source} onChange={(e) => setSource(e.target.value as "yahoo" | "alpaca")}>
               <option value="yahoo">Yahoo</option>
               <option value="alpaca">Alpaca</option>
+            </Select>
+            <Select
+              label="Adjustment policy"
+              value={adjustmentPolicy}
+              onChange={(e) => setAdjustmentPolicy(e.target.value as AdjustmentPolicy)}
+            >
+              <option value="split_dividend_adjusted">Split + dividend adjusted</option>
+              <option value="split_only">Split adjusted</option>
+              <option value="raw">Raw</option>
             </Select>
           </div>
 
@@ -292,18 +381,19 @@ export function RunWalkForwardDrawer({
           <details className="rounded border border-border p-3 text-xs" open>
             <summary className="cursor-pointer text-fg-muted">Risk-plan parameter sweep</summary>
             <div className="mt-3 space-y-3">
+              <RiskPlanPicker
+                label="Risk Plan"
+                required
+                value={baseRiskPlanVersionId}
+                onChange={setBaseRiskPlanVersionId}
+                hint="Required. Walk-Forward starts from this exact Risk Plan version and records it in the research snapshot."
+              />
               <label className="flex items-center gap-2 text-xs">
                 <input type="checkbox" checked={sweepEnabled} onChange={(e) => setSweepEnabled(e.target.checked)} />
-                <span>Enable sweep (drives the recommended risk plan output)</span>
+                <span>Enable parameter sweep for recommended Risk Plan output</span>
               </label>
               {sweepEnabled ? (
                 <>
-                  <RiskPlanPicker
-                    label="Base Risk Plan (sweep starts from this version)"
-                    value={baseRiskPlanVersionId}
-                    onChange={setBaseRiskPlanVersionId}
-                    hint="Sweep overrides the selected field on top of this base config; recommendation is saved as a draft Risk Plan with source=walk_forward_recommended."
-                  />
                   <div className="grid grid-cols-2 gap-3">
                     <Select label="Field" value={sweepField} onChange={(e) => setSweepField(e.target.value)}>
                       <option value="fixed_shares">fixed_shares</option>

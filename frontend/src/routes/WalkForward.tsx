@@ -245,6 +245,7 @@ function WalkForwardDetail({
           recommended={readRecommended(live)}
           recommendation={readRecommendation(live)}
           strategyName={strategyName}
+          runId={live.run_id}
         />
       ) : null}
 

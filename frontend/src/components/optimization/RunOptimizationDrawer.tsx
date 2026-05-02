@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ResearchJobsApi } from "@/api/researchJobs";
 import { StrategiesApi } from "@/api/strategies";
+import { StrategyControlsApi } from "@/api/strategyControls";
+import { ExecutionPlansApi } from "@/api/executionPlans";
 import {
   Drawer,
   DrawerBody,
@@ -15,6 +17,8 @@ import { Select } from "@/components/ui/Select";
 import { TextField } from "@/components/ui/TextField";
 import { Banner } from "@/components/ui/Banner";
 import { RiskPlanPicker } from "@/components/risk_plans/RiskPlanPicker";
+
+type AdjustmentPolicy = "split_dividend_adjusted" | "split_only" | "raw";
 
 /**
  * RunOptimizationDrawer.
@@ -38,9 +42,21 @@ export function RunOptimizationDrawer({
     queryFn: () => StrategiesApi.list(),
     enabled: open,
   });
+  const strategyControls = useQuery({
+    queryKey: ["strategy-controls", "list"],
+    queryFn: () => StrategyControlsApi.list(),
+    enabled: open,
+  });
+  const executionPlans = useQuery({
+    queryKey: ["execution-plans", "list"],
+    queryFn: () => ExecutionPlansApi.list(),
+    enabled: open,
+  });
 
   const [strategyId, setStrategyId] = useState<string>("");
   const [versionId, setVersionId] = useState<string>("");
+  const [strategyControlsVersionId, setStrategyControlsVersionId] = useState<string>("");
+  const [executionPlanVersionId, setExecutionPlanVersionId] = useState<string>("");
   const [symbols, setSymbols] = useState<string>("SPY");
   const today = useMemo(() => new Date().toISOString().slice(0, 10), []);
   const oneYearAgo = useMemo(() => {
@@ -55,6 +71,8 @@ export function RunOptimizationDrawer({
   const [commission, setCommission] = useState<string>("0");
   const [slippageBps, setSlippageBps] = useState<string>("0");
   const [source, setSource] = useState<"yahoo" | "alpaca">("yahoo");
+  const [adjustmentPolicy, setAdjustmentPolicy] =
+    useState<AdjustmentPolicy>("split_dividend_adjusted");
   const [method, setMethod] = useState<"grid" | "random">("grid");
   const [maxCandidates, setMaxCandidates] = useState<string>("200");
   const [seed, setSeed] = useState<string>("42");
@@ -87,52 +105,73 @@ export function RunOptimizationDrawer({
     }
   }, [versionsQuery.data, versionId]);
 
+  useEffect(() => {
+    if (!strategyControlsVersionId && strategyControls.data?.libraries?.length) {
+      const preferred =
+        strategyControls.data.libraries.find((library) => library.is_default) ??
+        strategyControls.data.libraries[0];
+      setStrategyControlsVersionId(preferred.head_version_id ?? "");
+    }
+  }, [strategyControls.data, strategyControlsVersionId]);
+
+  useEffect(() => {
+    if (!executionPlanVersionId && executionPlans.data?.libraries?.length) {
+      const preferred =
+        executionPlans.data.libraries.find((library) => library.is_default) ??
+        executionPlans.data.libraries[0];
+      setExecutionPlanVersionId(preferred.head_version_id ?? "");
+    }
+  }, [executionPlans.data, executionPlanVersionId]);
+
   const create = useMutation({
     mutationFn: () =>
       ResearchJobsApi.submitOptimization({
         request: {
-        strategy_id: strategyId,
-        strategy_version_id: versionId,
-        symbols: symbols
-          .split(",")
-          .map((s) => s.trim().toUpperCase())
-          .filter(Boolean),
-        start: new Date(`${start}T00:00:00.000Z`).toISOString(),
-        end: new Date(`${end}T00:00:00.000Z`).toISOString(),
-        timeframe,
-        initial_capital: Number(initialCapital) || 100_000,
-        cost_model: {
-          commission_per_trade: Number(commission) || 0,
-          slippage_bps: Number(slippageBps) || 0,
-        },
-        source,
-        method,
-        max_candidates: Number(maxCandidates) || 200,
-        seed: Number(seed) || 42,
-        selection_criterion: selectionCriterion,
-        sweep: {
-          base_risk_plan_version_id: baseRiskPlanVersionId ?? undefined,
-          parameters: sweepRows
-            .map((row) => ({
-              field: row.field,
-              values: row.values
-                .split(",")
-                .map((v) => Number(v.trim()))
-                .filter((v) => Number.isFinite(v) && v > 0),
-            }))
-            .filter((row) => row.values.length > 0),
-        },
-        monte_carlo: mcEnabled
-          ? {
-              enabled: true,
-              method: "trade_bootstrap",
-              replications: 1000,
-              block_size: 5,
-              seed: 42,
-            }
-          : null,
-        runners_up_threshold_pct: Math.max(0, Number(runnersPct) / 100 || 0.05),
-        walk_forward_handoff_top_k: Math.max(1, Number(wfTopK) || 3),
+          strategy_id: strategyId,
+          strategy_version_id: versionId,
+          strategy_controls_version_id: strategyControlsVersionId,
+          execution_plan_version_id: executionPlanVersionId,
+          symbols: symbols
+            .split(",")
+            .map((s) => s.trim().toUpperCase())
+            .filter(Boolean),
+          start: new Date(`${start}T00:00:00.000Z`).toISOString(),
+          end: new Date(`${end}T00:00:00.000Z`).toISOString(),
+          timeframe,
+          initial_capital: Number(initialCapital) || 100_000,
+          cost_model: {
+            commission_per_trade: Number(commission) || 0,
+            slippage_bps: Number(slippageBps) || 0,
+          },
+          source,
+          adjustment_policy: adjustmentPolicy,
+          method,
+          max_candidates: Number(maxCandidates) || 200,
+          seed: Number(seed) || 42,
+          selection_criterion: selectionCriterion,
+          sweep: {
+            base_risk_plan_version_id: baseRiskPlanVersionId ?? undefined,
+            parameters: sweepRows
+              .map((row) => ({
+                field: row.field,
+                values: row.values
+                  .split(",")
+                  .map((v) => Number(v.trim()))
+                  .filter((v) => Number.isFinite(v) && v > 0),
+              }))
+              .filter((row) => row.values.length > 0),
+          },
+          monte_carlo: mcEnabled
+            ? {
+                enabled: true,
+                method: "trade_bootstrap",
+                replications: 1000,
+                block_size: 5,
+                seed: 42,
+              }
+            : null,
+          runners_up_threshold_pct: Math.max(0, Number(runnersPct) / 100 || 0.05),
+          walk_forward_handoff_top_k: Math.max(1, Number(wfTopK) || 3),
         },
         metadata: {},
       }),
@@ -147,6 +186,9 @@ export function RunOptimizationDrawer({
   const canSubmit =
     Boolean(strategyId) &&
     Boolean(versionId) &&
+    Boolean(strategyControlsVersionId) &&
+    Boolean(executionPlanVersionId) &&
+    Boolean(baseRiskPlanVersionId) &&
     symbols.trim().length > 0 &&
     start < end &&
     Number(initialCapital) > 0 &&
@@ -196,6 +238,44 @@ export function RunOptimizationDrawer({
             ))}
           </Select>
 
+          <Select
+            label="Strategy Control"
+            value={strategyControlsVersionId}
+            onChange={(e) => setStrategyControlsVersionId(e.target.value)}
+            hint="Pins the exact timeframe, sessions, and entry controls used by every candidate."
+          >
+            <option value="">-- pick a Strategy Control --</option>
+            {(strategyControls.data?.libraries ?? []).map((library) => (
+              <option
+                key={library.strategy_controls_id}
+                value={library.head_version_id ?? ""}
+                disabled={!library.head_version_id}
+              >
+                {library.name} v{library.head_version_number}
+                {library.is_default ? " · default" : ""}
+              </option>
+            ))}
+          </Select>
+
+          <Select
+            label="Execution Plan"
+            value={executionPlanVersionId}
+            onChange={(e) => setExecutionPlanVersionId(e.target.value)}
+            hint="Pins the exact order behavior used by every candidate."
+          >
+            <option value="">-- pick an Execution Plan --</option>
+            {(executionPlans.data?.libraries ?? []).map((library) => (
+              <option
+                key={library.execution_plan_id}
+                value={library.head_version_id ?? ""}
+                disabled={!library.head_version_id}
+              >
+                {library.name} v{library.head_version_number}
+                {library.is_default ? " · default" : ""}
+              </option>
+            ))}
+          </Select>
+
           <TextField
             label="Symbols (comma-separated)"
             value={symbols}
@@ -207,7 +287,7 @@ export function RunOptimizationDrawer({
             <TextField type="date" label="End" value={end} onChange={(e) => setEnd(e.target.value)} />
           </div>
 
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-3 gap-3">
             <Select label="Timeframe" value={timeframe} onChange={(e) => setTimeframe(e.target.value)}>
               <option value="1m">1m</option>
               <option value="5m">5m</option>
@@ -218,6 +298,15 @@ export function RunOptimizationDrawer({
             <Select label="Data source" value={source} onChange={(e) => setSource(e.target.value as "yahoo" | "alpaca")}>
               <option value="yahoo">Yahoo</option>
               <option value="alpaca">Alpaca</option>
+            </Select>
+            <Select
+              label="Adjustment policy"
+              value={adjustmentPolicy}
+              onChange={(e) => setAdjustmentPolicy(e.target.value as AdjustmentPolicy)}
+            >
+              <option value="split_dividend_adjusted">Split + dividend adjusted</option>
+              <option value="split_only">Split adjusted</option>
+              <option value="raw">Raw</option>
             </Select>
           </div>
 
@@ -264,10 +353,11 @@ export function RunOptimizationDrawer({
           <div className="rounded border border-border p-3 space-y-3 text-xs">
             <div className="text-fg-muted text-[11px] uppercase tracking-wider">Risk-plan parameter grid</div>
             <RiskPlanPicker
-              label="Base Risk Plan (sweep starts from this version)"
+              label="Risk Plan"
+              required
               value={baseRiskPlanVersionId}
               onChange={setBaseRiskPlanVersionId}
-              hint="Optimization sweeps the field grid below on top of this base config; you can save the winner as a draft Risk Plan with source=optimization_generated."
+              hint="Required. Optimization sweeps the field grid below on top of this exact Risk Plan version."
             />
             {sweepRows.map((row, i) => (
               <div key={i} className="grid grid-cols-2 gap-3">

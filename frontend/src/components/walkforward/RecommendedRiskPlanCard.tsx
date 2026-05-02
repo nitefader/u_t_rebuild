@@ -16,10 +16,12 @@ export function RecommendedRiskPlanCard({
   recommended,
   recommendation,
   strategyName,
+  runId,
 }: {
   recommended: WalkForwardRiskPlanRecommendation | null | undefined;
   recommendation: string | null | undefined;
   strategyName?: string | null;
+  runId: string;
 }): JSX.Element | null {
   if (!recommended) {
     return null;
@@ -44,6 +46,16 @@ export function RecommendedRiskPlanCard({
             aiSummary={
               recommended.explanation ?? "Walk-Forward recommended based on aggregated OOS metrics."
             }
+            sourceRunId={runId}
+            sourceEvidenceType="WalkForwardRun"
+            evidenceLineage={{
+              parameters: recommended.parameters,
+              score: recommended.score,
+              stability_metrics: recommended.stability_metrics,
+              drawdown_metrics: recommended.drawdown_metrics,
+              out_of_sample_metrics: recommended.out_of_sample_metrics,
+              recommendation,
+            }}
             disabled={recommendation === "do_not_ship"}
             label="Save as Risk Plan"
           />

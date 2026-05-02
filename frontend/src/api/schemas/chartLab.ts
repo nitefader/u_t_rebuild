@@ -33,9 +33,8 @@ export type ChartLabFrame = z.infer<typeof ChartLabFrameSchema>;
 
 // ──────────────────────────────────────────────────────────────────────────
 // Strategy preview (POST /api/v1/chart-lab/preview).
-// Strategy-only research surface: replay a saved StrategyVersion against
-// historical bars, return per-bar feature values + signal markers + truth
-// trees. No deployment binding required.
+// Deployment-like research surface: replay a saved StrategyVersion with
+// Strategy Control, Execution Plan, Risk Plan, symbol, and Data Policy.
 // ──────────────────────────────────────────────────────────────────────────
 
 export const FeatureAvailabilitySchema = z.enum([
@@ -55,6 +54,39 @@ export const ChartLabFeatureValueSchema = z.object({
 });
 export type ChartLabFeatureValue = z.infer<typeof ChartLabFeatureValueSchema>;
 
+export const ChartLabFeatureOriginSchema = z.enum(["derived", "manual"]);
+export type ChartLabFeatureOrigin = z.infer<typeof ChartLabFeatureOriginSchema>;
+
+export const ChartLabFeatureGroupSchema = z.enum([
+  "Trend",
+  "Momentum",
+  "Volatility",
+  "Volume",
+  "Price",
+  "Time",
+]);
+export type ChartLabFeatureGroup = z.infer<typeof ChartLabFeatureGroupSchema>;
+
+export const ChartLabFeatureDescriptorSchema = z.object({
+  feature_key: z.string(),
+  feature_ref: z.string(),
+  name: z.string(),
+  timeframe: z.string(),
+  indicator_type: z.string(),
+  group: ChartLabFeatureGroupSchema,
+  origin: ChartLabFeatureOriginSchema,
+  badge: z.string(),
+});
+export type ChartLabFeatureDescriptor = z.infer<typeof ChartLabFeatureDescriptorSchema>;
+
+export const ChartLabFeatureLibraryResponseSchema = z.object({
+  timeframe: z.string(),
+  features: z.array(ChartLabFeatureDescriptorSchema).default([]),
+});
+export type ChartLabFeatureLibraryResponse = z.infer<
+  typeof ChartLabFeatureLibraryResponseSchema
+>;
+
 export const ChartLabSignalMarkerSchema = z.object({
   timestamp: z.string(),
   symbol: z.string(),
@@ -66,9 +98,16 @@ export const ChartLabSignalMarkerSchema = z.object({
 export type ChartLabSignalMarker = z.infer<typeof ChartLabSignalMarkerSchema>;
 
 export const ChartLabBarPreviewSchema = z.object({
+  bar_index: z.number().default(0),
   timestamp: z.string(),
   symbol: z.string(),
   timeframe: z.string(),
+  open: z.number(),
+  high: z.number(),
+  low: z.number(),
+  close: z.number(),
+  volume: z.number().nullable().optional(),
+  is_warmup: z.boolean().default(false),
   feature_values: z.array(ChartLabFeatureValueSchema).default([]),
   signal_markers: z.array(ChartLabSignalMarkerSchema).default([]),
   condition_truth_tree: z.record(z.string(), z.unknown()).default({}),
@@ -121,14 +160,17 @@ export type ChartLabSession = z.infer<typeof ChartLabSessionSchema>;
 export const ChartLabPreviewEvidenceSchema = z
   .object({
     evidence_id: z.string(),
-    strategy_id: z.string(),
-    strategy_version_id: z.string(),
+    strategy_id: z.string().nullable().optional(),
+    strategy_version_id: z.string().nullable().optional(),
     symbol: z.string(),
     timeframe: z.string(),
     start: z.string(),
     end: z.string(),
     feature_snapshot_count: z.number(),
     signal_marker_count: z.number(),
+    artifact_id: z.string().nullable().optional(),
+    deployment_snapshot_id: z.string().nullable().optional(),
+    deployment_snapshot: z.record(z.unknown()).nullable().optional(),
   })
   .passthrough();
 export type ChartLabPreviewEvidence = z.infer<typeof ChartLabPreviewEvidenceSchema>;
@@ -136,13 +178,15 @@ export type ChartLabPreviewEvidence = z.infer<typeof ChartLabPreviewEvidenceSche
 export const ChartLabPreviewResponseSchema = z.object({
   session: ChartLabSessionSchema,
   feature_plan: ChartLabFeaturePlanSchema,
+  features: z.array(ChartLabFeatureDescriptorSchema).default([]),
   bars: z.array(ChartLabBarPreviewSchema).default([]),
   evidence: ChartLabPreviewEvidenceSchema.nullable().optional(),
 });
 export type ChartLabPreviewResponse = z.infer<typeof ChartLabPreviewResponseSchema>;
 
 export const ChartLabPreviewRequestSchema = z.object({
-  strategy_version_id: z.string(),
+  strategy_version_id: z.string().nullable().optional(),
+  manual_feature_refs: z.array(z.string()).default([]),
   symbol: z.string().min(1),
   timeframe: z.string().min(1),
   start: z.string(),

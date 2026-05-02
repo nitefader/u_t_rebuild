@@ -1,6 +1,7 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { WalkForwardApi } from "@/api/researchRuns";
+import { WalkForwardRunRequestSchema } from "@/api/schemas/researchRuns";
 import { Banner } from "@/components/ui/Banner";
 import { Button } from "@/components/ui/Button";
 
@@ -27,7 +28,7 @@ export function HypothesisBanner({
       if (!walkForwardHandoff) {
         throw new Error("no walk-forward handoff payload available");
       }
-      return WalkForwardApi.create(walkForwardHandoff as never);
+      return WalkForwardApi.create(WalkForwardRunRequestSchema.parse(walkForwardHandoff));
     },
     onSuccess: (run) => {
       queryClient.invalidateQueries({ queryKey: ["walk-forward", "runs"] });

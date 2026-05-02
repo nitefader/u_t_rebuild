@@ -79,6 +79,9 @@ export const SimLabApi = {
     const params = new URLSearchParams({
       strategy_id: req.strategy_id,
       strategy_version_id: req.strategy_version_id,
+      strategy_controls_version_id: req.strategy_controls_version_id,
+      execution_plan_version_id: req.execution_plan_version_id,
+      risk_plan_version_id: req.risk_plan_version_id,
       scenario_name: req.scenario_name,
       universe: req.universe.join(","),
       timeframe: req.timeframe ?? "5m",

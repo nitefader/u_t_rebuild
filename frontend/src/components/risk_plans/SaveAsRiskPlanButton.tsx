@@ -36,6 +36,12 @@ export interface SaveAsRiskPlanButtonProps {
   variant?: ButtonVariant;
   /** Disable when prefill cannot produce a sensible Risk Plan. */
   disabled?: boolean;
+  /** Required for research-derived sources; backend verifies the artifact exists. */
+  sourceRunId?: string | null;
+  /** Optional display/type hint stored in lineage. */
+  sourceEvidenceType?: string | null;
+  /** Additive lineage details such as recommended parameters and score. */
+  evidenceLineage?: Record<string, unknown>;
 }
 
 export function SaveAsRiskPlanButton({
@@ -46,6 +52,9 @@ export function SaveAsRiskPlanButton({
   label = "Save as Risk Plan",
   variant = "primary",
   disabled,
+  sourceRunId,
+  sourceEvidenceType,
+  evidenceLineage,
 }: SaveAsRiskPlanButtonProps): JSX.Element {
   const [open, setOpen] = useState(false);
   return (
@@ -64,6 +73,9 @@ export function SaveAsRiskPlanButton({
         onOpenChange={setOpen}
         mode="create"
         defaultSource={source}
+        defaultSourceRunId={sourceRunId ?? null}
+        defaultSourceEvidenceType={sourceEvidenceType ?? null}
+        defaultEvidenceLineage={evidenceLineage}
         prefill={prefill}
         defaultAiSummary={aiSummary ?? null}
         defaultAiWarnings={aiWarnings}

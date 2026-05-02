@@ -66,6 +66,10 @@ export interface RiskPlanDrawerProps {
    * RISK_PLAN_SIGNALPLAN_BACKTEST_BACKEND_CONTRACT §4.1.
    */
   defaultAiSummary?: string | null;
+  /** Required for research-derived Risk Plans. */
+  defaultSourceRunId?: string | null;
+  defaultSourceEvidenceType?: string | null;
+  defaultEvidenceLineage?: Record<string, unknown>;
   /**
    * Optional ephemeral warnings shown in the drawer for operator review.
    * Not persisted — operator must read and decide before saving.
@@ -82,6 +86,9 @@ export function RiskPlanDrawer({
   prefill,
   defaultSource,
   defaultAiSummary,
+  defaultSourceRunId,
+  defaultSourceEvidenceType,
+  defaultEvidenceLineage,
   defaultAiWarnings,
   onSaved,
 }: RiskPlanDrawerProps): JSX.Element {
@@ -144,13 +151,17 @@ export function RiskPlanDrawer({
 
   const create = useMutation({
     mutationFn: () => {
-      const aiAttached = Boolean(aiSummary);
+      const source = defaultSource ?? "manual";
+      const aiAttached = source === "ai_generated";
       const body: CreateRiskPlanRequest = {
         name: form.name.trim(),
         description: form.description.trim() || null,
         risk_score: form.risk_score,
         risk_tier: form.risk_tier,
-        source: aiAttached ? "ai_generated" : (defaultSource ?? "manual"),
+        source,
+        source_run_id: defaultSourceRunId ?? undefined,
+        source_evidence_type: defaultSourceEvidenceType ?? undefined,
+        evidence_lineage: defaultEvidenceLineage,
         ai_generated: aiAttached,
         ai_summary: aiSummary,
         config: configFromFormState(form),
