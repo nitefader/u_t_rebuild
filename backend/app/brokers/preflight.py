@@ -23,6 +23,19 @@ from .capabilities import (
     MarketSessionState,
 )
 
+# Time-in-force values that are explicitly unsupported during extended hours per
+# Alpaca documentation (Playbook §10). GTC is now permitted in addition to DAY.
+# Note: OPG and CLS are not modeled in our TimeInForce enum because Alpaca
+# reserves them for opening/closing auction orders which are not supported in
+# our current execution profile. IOC and FOK are explicitly rejected.
+_EH_UNSUPPORTED_TIF = {
+    TimeInForce.IOC,
+    TimeInForce.FOK,
+}
+
+# Time-in-force values that are valid for trailing stop orders per Alpaca docs.
+_TRAILING_STOP_VALID_TIF = {TimeInForce.DAY, TimeInForce.GTC}
+
 
 def build_broker_order_preflight_request(
     *,
@@ -31,7 +44,7 @@ def build_broker_order_preflight_request(
     broker_mode,
     asset_class: BrokerAssetClass = BrokerAssetClass.EQUITY,
 ) -> BrokerOrderPreflightRequest:
-        return BrokerOrderPreflightRequest(
+    return BrokerOrderPreflightRequest(
         account_id=order.account_id,
         provider=provider,
         broker_mode=broker_mode,
@@ -62,6 +75,7 @@ def build_market_rule_preflight_request(
     shortable: bool = True,
     easy_to_borrow: bool = True,
     halted: bool = False,
+    ask_price: float | None = None,
 ) -> MarketRulePreflightRequest:
     return MarketRulePreflightRequest(
         account_id=order.account_id,
@@ -83,6 +97,8 @@ def build_market_rule_preflight_request(
         easy_to_borrow=easy_to_borrow,
         halted=halted,
         buying_power=buying_power,
+        ask_price=ask_price,
+        limit_price=order.limit_price,
     )
 
 
@@ -119,6 +135,28 @@ class AlpacaBrokerPreflightService:
             return self._broker_result(request, violations, warnings)
 
         if request.operation is BrokerOperation.REPLACE:
+            # R4 (P1-2a): OTO replace is unsupported.
+            if request.order_class is BrokerOrderClass.OTO:
+                violations.append(
+                    self._broker_violation(
+                        BrokerViolationCode.OTO_REPLACE_UNSUPPORTED,
+                        "OTO order replace is not supported by Alpaca",
+                        field="order_class",
+                        operator_advisory="Cancel the OTO order and resubmit with the updated parameters.",
+                    )
+                )
+            # R5 (P1-2b): Notional replace is unsupported.
+            if request.notional is not None:
+                violations.append(
+                    self._broker_violation(
+                        BrokerViolationCode.NOTIONAL_REPLACE_UNSUPPORTED,
+                        "notional order replace is not supported by Alpaca",
+                        field="notional",
+                        operator_advisory="Cancel the notional order and resubmit with the updated notional.",
+                    )
+                )
+            if violations:
+                return self._broker_result(request, violations, warnings)
             violations.append(
                 self._broker_violation(
                     BrokerViolationCode.REPLACE_UNSUPPORTED,
@@ -132,6 +170,7 @@ class AlpacaBrokerPreflightService:
 
         violations.extend(self._asset_shape_violations(request))
         violations.extend(self._price_shape_violations(request))
+        violations.extend(self._trailing_stop_violations(request, warnings))
 
         return self._broker_result(request, violations, warnings)
 
@@ -146,19 +185,28 @@ class AlpacaBrokerPreflightService:
                     field="extended_hours",
                     operator_advisory="Disable extended hours for this asset class.",
                 )
+            # R3 (P1-1): EH requires limit order type; non-limit is rejected.
             if request.order_type is not OrderType.LIMIT:
                 yield self._broker_violation(
-                    BrokerViolationCode.EXTENDED_HOURS_UNSUPPORTED,
+                    BrokerViolationCode.EXTENDED_HOURS_ORDER_TYPE_UNSUPPORTED,
                     "Alpaca extended-hours equity orders must be limit orders",
                     field="order_type",
                     operator_advisory="Use a limit DAY order or submit during the regular session.",
                 )
-            if request.time_in_force is not TimeInForce.DAY:
+            # R3 (P1-1): EH allows DAY or GTC; IOC/FOK/OPG/CLS are rejected.
+            if request.time_in_force in _EH_UNSUPPORTED_TIF:
                 yield self._broker_violation(
-                    BrokerViolationCode.UNSUPPORTED_TIME_IN_FORCE,
-                    "Alpaca extended-hours equity orders must use DAY time in force",
+                    BrokerViolationCode.EXTENDED_HOURS_TIF_UNSUPPORTED,
+                    f"Alpaca extended-hours orders do not support time_in_force={request.time_in_force.value}",
                     field="time_in_force",
-                    operator_advisory="Set time_in_force to DAY for extended-hours equity orders.",
+                    operator_advisory="Use DAY or GTC for extended-hours equity orders.",
+                )
+            elif request.time_in_force not in {TimeInForce.DAY, TimeInForce.GTC}:
+                yield self._broker_violation(
+                    BrokerViolationCode.EXTENDED_HOURS_TIF_UNSUPPORTED,
+                    f"Alpaca extended-hours orders require time_in_force=day|gtc; got {request.time_in_force.value}",
+                    field="time_in_force",
+                    operator_advisory="Use DAY or GTC for extended-hours equity orders.",
                 )
 
         if request.asset_class is BrokerAssetClass.CRYPTO:
@@ -202,6 +250,19 @@ class AlpacaBrokerPreflightService:
                     operator_advisory="Set time_in_force to DAY for fractional equity orders.",
                 )
 
+        # R2 (P0-3b): Fractional + short combination is unsupported by Alpaca.
+        if (
+            not request.is_position_management
+            and request.side is CandidateSide.SHORT
+            and request.asset_class is BrokerAssetClass.FRACTIONAL_EQUITY
+        ):
+            yield self._broker_violation(
+                BrokerViolationCode.FRACTIONAL_SHORT_UNSUPPORTED,
+                "Alpaca does not support fractional short orders",
+                field="side",
+                operator_advisory="Use whole-share sizing for short orders.",
+            )
+
         if not request.is_position_management and request.side is CandidateSide.SHORT and request.asset_class in {
             BrokerAssetClass.CRYPTO,
             BrokerAssetClass.OPTION,
@@ -242,12 +303,17 @@ class AlpacaBrokerPreflightService:
                 field="runner_leg_count",
                 operator_advisory="Manage runner state internally and submit broker orders only when a runner action is due.",
             )
-        yield self._broker_violation(
-            BrokerViolationCode.UNSUPPORTED_ORDER_CLASS,
-            "broker-native Alpaca bracket/OCO/OTO submission is not enabled by the current adapter boundary",
-            field="order_class",
-            operator_advisory="Use internal SignalPlan leg allocation and ledger-managed legs as child orders.",
-        )
+        # M4 (P0-4): Remove blanket UNSUPPORTED_ORDER_CLASS block for valid native
+        # bracket/OCO shapes. Trailing stop is valid as a standalone (not as bracket
+        # stop_loss leg — that's caught by _trailing_stop_violations). BRACKET and OCO
+        # with valid leg counts and no runner pass through. OTO decomposes internally.
+        if request.order_class is BrokerOrderClass.OTO:
+            yield self._broker_violation(
+                BrokerViolationCode.UNSUPPORTED_ORDER_CLASS,
+                "OTO orders decompose into internal legs; broker-native OTO submission is not supported",
+                field="order_class",
+                operator_advisory="Use internal SignalPlan leg allocation and ledger-managed legs as child orders.",
+            )
 
     def _price_shape_violations(
         self, request: BrokerOrderPreflightRequest
@@ -266,6 +332,50 @@ class AlpacaBrokerPreflightService:
                 field="stop_price",
                 operator_advisory="Provide stop_price before submitting this order.",
             )
+
+        # R1 (P0-3a): Stop-distance must be at least $0.01 vs the base reference price.
+        # For stop-limit orders, base = limit_price and the check is |limit - stop| >= $0.01.
+        # For stop orders alone (no limit), the stop_price itself is the gating value and
+        # must be >= $0.01 (Alpaca Field already enforces > 0, but we enforce the threshold).
+        if request.stop_price is not None and request.limit_price is not None:
+            distance = abs(request.limit_price - request.stop_price)
+            if distance < 0.01:
+                yield self._broker_violation(
+                    BrokerViolationCode.STOP_DISTANCE_BELOW_THRESHOLD,
+                    f"stop distance {distance:.4f} is below the $0.01 minimum threshold",
+                    field="stop_price",
+                    operator_advisory=(
+                        "Ensure |limit_price - stop_price| >= $0.01 before submitting this order."
+                    ),
+                )
+        elif request.stop_price is not None and request.stop_price < 0.01:
+            yield self._broker_violation(
+                BrokerViolationCode.STOP_DISTANCE_BELOW_THRESHOLD,
+                f"stop_price {request.stop_price:.4f} is below the $0.01 minimum threshold",
+                field="stop_price",
+                operator_advisory="Provide stop_price >= $0.01 for stop orders.",
+            )
+
+    def _trailing_stop_violations(
+        self, request: BrokerOrderPreflightRequest, warnings: list[str]
+    ) -> Iterable[BrokerCapabilityViolation]:
+        """M5 (HARD.MD P1-3): Trailing stop preflight rules."""
+        if request.order_class is not BrokerOrderClass.TRAILING_STOP:
+            return
+
+        # TIF must be day or gtc.
+        if request.time_in_force not in _TRAILING_STOP_VALID_TIF:
+            yield self._broker_violation(
+                BrokerViolationCode.UNSUPPORTED_TIME_IN_FORCE,
+                f"trailing stop orders require time_in_force=day|gtc; got {request.time_in_force.value}",
+                field="time_in_force",
+                operator_advisory="Use DAY or GTC for trailing stop orders.",
+            )
+
+        # Advisory: trailing stop provides no extended-hours protection.
+        warnings.append(
+            "trailing_stop: no extended-hours protection — trailing stop orders are not active outside regular session hours"
+        )
 
     @staticmethod
     def _broker_violation(
@@ -373,6 +483,30 @@ class MarketRulePreflightService:
                         operator_advisory="Require operator review before shorting this symbol.",
                     )
                 )
+            # R7 (P1-4): Short-side BP estimate per Playbook §11.
+            # Formula: max(limit_price, 1.03 * ask_price) * quantity
+            # ask_price is required; if absent, skip (caller must provide it for
+            # meaningful short BP gating — documented in MarketRulePreflightRequest).
+            if request.ask_price is not None and request.quantity is not None:
+                ref_price = request.ask_price * 1.03
+                if request.limit_price is not None:
+                    ref_price = max(request.limit_price, ref_price)
+                required_bp = ref_price * request.quantity
+                if required_bp > request.buying_power:
+                    violations.append(
+                        self._market_violation(
+                            MarketRuleViolationCode.SHORT_BUYING_POWER_INSUFFICIENT,
+                            (
+                                f"short-side estimated margin requirement {required_bp:.2f} "
+                                f"exceeds available buying power {request.buying_power:.2f}"
+                            ),
+                            field="buying_power",
+                            operator_advisory=(
+                                "Short entry requires max(limit_price, 1.03 × ask_price) × qty buying power. "
+                                "Reduce size or add buying power before submitting."
+                            ),
+                        )
+                    )
 
         if (
             request.market_session is MarketSessionState.CLOSED

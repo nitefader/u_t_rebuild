@@ -68,7 +68,8 @@ def test_rejects_extended_hours_market_order_with_operator_advisory() -> None:
     )
 
     assert result.allowed is False
-    assert result.violations[0].code == BrokerViolationCode.EXTENDED_HOURS_UNSUPPORTED
+    # M3/P1-1: EH non-limit orders now use the specific EH order-type violation code.
+    assert result.violations[0].code == BrokerViolationCode.EXTENDED_HOURS_ORDER_TYPE_UNSUPPORTED
     assert result.violations[0].field == "order_type"
     assert result.operator_advisory is not None
     assert "limit DAY" in result.operator_advisory.operator_action
@@ -130,14 +131,19 @@ def test_rejects_option_stop_order_and_non_day_tif() -> None:
     assert {violation.field for violation in result.violations} == {"time_in_force", "order_type"}
 
 
-def test_rejects_broker_managed_bracket_until_internal_ledger_flow_exists() -> None:
+def test_allows_valid_broker_native_bracket_simple_shape() -> None:
+    # M4 (P0-4): The blanket UNSUPPORTED_ORDER_CLASS block is removed for BRACKET.
+    # A BRACKET order with 1 target + 1 stop and no runner passes preflight now.
     result = AlpacaBrokerPreflightService().preflight_order(
-        _order_request(order_class=BrokerOrderClass.BRACKET)
+        _order_request(
+            order_class=BrokerOrderClass.BRACKET,
+            native_multileg_requested=True,
+            target_leg_count=1,
+            stop_leg_count=1,
+        )
     )
 
-    assert result.allowed is False
-    assert result.violations[0].code == BrokerViolationCode.UNSUPPORTED_ORDER_CLASS
-    assert "ledger-managed legs" in (result.violations[0].operator_advisory or "")
+    assert result.allowed is True
 
 
 def test_rejects_broker_native_multitarget_bracket_with_specific_advisory() -> None:

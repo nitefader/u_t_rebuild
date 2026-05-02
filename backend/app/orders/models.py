@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from decimal import Decimal
 from enum import StrEnum
 from uuid import UUID
 
@@ -83,6 +84,11 @@ class InternalOrder(BaseModel):
     # computed *after* the entry fill by ProtectiveOrderPlacer.
     bracket_take_profit_limit_price: float | None = Field(default=None, gt=0)
     bracket_stop_loss_stop_price: float | None = Field(default=None, gt=0)
+    # Trailing stop fields (M5 — HARD.MD P1-3).
+    # Exactly one of trail_price XOR trail_percent must be set for TRAILING_STOP order_class.
+    # Both are None for all other order classes.
+    trail_price: Decimal | None = None
+    trail_percent: Decimal | None = None
     extended_hours: bool = False
     intent: InternalOrderIntent
     status: InternalOrderStatus
@@ -99,6 +105,13 @@ class InternalOrder(BaseModel):
     def validate_filled_quantity(self) -> "InternalOrder":
         if self.filled_quantity > self.quantity:
             raise ValueError("filled_quantity cannot exceed quantity")
+        # Trailing stop XOR constraint: trail_price and trail_percent are mutually exclusive.
+        if self.trail_price is not None and self.trail_percent is not None:
+            raise ValueError("trail_price and trail_percent are mutually exclusive; set exactly one for trailing stop orders")
+        # If order_class is trailing_stop, exactly one trail field must be set.
+        if self.order_class == "trailing_stop":
+            if self.trail_price is None and self.trail_percent is None:
+                raise ValueError("trailing_stop order_class requires exactly one of trail_price or trail_percent")
         if self.origin == OrderOrigin.SIGNAL_PLAN:
             required = {
                 "deployment_id": self.deployment_id,

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from collections.abc import Mapping
 from datetime import datetime
 from decimal import Decimal, ROUND_HALF_UP
@@ -140,11 +141,28 @@ class AlpacaBrokerAdapter:
         secret_key: str | None = None,
         trading_client: Any | None = None,
         base_url: str | None = None,
+        allow_live: bool = False,
     ) -> None:
         if base_url is not None:
             raise AlpacaBrokerError("custom_base_url_rejected", "Alpaca endpoint is derived from broker account mode")
         if mode not in (TradingMode.BROKER_PAPER, TradingMode.BROKER_LIVE):
             raise AlpacaBrokerError("unsupported_broker_mode", f"Unsupported Alpaca broker mode: {mode}")
+        # M10 live-mode init guard (HARD.MD P2 tail): live trading requires
+        # BOTH the env var TRADING_LIVE_ENABLED=true (system-wide) AND the
+        # per-Account allow_live flag to be true. Both gates are operator-
+        # owned. Default fail-closed: paper-only is always safe.
+        if mode == TradingMode.BROKER_LIVE:
+            env_live = os.environ.get("TRADING_LIVE_ENABLED", "").strip().lower() in {"1", "true", "yes", "on"}
+            if not env_live:
+                raise AlpacaBrokerError(
+                    "live_mode_env_disabled",
+                    "AlpacaBrokerAdapter cannot construct in BROKER_LIVE mode without TRADING_LIVE_ENABLED=true",
+                )
+            if not allow_live:
+                raise AlpacaBrokerError(
+                    "live_mode_account_disabled",
+                    "AlpacaBrokerAdapter requires per-Account allow_live=True for BROKER_LIVE",
+                )
         self.mode = mode
         self.base_url = self.endpoint_for_mode(mode)
         self.capabilities = AlpacaBrokerCapabilities()

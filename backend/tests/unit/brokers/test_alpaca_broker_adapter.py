@@ -401,8 +401,13 @@ def test_adapter_builds_trading_client_with_explicit_credentials(monkeypatch) ->
             self.kwargs = kwargs
 
     monkeypatch.setattr(alpaca_module, "TradingClient", FakeTradingClientClass)
+    # M10 live-mode init guard: enable env + per-Account flag for the
+    # BROKER_LIVE construction.
+    monkeypatch.setenv("TRADING_LIVE_ENABLED", "true")
     paper = AlpacaBrokerAdapter(mode=TradingMode.BROKER_PAPER, api_key="K", secret_key="S")
-    live = AlpacaBrokerAdapter(mode=TradingMode.BROKER_LIVE, api_key="K", secret_key="S")
+    live = AlpacaBrokerAdapter(
+        mode=TradingMode.BROKER_LIVE, api_key="K", secret_key="S", allow_live=True
+    )
 
     assert paper._client.api_key == "K"
     assert paper._client.secret_key == "S"
@@ -410,6 +415,52 @@ def test_adapter_builds_trading_client_with_explicit_credentials(monkeypatch) ->
     assert paper.base_url == "https://paper-api.alpaca.markets"
     assert live._client.kwargs["paper"] is False
     assert live.base_url == "https://api.alpaca.markets"
+
+
+def test_adapter_rejects_broker_live_without_env_gate(monkeypatch) -> None:
+    """M10: BROKER_LIVE without TRADING_LIVE_ENABLED env raises."""
+    monkeypatch.delenv("TRADING_LIVE_ENABLED", raising=False)
+    with pytest.raises(AlpacaBrokerError) as excinfo:
+        AlpacaBrokerAdapter(
+            mode=TradingMode.BROKER_LIVE,
+            api_key="K",
+            secret_key="S",
+            allow_live=True,
+        )
+    assert excinfo.value.details.code == "live_mode_env_disabled"
+
+
+def test_adapter_rejects_broker_live_without_per_account_flag(monkeypatch) -> None:
+    """M10: BROKER_LIVE with env enabled but allow_live=False raises."""
+    monkeypatch.setenv("TRADING_LIVE_ENABLED", "true")
+    with pytest.raises(AlpacaBrokerError) as excinfo:
+        AlpacaBrokerAdapter(
+            mode=TradingMode.BROKER_LIVE,
+            api_key="K",
+            secret_key="S",
+            allow_live=False,
+        )
+    assert excinfo.value.details.code == "live_mode_account_disabled"
+
+
+def test_adapter_paper_unaffected_by_live_gates(monkeypatch) -> None:
+    """M10: BROKER_PAPER bypasses live-mode gates entirely."""
+    monkeypatch.delenv("TRADING_LIVE_ENABLED", raising=False)
+
+    class FakeTradingClientClass:
+        def __init__(self, api_key, secret_key, **kwargs) -> None:
+            self.api_key = api_key
+            self.secret_key = secret_key
+            self.kwargs = kwargs
+
+    monkeypatch.setattr(alpaca_module, "TradingClient", FakeTradingClientClass)
+    paper = AlpacaBrokerAdapter(
+        mode=TradingMode.BROKER_PAPER,
+        api_key="K",
+        secret_key="S",
+        allow_live=False,  # explicitly false; paper doesn't care
+    )
+    assert paper.mode == TradingMode.BROKER_PAPER
 
 
 def test_adapter_requires_explicit_credentials() -> None:

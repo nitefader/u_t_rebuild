@@ -37,12 +37,23 @@ class BrokerViolationCode(StrEnum):
     UNSUPPORTED_ORDER_CLASS = "unsupported_order_class"
     BROKER_NATIVE_MULTI_LEG_UNSUPPORTED = "broker_native_multi_leg_unsupported"
     EXTENDED_HOURS_UNSUPPORTED = "extended_hours_unsupported"
+    EXTENDED_HOURS_TIF_UNSUPPORTED = "extended_hours_tif_unsupported"
+    EXTENDED_HOURS_ORDER_TYPE_UNSUPPORTED = "extended_hours_order_type_unsupported"
     FRACTIONAL_UNSUPPORTED = "fractional_unsupported"
+    FRACTIONAL_SHORT_UNSUPPORTED = "fractional_short_unsupported"
     NOTIONAL_AND_QUANTITY_BOTH_SET = "notional_and_quantity_both_set"
     NOTIONAL_OR_QUANTITY_REQUIRED = "notional_or_quantity_required"
+    QTY_NOTIONAL_CONFLICT = "qty_notional_conflict"
+    QTY_NOTIONAL_NEITHER = "qty_notional_neither"
     SHORTING_UNSUPPORTED = "shorting_unsupported"
     REPLACE_UNSUPPORTED = "replace_unsupported"
+    OTO_REPLACE_UNSUPPORTED = "oto_replace_unsupported"
+    NOTIONAL_REPLACE_UNSUPPORTED = "notional_replace_unsupported"
     CANCEL_UNSUPPORTED = "cancel_unsupported"
+    STOP_DISTANCE_BELOW_THRESHOLD = "stop_distance_below_threshold"
+    TRAILING_STOP_PRICE_AND_PERCENT_BOTH_SET = "trailing_stop_price_and_percent_both_set"
+    TRAILING_STOP_PRICE_OR_PERCENT_REQUIRED = "trailing_stop_price_or_percent_required"
+    TRAILING_STOP_AS_BRACKET_STOP_LOSS = "trailing_stop_as_bracket_stop_loss"
 
 
 class BrokerErrorFamily(StrEnum):
@@ -170,6 +181,7 @@ class MarketRuleViolationCode(StrEnum):
     SHORT_NOT_ALLOWED = "short_not_allowed"
     NOT_EASY_TO_BORROW = "not_easy_to_borrow"
     BUYING_POWER_INSUFFICIENT = "buying_power_insufficient"
+    SHORT_BUYING_POWER_INSUFFICIENT = "short_buying_power_insufficient"
     INVALID_NOTIONAL_QUANTITY_COMBO = "invalid_notional_quantity_combo"
     UNSUPPORTED_ASSET_CLASS_FOR_MODE = "unsupported_asset_class_for_mode"
 
@@ -202,6 +214,11 @@ class MarketRulePreflightRequest(DomainSchema):
     easy_to_borrow: bool
     halted: bool
     buying_power: float = Field(ge=0)
+    # ask_price is required for short-side buying-power estimation per Playbook §11.
+    # When provided and side=SHORT, the service estimates required capital as
+    # max(limit_price, 1.03 * ask_price) * quantity and checks against buying_power.
+    ask_price: float | None = Field(default=None, gt=0)
+    limit_price: float | None = Field(default=None, gt=0)
 
 
 class MarketRulePreflightResult(DomainSchema):
