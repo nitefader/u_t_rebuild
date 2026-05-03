@@ -42,6 +42,14 @@ def get_strategy_service() -> StrategyService:
     return create_strategy_service_from_environment()
 
 
+def get_strategy_v4_service() -> object:
+    from backend.app.strategies_v4.runtime_service import (
+        create_strategy_v4_service_from_environment,
+    )
+
+    return create_strategy_v4_service_from_environment()
+
+
 def _dependency(default: object) -> object:
     return Depends(default)
 
@@ -49,16 +57,17 @@ def _dependency(default: object) -> object:
 router = APIRouter(prefix="/api/v1/strategies", tags=["strategies"])
 
 ServiceDep = Annotated[Any, _dependency(get_strategy_service)]
+StrategyV4ServiceDep = Annotated[Any, _dependency(get_strategy_v4_service)]
 
 
-def get_strategy_composer_service(service: ServiceDep) -> StrategyComposerService:
+def get_strategy_composer_service(strategy_v4_service: StrategyV4ServiceDep) -> StrategyComposerService:
     from backend.app.config.runtime_paths import get_runtime_db_path
     from backend.app.execution_plans import ExecutionPlanRepository
     from backend.app.strategy_controls import StrategyControlsRepository
 
     db_path = get_runtime_db_path()
     return StrategyComposerService(
-        strategy_service=service,
+        strategy_v4_service=strategy_v4_service,
         strategy_controls_repository=StrategyControlsRepository(db_path),
         execution_plan_repository=ExecutionPlanRepository(db_path),
     )

@@ -9,6 +9,7 @@ import pytest
 from backend.app.domain import CandidateSide, ConditionNode, ConditionOperator, IntentType, SignalRule, StrategyVersion
 from backend.app.domain.execution_style import ExecutionStylePresetKind
 from backend.app.domain.strategy import LogicalExitRuleKind
+from backend.app.domain.strategy_v4 import StrategyVersionV4
 from backend.app.strategy_composer import (
     AIComposerRequest,
     ConditionParseRequest,
@@ -17,8 +18,14 @@ from backend.app.strategy_composer import (
     StrategyComposerService,
     StrategyDraftSaveRequest,
 )
-from backend.app.strategies import StrategyService
-from backend.app.strategies.persistence import StrategyRepository
+from backend.app.strategies_v4.persistence import StrategyV4Repository
+from backend.app.strategies_v4.service import StrategyV4Service
+
+
+def _composer(tmp_path: Path) -> StrategyComposerService:
+    return StrategyComposerService(
+        strategy_v4_service=StrategyV4Service(repository=StrategyV4Repository(tmp_path / "ut.db"))
+    )
 
 
 def test_unsupported_feature_is_rejected() -> None:
@@ -191,13 +198,14 @@ def test_request_rejects_notes_field() -> None:
 
 
 def test_save_draft_persists_strategy_version_and_snapshots_component_versions(tmp_path: Path) -> None:
-    strategy_service = StrategyService(repository=StrategyRepository(tmp_path / "ut.db"))
-    composer = StrategyComposerService(strategy_service=strategy_service)
-    draft = composer.compose(AIComposerRequest(prompt="green bar entry with 5 minute exit"))
+    composer = _composer(tmp_path)
+    draft = composer.compose(AIComposerRequest(prompt="green bar entry exit after 5 minutes"))
 
     response = composer.save_draft(StrategyDraftSaveRequest(draft=draft))
 
-    assert response.strategy_version.status == "draft"
+    assert isinstance(response.strategy_version, StrategyVersionV4)
+    assert response.strategy_version.version == 1
+    assert response.strategy_version.validation_status.valid is True
     assert response.deployment_created is False
     assert response.broker_action_created is False
     assert response.live_readiness_claimed is False
@@ -208,14 +216,13 @@ def test_save_draft_persists_strategy_version_and_snapshots_component_versions(t
     assert response.component_version_snapshots.execution_style.bracket.enabled is False
     assert response.component_version_snapshots.launch_plans.backtest.route == "/api/v1/research/jobs/backtest"
     assert response.component_version_snapshots.launch_plans.backtest.ready is False
-    assert response.component_version_snapshots.launch_plans.chart_lab.ready is True
+    assert not hasattr(response.component_version_snapshots.launch_plans, "chart_lab")
     assert response.component_version_snapshots.launch_plans.walk_forward.route == "/api/v1/research/jobs/walk-forward"
 
 
 def test_save_draft_persists_normalized_feature_refs(tmp_path: Path) -> None:
-    strategy_service = StrategyService(repository=StrategyRepository(tmp_path / "ut.db"))
-    composer = StrategyComposerService(strategy_service=strategy_service)
-    draft = composer.compose(AIComposerRequest(prompt="green bar entry"))
+    composer = _composer(tmp_path)
+    draft = composer.compose(AIComposerRequest(prompt="green bar entry exit after 5 minutes"))
     bare_strategy = draft.strategy.model_copy(
         update={
             "feature_refs": ["close", "open"],
@@ -236,23 +243,18 @@ def test_save_draft_persists_normalized_feature_refs(tmp_path: Path) -> None:
 
     response = composer.save_draft(StrategyDraftSaveRequest(draft=bare_draft))
 
-    saved = response.strategy_version.payload
-    assert tuple(saved.feature_refs) == ("5m.close[0]", "5m.open[0]")
-    condition = saved.entry_rules[0].condition
-    assert isinstance(condition, ConditionNode)
-    assert condition.left_feature == "5m.close[0]"
-    assert condition.right_feature == "5m.open[0]"
+    saved = response.strategy_version
+    assert saved.entries.long is not None
+    assert saved.entries.long.expression_text == "5m.close > 5m.open"
+    assert saved.feature_requirements == ("5m.close", "5m.open")
 
 
-def test_ai_draft_generates_chart_backtest_and_walk_forward_launch_plans() -> None:
+def test_ai_draft_generates_backtest_and_walk_forward_launch_plans() -> None:
     draft = StrategyComposerService().compose(
         AIComposerRequest(prompt="green bar entry with time exit", initial_capital=50_000)
     )
 
-    assert draft.launch_plans.chart_lab.surface == "chart_lab"
-    assert draft.launch_plans.chart_lab.method == "GET"
-    # chart_lab uses the internal placeholder symbol, not operator-supplied ones
-    assert draft.launch_plans.chart_lab.request["symbol"] == "SPY"
+    assert "chart_lab" not in draft.launch_plans.model_dump(mode="json")
     # backtest request carries the internal placeholder symbol
     assert draft.launch_plans.backtest.request["request"]["symbols"] == ["SPY"]
     assert draft.launch_plans.backtest.request["request"]["risk_plan_version_id"] is None
@@ -279,9 +281,8 @@ def test_strategy_composer_has_no_broker_runtime_or_deployment_boundary_imports(
 
 
 def test_ai_draft_with_unsupported_manual_feature_cannot_be_saved(tmp_path: Path) -> None:
-    strategy_service = StrategyService(repository=StrategyRepository(tmp_path / "ut.db"))
-    composer = StrategyComposerService(strategy_service=strategy_service)
-    draft = composer.compose(AIComposerRequest(prompt="valid draft"))
+    composer = _composer(tmp_path)
+    draft = composer.compose(AIComposerRequest(prompt="valid draft exit after 5 minutes"))
     broken_strategy = StrategyVersion(
         id=draft.strategy.id,
         strategy_id=draft.strategy.strategy_id,
@@ -315,8 +316,7 @@ def test_invalid_ai_prompt_draft_cannot_be_saved_even_if_placeholder_strategy_is
     """Prompts that mention features the registry doesn't implement (MACD,
     Bollinger, …) still pre-block save with an unsupported-term validation
     error — the registry is the source of truth, not the prompt."""
-    strategy_service = StrategyService(repository=StrategyRepository(tmp_path / "ut.db"))
-    composer = StrategyComposerService(strategy_service=strategy_service)
+    composer = _composer(tmp_path)
     draft = composer.compose(
         AIComposerRequest(prompt="MACD long entry with bollinger band exit")
     )
@@ -441,9 +441,8 @@ def test_save_draft_blocks_on_short_enabled_no_short_entry(tmp_path: Path) -> No
     from backend.app.domain.strategy_controls import AllowedDirections, StrategyControlsVersion
     from uuid import uuid4
 
-    strategy_service = StrategyService(repository=StrategyRepository(tmp_path / "ut.db"))
-    composer = StrategyComposerService(strategy_service=strategy_service)
-    draft = composer.compose(AIComposerRequest(prompt="green bar entry"))
+    composer = _composer(tmp_path)
+    draft = composer.compose(AIComposerRequest(prompt="green bar entry exit after 5 minutes"))
 
     # Patch controls to require both directions, but keep only the long entry rule
     # that the AI generated (it never adds short entries).
@@ -467,9 +466,8 @@ def test_save_draft_blocks_on_htf_confirmation_no_htf_feature(tmp_path: Path) ->
     from backend.app.domain.strategy_controls import StrategyControlsVersion
     from uuid import uuid4
 
-    strategy_service = StrategyService(repository=StrategyRepository(tmp_path / "ut.db"))
-    composer = StrategyComposerService(strategy_service=strategy_service)
-    draft = composer.compose(AIComposerRequest(prompt="green bar entry with 5 minute exit"))
+    composer = _composer(tmp_path)
+    draft = composer.compose(AIComposerRequest(prompt="green bar entry exit after 5 minutes"))
 
     # Ensure strategy only has 5m refs (the default composer output).
     # Patch controls to demand HTF confirmation.
@@ -499,9 +497,8 @@ def test_save_draft_passes_when_htf_feature_present(tmp_path: Path) -> None:
     from backend.app.domain.strategy_controls import StrategyControlsVersion
     from uuid import uuid4
 
-    strategy_service = StrategyService(repository=StrategyRepository(tmp_path / "ut.db"))
-    composer = StrategyComposerService(strategy_service=strategy_service)
-    draft = composer.compose(AIComposerRequest(prompt="green bar entry with 5 minute exit"))
+    composer = _composer(tmp_path)
+    draft = composer.compose(AIComposerRequest(prompt="green bar entry exit after 5 minutes"))
 
     patched_controls = StrategyControlsVersion(
         id=draft.strategy_controls.id if draft.strategy_controls else uuid4(),
@@ -521,4 +518,4 @@ def test_save_draft_passes_when_htf_feature_present(tmp_path: Path) -> None:
 
     # Should not raise — HTF feature is present.
     response = composer.save_draft(StrategyDraftSaveRequest(draft=patched_draft))
-    assert response.strategy_version.status == "draft"
+    assert response.strategy_version.validation_status.valid is True

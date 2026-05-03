@@ -8,13 +8,17 @@ from fastapi.testclient import TestClient
 from backend.app.api.routes import strategies
 from backend.app.strategies import StrategyService
 from backend.app.strategies.persistence import StrategyRepository
+from backend.app.strategies_v4.persistence import StrategyV4Repository
+from backend.app.strategies_v4.service import StrategyV4Service
 
 
 def _client(tmp_path: Path) -> TestClient:
     service = StrategyService(repository=StrategyRepository(tmp_path / "ut.db"))
+    v4_service = StrategyV4Service(repository=StrategyV4Repository(tmp_path / "ut_v4.db"))
     app = FastAPI()
     app.include_router(strategies.router)
     app.dependency_overrides[strategies.get_strategy_service] = lambda: service
+    app.dependency_overrides[strategies.get_strategy_v4_service] = lambda: v4_service
     return TestClient(app)
 
 
@@ -62,7 +66,7 @@ def test_strategy_builder_feature_and_composer_routes(tmp_path: Path) -> None:
     assert "suggested_risk_plan" not in body
     assert "execution_style" in body
     assert "signal_plan_shape" in body
-    assert body["launch_plans"]["chart_lab"]["route"] == "/api/v1/chart-lab/stream"
+    assert "chart_lab" not in body["launch_plans"]
     assert body["launch_plans"]["backtest"]["route"] == "/api/v1/research/jobs/backtest"
     assert body["launch_plans"]["backtest"]["ready"] is False
     assert body["launch_plans"]["walk_forward"]["route"] == "/api/v1/research/jobs/walk-forward"
