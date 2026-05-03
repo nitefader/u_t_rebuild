@@ -6,8 +6,6 @@ from pathlib import Path
 from uuid import UUID, uuid4
 
 import pytest
-
-from backend.app.decision import PositionContext, SignalEngine
 from backend.app.deployments import (
     DeploymentLifecycleStatus,
     DeploymentService,
@@ -15,14 +13,9 @@ from backend.app.deployments import (
 )
 from backend.app.deployments.persistence import DeploymentRepository
 from backend.app.domain import (
-    CandidateSide,
-    IntentType,
-    LogicalExitRule,
-    LogicalExitRuleKind,
-    SignalRule,
     StrategyVersion,
 )
-from backend.app.features import FeatureSnapshot, NormalizedBar
+from backend.app.features import NormalizedBar
 from backend.app.screener.domain import (
     ScreenerCriterion,
     ScreenerCriterionOperator,
@@ -504,44 +497,3 @@ def test_step10_backend_flow_keeps_screener_watchlist_deployment_and_exit_bounda
 
     with pytest.raises(RuntimeError, match="active deployments reference"):
         watchlists.archive_watchlist(dynamic_watchlist.watchlist_id)
-
-    exit_strategy = StrategyVersion(
-        id=strategy_version_id,
-        strategy_id=uuid4(),
-        version=1,
-        name="Exit remains position scoped",
-        exit_rules=[
-            SignalRule(
-                name="exit_after_one_bar",
-                side=CandidateSide.LONG,
-                intent_type=IntentType.EXIT,
-                logical_exit_rule=LogicalExitRule(
-                    kind=LogicalExitRuleKind.BARS_SINCE_ENTRY,
-                    bars=1,
-                ),
-            )
-        ],
-    )
-    snapshot = FeatureSnapshot(
-        symbol="AAPL",
-        timeframe="1d",
-        timestamp=datetime(2026, 1, 2, tzinfo=timezone.utc),
-        values={},
-    )
-    engine = SignalEngine()
-    assert engine.evaluate(exit_strategy, snapshot).intents == ()
-    with_position = engine.evaluate(
-        exit_strategy,
-        snapshot,
-        position_contexts={
-            "AAPL": PositionContext(
-                has_position=True,
-                entry_bar_index=1,
-                current_bar_index=3,
-                entry_timestamp=datetime(2026, 1, 1, tzinfo=timezone.utc),
-                bar_timestamp=snapshot.timestamp,
-            )
-        },
-    )
-    assert len(with_position.intents) == 1
-    assert with_position.intents[0].intent_type == IntentType.EXIT

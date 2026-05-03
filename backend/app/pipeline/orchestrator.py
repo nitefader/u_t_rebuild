@@ -22,13 +22,7 @@ from backend.app.brokers import (
 )
 from backend.app.control_plane.service import ControlPlane
 from backend.app.composition import StrategyArtifactResolver
-from backend.app.decision import (
-    PositionContext,
-    SignalEngine,
-    SignalEvaluation,
-    SignalEvaluationError,
-    SignalPlanBuilder,
-)
+from backend.app.decision import SignalPlanBuilder
 from backend.app.decision.ports import PositionSignalContext, SignalEvaluationContext, SignalSourcePort
 from backend.app.decision.signal_plan_common import parse_post_fill_pct
 from backend.app.deployments.models import Deployment
@@ -143,19 +137,6 @@ class DeploymentPositionManager:
     def is_active(position: BrokerPositionSnapshot) -> bool:
         return position.qty != 0 and (position.status or "").lower() not in {"closed", "flat"}
 
-
-def _to_port_position_context(legacy: PositionContext) -> PositionSignalContext:
-    return PositionSignalContext(
-        has_position=legacy.has_position,
-        entry_timestamp=legacy.entry_timestamp,
-        entry_bar_index=legacy.entry_bar_index,
-        current_bar_index=legacy.current_bar_index,
-        bar_timestamp=legacy.bar_timestamp,
-        session_open_et=legacy.session_open_et,
-        session_close_et=legacy.session_close_et,
-    )
-
-
 class RuntimeOrchestrator:
     _NATIVE_BRACKET_REFERENCE_MAX_AGE_SECONDS = 5 * 60
 
@@ -168,7 +149,6 @@ class RuntimeOrchestrator:
         components: ResolvedDeploymentComponents,
         initial_cash: float = 100_000,
         feature_engine: IncrementalFeatureEngine | None = None,
-        signal_engine: SignalEngine | None = None,
         controls_gate: StrategyControlsGate | None = None,
         signal_plan_builder: SignalPlanBuilder | None = None,
         risk_resolver: RiskResolver | None = None,
@@ -197,7 +177,6 @@ class RuntimeOrchestrator:
         daily_state_aggregator: object | None = None,
         daily_states: "dict[UUID, object] | None" = None,
         strategy_artifact_resolver: StrategyArtifactResolver | None = None,
-        v4_expression_loader: object | None = None,
     ) -> None:
         self._account_id = account_id
         self._account_ids = tuple(dict.fromkeys(account_ids or (account_id,)))
@@ -217,7 +196,6 @@ class RuntimeOrchestrator:
             raise ValueError("v4 components require a strategy_artifact_resolver")
         self._initial_cash = initial_cash
         self._feature_engine = feature_engine or IncrementalFeatureEngine()
-        self._signal_engine = signal_engine or SignalEngine()
         self._controls_gate = controls_gate or StrategyControlsGate()
         self._signal_plan_builder = signal_plan_builder or SignalPlanBuilder()
         self._risk_resolver = risk_resolver or RiskResolver()
@@ -329,8 +307,6 @@ class RuntimeOrchestrator:
         self._post_fill_parent_locks: dict[UUID, threading.Lock] = {}
         self._post_fill_parent_locks_guard = threading.Lock()
         self._strategy_artifact_resolver = strategy_artifact_resolver
-        # unused after S12.6b; remove at S12.8.
-        self._v4_expression_loader = v4_expression_loader
 
     @property
     def order_manager(self) -> OrderManager:
@@ -458,11 +434,11 @@ class RuntimeOrchestrator:
                 )
             # V4 logical exits use the same position-management spine once
             # translated from v4 templates to typed logical-exit rules.
-            signal_result = self._evaluate_v4_logical_exit_intents(
+            logical_exit_intents = self._evaluate_v4_logical_exit_intents(
                 normalized_bar=normalized_bar,
                 runtime_snapshot=runtime_snapshot,
             )
-            for candidate in signal_result.intents:
+            for candidate in logical_exit_intents:
                 candidate_intents.append(candidate)
                 self._event_log.append(
                     timestamp=candidate.timestamp,
@@ -472,7 +448,7 @@ class RuntimeOrchestrator:
                     details={"signal_name": candidate.signal_name},
                 )
             self._process_position_management_candidates(
-                signal_result=signal_result,
+                candidate_intents=logical_exit_intents,
                 normalized_bar=normalized_bar,
                 signal_plans=signal_plans,
                 account_evaluations=account_evaluations,
@@ -481,75 +457,6 @@ class RuntimeOrchestrator:
                 broker_results=broker_results,
                 ledger_updates=ledger_updates,
             )
-        else:
-            try:
-                signal_result = self._signal_engine.evaluate(
-                    self._components.strategy,
-                    runtime_snapshot,
-                    position_contexts=self._position_contexts(bar=normalized_bar),
-                )
-            except SignalEvaluationError as exc:
-                self._event_log.append(
-                    timestamp=normalized_bar.timestamp,
-                    event_type=PipelineEventType.SIGNAL_BLOCKED,
-                    symbol=normalized_bar.symbol,
-                    message=str(exc),
-                )
-                return self._result()
-
-            for candidate in signal_result.intents:
-                candidate_intents.append(candidate)
-                self._event_log.append(
-                    timestamp=candidate.timestamp,
-                    event_type=PipelineEventType.CANDIDATE_TRADE_INTENT,
-                    symbol=candidate.symbol,
-                    message="candidate trade intent emitted",
-                    details={"signal_name": candidate.signal_name},
-                )
-                if candidate.intent_type != IntentType.ENTRY or candidate.symbol.upper() not in self._entry_symbols:
-                    continue
-                strategy_id, strategy_version_id = self._active_strategy_ids()
-                signal_plan = self._signal_plan_builder.build_from_candidate(
-                    candidate=candidate,
-                    deployment_id=self._deployment.deployment_id,
-                    strategy_id=strategy_id,
-                    strategy_version_id=strategy_version_id,
-                    watchlist_snapshot_id=self._components.universe.id,
-                    execution_plan=self._components.execution_style,
-                )
-                if signal_plan.entry is not None:
-                    signal_plan = signal_plan.model_copy(
-                        update={
-                            "entry": signal_plan.entry.model_copy(
-                                update={
-                                    "order_type": self._components.execution_style.entry_order_type,
-                                    "time_in_force_preference": self._components.execution_style.time_in_force,
-                                }
-                            )
-                        }
-                    )
-                signal_plans.append(signal_plan)
-                self._process_entry_signal_plan_for_accounts(
-                    signal_plan=signal_plan,
-                    normalized_bar=normalized_bar,
-                    stop_candidate=candidate.stop_candidate,
-                    account_evaluations=account_evaluations,
-                    governor_decisions=governor_decisions,
-                    orders=orders,
-                    broker_results=broker_results,
-                    ledger_updates=ledger_updates,
-                )
-            self._process_position_management_candidates(
-                signal_result=signal_result,
-                normalized_bar=normalized_bar,
-                signal_plans=signal_plans,
-                account_evaluations=account_evaluations,
-                governor_decisions=governor_decisions,
-                orders=orders,
-                broker_results=broker_results,
-                ledger_updates=ledger_updates,
-            )
-
         return self._result(
             candidate_intents=candidate_intents,
             signal_plans=signal_plans,
@@ -686,7 +593,7 @@ class RuntimeOrchestrator:
     def _process_position_management_candidates(
         self,
         *,
-        signal_result: SignalEvaluation,
+        candidate_intents: tuple[CandidateTradeIntent, ...],
         normalized_bar: NormalizedBar,
         signal_plans: list[SignalPlan],
         account_evaluations: list[AccountSignalPlanEvaluation],
@@ -695,7 +602,7 @@ class RuntimeOrchestrator:
         broker_results: list[BrokerOrderResult],
         ledger_updates: list[InternalOrder],
     ) -> None:
-        exit_candidates = tuple(candidate for candidate in signal_result.intents if candidate.intent_type == IntentType.EXIT)
+        exit_candidates = tuple(candidate for candidate in candidate_intents if candidate.intent_type == IntentType.EXIT)
         if not exit_candidates:
             return
 
@@ -1873,16 +1780,16 @@ class RuntimeOrchestrator:
             projected_state=decision.projected_state,
         )
 
-    def _position_contexts(self, *, bar: NormalizedBar) -> dict[str, PositionContext]:
-        """Build per-symbol PositionContext for SignalEngine exit-rule evaluation.
+    def _position_contexts(self, *, bar: NormalizedBar) -> dict[str, PositionSignalContext]:
+        """Build per-symbol PositionSignalContext for logical-exit evaluation.
 
         Doctrine: ``logical_exit`` is the only exit intent. Time / bar / session
-        / hybrid exit rules need this context; pure feature-condition exits
-        only need ``has_position`` so the engine knows there's something to
-        exit.
+        / hybrid exit rules need this context; pure feature-condition exits only
+        need ``has_position`` so the port source knows there is something to exit.
         """
         positions = self._positions_for_deployment()
-        contexts: dict[str, PositionContext] = {}
+        contexts: dict[str, PositionSignalContext] = {}
+        session_defaults = PositionSignalContext()
         for position in positions:
             if not DeploymentPositionManager.is_active(position):
                 continue
@@ -1898,16 +1805,25 @@ class RuntimeOrchestrator:
                 bars_since_entry = min(current.current_bar_index, bars_since_entry)
             if current is not None and current.current_bar_index is not None and bars_since_entry is None:
                 bars_since_entry = current.current_bar_index
-            contexts[symbol] = PositionContext(
+            contexts[symbol] = PositionSignalContext(
                 has_position=True,
                 entry_timestamp=opened_at,
                 entry_bar_index=0 if bars_since_entry is not None else None,
                 current_bar_index=bars_since_entry,
                 bar_timestamp=bar.timestamp,
+                session_open_et=session_defaults.session_open_et,
+                session_close_et=session_defaults.session_close_et,
             )
-        # Always supply a PositionContext for the bar's symbol so the engine
-        # can short-circuit "no position" cleanly when no live position exists.
-        contexts.setdefault(bar.symbol.upper(), PositionContext(bar_timestamp=bar.timestamp))
+        # Always supply a context for the bar's symbol so the source can
+        # short-circuit no-position exits cleanly.
+        contexts.setdefault(
+            bar.symbol.upper(),
+            PositionSignalContext(
+                bar_timestamp=bar.timestamp,
+                session_open_et=session_defaults.session_open_et,
+                session_close_et=session_defaults.session_close_et,
+            ),
+        )
         return contexts
 
     def _position_entry_timestamp(self, position: BrokerPositionSnapshot) -> datetime | None:
@@ -2042,14 +1958,14 @@ class RuntimeOrchestrator:
         *,
         normalized_bar: NormalizedBar,
         runtime_snapshot: FeatureSnapshot,
-    ) -> SignalEvaluation:
+    ) -> tuple[CandidateTradeIntent, ...]:
         sv4 = self._components.strategy_version_v4
         if sv4 is None:
-            return SignalEvaluation(intents=())
+            return ()
 
         active_sides = self._active_position_sides_for_symbol(normalized_bar.symbol)
         if not active_sides:
-            return SignalEvaluation(intents=())
+            return ()
 
         sides_to_evaluate = tuple(
             side_name
@@ -2058,7 +1974,7 @@ class RuntimeOrchestrator:
             and (sv4.logical_exits.long if side_name == "long" else sv4.logical_exits.short)
         )
         if not sides_to_evaluate:
-            return SignalEvaluation(intents=())
+            return ()
 
         from backend.app.features import FeatureSnapshot as _RtFeatureSnapshot
 
@@ -2075,16 +1991,14 @@ class RuntimeOrchestrator:
         )
 
         signal_source = self._resolve_v4_signal_source_for_bar(sv4)
-        legacy_contexts = self._position_contexts(bar=normalized_bar)
+        position_contexts = self._position_contexts(bar=normalized_bar)
         symbol = normalized_bar.symbol.upper()
-        legacy_context = legacy_contexts.get(
+        position_signal_context = position_contexts.get(
             symbol,
-            PositionContext(bar_timestamp=normalized_bar.timestamp),
+            PositionSignalContext(bar_timestamp=normalized_bar.timestamp),
         )
-        position_signal_context = _to_port_position_context(legacy_context)
 
         intents: list[CandidateTradeIntent] = []
-        diagnostics_by_side: dict[str, Mapping[str, object]] = {}
         for side_str in sides_to_evaluate:
             context = SignalEvaluationContext(
                 strategy=sv4,
@@ -2098,8 +2012,6 @@ class RuntimeOrchestrator:
             )
             result = signal_source.evaluate(translated_snapshot, context)
             intents.extend(result.candidate_intents)
-            if result.diagnostics:
-                diagnostics_by_side[side_str] = result.diagnostics
             for template_id, reason in result.diagnostics.items():
                 if template_id == "reason":
                     continue
@@ -2115,10 +2027,7 @@ class RuntimeOrchestrator:
                     },
                 )
 
-        return SignalEvaluation(
-            intents=tuple(intents),
-            diagnostics={"logical_exits": diagnostics_by_side},
-        )
+        return tuple(intents)
 
     def _active_position_sides_for_symbol(self, symbol: str) -> set[str]:
         symbol_upper = symbol.upper()

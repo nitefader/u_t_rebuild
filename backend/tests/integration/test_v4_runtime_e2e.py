@@ -20,7 +20,7 @@ Pins the four S11 acceptance criteria the inventory could not yet evidence:
   * a bar where the entry expression is True produces exactly one persisted
     SignalPlan with intent=OPEN, reason=v4_entry_expression_true, and the
     resolved variable preserved in feature_snapshot;
-  * the V4 branch is taken (not the legacy SignalEngine path);
+  * the V4 branch is taken through the v4 signal source path;
   * a bar where the entry expression is False produces no new SignalPlan.
 """
 from __future__ import annotations
@@ -385,14 +385,8 @@ def test_v4_runtime_emits_signal_plan_via_real_binding_chain(runtime_db):
     assert len(persisted_after) == 1
 
 
-def test_v4_runtime_does_not_take_legacy_signal_engine_branch(runtime_db):
-    """Pin the orchestrator routing: v4 deployment must not call SignalEngine.
-
-    Wraps the legacy ``SignalEngine.evaluate`` to assert it is never invoked
-    when the deployment carries a StrategyVersionV4. Guards against future
-    regressions where someone re-introduces a fallback that runs both
-    branches.
-    """
+def test_v4_runtime_does_not_expose_legacy_signal_engine_branch(runtime_db):
+    """Pin the orchestrator routing: v4 deployment uses the signal-source path."""
     db_path = runtime_db
 
     strategy_v4_id = _save_strategy_v4(db_path, logical_exit_bars=1)
@@ -416,15 +410,7 @@ def test_v4_runtime_does_not_take_legacy_signal_engine_branch(runtime_db):
     )
     sv4 = orchestrator._components.strategy_version_v4
     assert sv4 is not None
-
-    legacy_calls: list[object] = []
-    real_evaluate = orchestrator._signal_engine.evaluate
-
-    def _spy(strategy, snapshot, *, position_contexts=None):
-        legacy_calls.append(strategy)
-        return real_evaluate(strategy, snapshot, position_contexts=position_contexts)
-
-    orchestrator._signal_engine.evaluate = _spy  # type: ignore[method-assign]
+    assert not hasattr(orchestrator, "_signal_engine")
 
     opening_signal_plan_id = uuid4()
     position_lineage_id = uuid4()
@@ -475,10 +461,6 @@ def test_v4_runtime_does_not_take_legacy_signal_engine_branch(runtime_db):
     bar = _bar(index=1, open_=101.0, close=99.0)
     result = orchestrator.process_bar(bar)
 
-    assert legacy_calls == [], (
-        f"legacy SignalEngine.evaluate was called for a v4 deployment: "
-        f"{legacy_calls!r}"
-    )
     assert any(
         plan.intent == SignalPlanIntent.LOGICAL_EXIT for plan in result.signal_plans
     ), f"expected a v4 logical_exit SignalPlan, got {result.signal_plans!r}"

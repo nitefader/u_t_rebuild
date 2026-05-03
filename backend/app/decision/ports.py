@@ -4,9 +4,8 @@ Signature survey:
 - V4 ``build_signal_plan_from_v4`` takes keyword-only strategy, snapshot,
   symbol, side, timestamp, deployment_id, optional watchlist_snapshot_id, and
   an expression loader; it returns ``SignalPlan | None``.
-- Legacy ``SignalEngine.evaluate`` takes strategy, snapshot, and optional
-  position_contexts; it returns a ``SignalEvaluation`` carrying candidate
-  intents and diagnostics.
+- Logical-exit sources take strategy, snapshot, and position contexts; they
+  return candidate intents and diagnostics through this port result envelope.
 
 The port deliberately does not import either concrete evaluator. The unified
 ``contexts`` payload carries the union of evaluator-specific inputs; future

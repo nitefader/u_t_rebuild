@@ -16,7 +16,7 @@ Design rules (locked):
   EvalError when they are actually referenced at evaluation time.
 - AST objects never leak past this module boundary. Downstream sees only
   ``SignalPlan``.
-- The legacy ``signal_plan_builder.py`` is NOT modified.
+- Shared post-fill helpers come from ``signal_plan_common.py``.
 """
 from __future__ import annotations
 
@@ -25,7 +25,7 @@ from datetime import datetime
 from typing import Literal
 from uuid import UUID, uuid4
 
-from backend.app.decision.signal_plan_builder import (
+from backend.app.decision.signal_plan_common import (
     POST_FILL_PCT_RULE_PREFIX,
     SignalPlanBuilderError,
     post_fill_pct_rule,

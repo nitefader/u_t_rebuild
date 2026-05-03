@@ -129,7 +129,6 @@ class BrokerRuntimeOrchestrator:
         control_plane: ControlPlane,
         governor: PortfolioGovernor | None = None,
         feature_engine_factory: Callable[[], IncrementalFeatureEngine] = IncrementalFeatureEngine,
-        signal_engine: object | None = None,
         portfolio_snapshot_factory: Callable[[UUID], PortfolioSnapshot] | None = None,
         bar_source: Callable[[UUID], NormalizedBar | None] | None = None,
         startup_warmup_bars_source: StartupWarmupBarsSource | None = None,
@@ -143,7 +142,6 @@ class BrokerRuntimeOrchestrator:
         self._control_plane = control_plane
         self._governor = governor or PortfolioGovernor()
         self._feature_engine_factory = feature_engine_factory
-        self._signal_engine = signal_engine
         self._portfolio_snapshot_factory = portfolio_snapshot_factory or (lambda _account_id: PortfolioSnapshot())
         self._bar_source = bar_source
         self._startup_warmup_bars_source = startup_warmup_bars_source
@@ -971,7 +969,6 @@ class BrokerRuntimeOrchestrator:
             components=entry.components,
             initial_cash=entry.initial_cash,
             feature_engine=self._feature_engine_factory(),
-            signal_engine=self._signal_engine,
             governor=self._governor,
             governor_policy_resolver=self._build_governor_policy_resolver(),
             order_manager=self._order_manager,

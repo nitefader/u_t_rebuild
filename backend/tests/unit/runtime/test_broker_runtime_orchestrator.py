@@ -14,7 +14,6 @@ from backend.app.brokers import (
 )
 from backend.app.composition import SignalSourceRegistry, StrategyArtifactKind, StrategyArtifactResolver
 from backend.app.control_plane import ControlPlane
-from backend.app.decision import SignalEngine
 from backend.app.decision.signal_sources import V4ExpressionSignalSource
 from backend.app.domain import (
     CandidateSide,
@@ -39,7 +38,7 @@ from backend.app.domain import (
     UniverseSnapshot,
     UniverseSymbol,
 )
-from backend.app.decision.signal_plan_builder import post_fill_pct_rule
+from backend.app.decision.signal_plan_common import post_fill_pct_rule
 from backend.app.domain.risk_profile import PositionSizingMethod
 from backend.app.domain.strategy import SignalRule
 from backend.app.domain.strategy_v4 import (
@@ -170,6 +169,33 @@ def _components_with_v4_atr(*, symbol: str = "SPY") -> ResolvedDeploymentCompone
     return components.model_copy(update={"strategy_version_v4": strategy_v4})
 
 
+def _components_v4_entry(*, symbol: str = "SPY") -> ResolvedDeploymentComponents:
+    components = _components(symbol=symbol)
+    strategy_v4 = StrategyVersionV4(
+        version=1,
+        name="Runtime Entry v4",
+        entries=StrategyEntriesV4(
+            long=StrategyEntryV4(
+                expression_text="5m.close > 5m.open",
+                feature_requirements=("5m.close", "5m.open"),
+            )
+        ),
+        stops=(StrategyStopV4(mode="simple", scope="all", simple_type="%", simple_value=2.0),),
+        legs=(
+            StrategyLegV4(
+                position=1,
+                kind="target",
+                size_pct=1.0,
+                target_type="%",
+                target_value=3.0,
+                on_fill_action=OnFillActionV4(kind="leave"),
+            ),
+        ),
+        feature_requirements=("5m.close", "5m.open"),
+    )
+    return components.model_copy(update={"strategy_version_v4": strategy_v4})
+
+
 def _strategy_artifact_resolver(
     components: ResolvedDeploymentComponents,
 ) -> StrategyArtifactResolver:
@@ -202,6 +228,14 @@ def _deployment(
     deployment_id: UUID = DEPLOYMENT_ID,
     mode: TradingMode = TradingMode.BROKER_PAPER,
 ) -> DeploymentContext:
+    if components.strategy_version_v4 is not None:
+        return DeploymentContext(
+            deployment_id=deployment_id,
+            strategy_version_id=components.strategy_version_v4.id,
+            strategy_version=components.strategy_version_v4.version,
+            mode=mode.value,
+            status=RuntimeStatus.RECOVERED_READY,
+        )
     return DeploymentContext(
         deployment_id=deployment_id,
         strategy_version_id=components.strategy.id,
@@ -375,7 +409,7 @@ def _runtime(
 ) -> tuple[BrokerRuntimeOrchestrator, SQLiteRuntimeStore, FakeBrokerAdapter]:
     store = SQLiteRuntimeStore(tmp_path / f"{deployment_id}.sqlite")
     _seed_account(store, account_id, mode=mode)
-    resolved = components or _components()
+    resolved = components or _components_v4_entry()
     if startup_warmup_bars_source is _DEFAULT_STARTUP_WARMUP_SOURCE:
         startup_warmup_bars_source = _startup_warmup_source
     try:
@@ -418,16 +452,6 @@ def _runtime(
     return runtime, store, adapter
 
 
-class CountingSignalEngine(SignalEngine):
-    def __init__(self) -> None:
-        super().__init__()
-        self.evaluate_calls = 0
-
-    def evaluate(self, strategy, snapshot, *, position_contexts=None):  # type: ignore[no-untyped-def]
-        self.evaluate_calls += 1
-        return super().evaluate(strategy, snapshot, position_contexts=position_contexts)
-
-
 class FailingOrderManager(OrderManager):
     def create_order(self, **kwargs):  # type: ignore[no-untyped-def]
         raise OrderManagerError("create failed")
@@ -441,16 +465,13 @@ class FailingBrokerSync(BrokerSync):
         raise OrderManagerError("sync failed")
 
 
-def test_run_once_processes_completed_bar_through_feature_engine_and_signal_engine(tmp_path) -> None:
-    signal_engine = CountingSignalEngine()
+def test_run_once_processes_completed_bar_through_feature_engine_and_signal_source(tmp_path) -> None:
     bar = _bar()
     runtime, store, broker = _runtime(tmp_path, bar_source=lambda _deployment_id: bar)
-    runtime._signal_engine = signal_engine
 
     result = runtime.run_once(DEPLOYMENT_ID)
 
     assert result is not None
-    assert signal_engine.evaluate_calls == 1
     assert len(result.signal_plans) == 1
     assert len(broker.submitted_orders) == 1
     assert store.load_deployment_runtime_state(DEPLOYMENT_ID).last_bar_timestamp_by_symbol_timeframe["SPY:5m"] == bar.timestamp
@@ -484,7 +505,7 @@ def test_account_pause_blocks_new_open_orders_for_that_account_only(tmp_path) ->
         tmp_path,
         account_id=OTHER_ACCOUNT_ID,
         deployment_id=OTHER_DEPLOYMENT_ID,
-        components=_components(symbol="QQQ"),
+        components=_components_v4_entry(symbol="QQQ"),
         control_plane=control,
     )
 
@@ -500,7 +521,7 @@ def test_deployment_pause_blocks_new_open_orders_for_that_deployment_only(tmp_pa
     other_runtime, _, other_broker = _runtime(
         tmp_path,
         deployment_id=OTHER_DEPLOYMENT_ID,
-        components=_components(symbol="QQQ"),
+        components=_components_v4_entry(symbol="QQQ"),
         control_plane=control,
     )
 
@@ -564,8 +585,9 @@ def test_broker_sync_is_called_after_broker_submit_result(tmp_path) -> None:
     ledger = SQLiteOrderLedger(tmp_path / "sync.sqlite")
     broker = RecordingBroker([BrokerOrderStatus.ACCEPTED])
     sync = RecordingSync(ledger=ledger, adapter=broker, runtime_store=store, provider="alpaca")
+    components = _components_v4_entry()
     runtime = BrokerRuntimeOrchestrator(
-        deployments=(BrokerRuntimeDeployment(deployment=_deployment(_components()), components=_components(), account_id=ACCOUNT_ID),),
+        deployments=(BrokerRuntimeDeployment(deployment=_deployment(components), components=components, account_id=ACCOUNT_ID),),
         runtime_store=store,
         broker_adapter=broker,
         broker_sync=sync,
@@ -573,6 +595,7 @@ def test_broker_sync_is_called_after_broker_submit_result(tmp_path) -> None:
         control_plane=ControlPlane(state_store=store),
         startup_warmup_bars_source=_startup_warmup_source,
         portfolio_snapshot_factory=lambda _aid: PortfolioSnapshot(equity=100_000),
+        strategy_artifact_resolver=_strategy_artifact_resolver(components),
     )
 
     runtime.process_completed_bar(DEPLOYMENT_ID, _bar())
@@ -586,8 +609,9 @@ def test_broker_sync_failure_marks_runtime_degraded_and_blocks_further_opens(tmp
     store.save_deployment_runtime_state(RuntimeState(deployment_id=DEPLOYMENT_ID, status=RuntimeStatus.RECOVERED_READY))
     ledger = SQLiteOrderLedger(tmp_path / "failing-sync.sqlite")
     broker = FakeBrokerAdapter([BrokerOrderStatus.ACCEPTED, BrokerOrderStatus.ACCEPTED])
+    components = _components_v4_entry()
     runtime = BrokerRuntimeOrchestrator(
-        deployments=(BrokerRuntimeDeployment(deployment=_deployment(_components()), components=_components(), account_id=ACCOUNT_ID),),
+        deployments=(BrokerRuntimeDeployment(deployment=_deployment(components), components=components, account_id=ACCOUNT_ID),),
         runtime_store=store,
         broker_adapter=broker,
         broker_sync=FailingBrokerSync(ledger=ledger, adapter=broker, runtime_store=store),
@@ -595,6 +619,7 @@ def test_broker_sync_failure_marks_runtime_degraded_and_blocks_further_opens(tmp
         control_plane=ControlPlane(state_store=store),
         startup_warmup_bars_source=_startup_warmup_source,
         portfolio_snapshot_factory=lambda _aid: PortfolioSnapshot(equity=100_000),
+        strategy_artifact_resolver=_strategy_artifact_resolver(components),
     )
 
     assert runtime.process_completed_bar(DEPLOYMENT_ID, _bar()) is None
@@ -613,8 +638,9 @@ def _degraded_runtime(tmp_path, *, last_error: str) -> tuple[BrokerRuntimeOrches
     )
     ledger = SQLiteOrderLedger(tmp_path / "degraded.sqlite")
     broker = FakeBrokerAdapter([BrokerOrderStatus.ACCEPTED])
+    components = _components_v4_entry()
     runtime = BrokerRuntimeOrchestrator(
-        deployments=(BrokerRuntimeDeployment(deployment=_deployment(_components()), components=_components(), account_id=ACCOUNT_ID),),
+        deployments=(BrokerRuntimeDeployment(deployment=_deployment(components), components=components, account_id=ACCOUNT_ID),),
         runtime_store=store,
         broker_adapter=broker,
         broker_sync=BrokerSync(ledger=ledger, adapter=broker, runtime_store=store, provider="alpaca"),
@@ -622,6 +648,7 @@ def _degraded_runtime(tmp_path, *, last_error: str) -> tuple[BrokerRuntimeOrches
         control_plane=ControlPlane(state_store=store),
         startup_warmup_bars_source=_startup_warmup_source,
         portfolio_snapshot_factory=lambda _aid: PortfolioSnapshot(equity=100_000),
+        strategy_artifact_resolver=_strategy_artifact_resolver(components),
     )
     runtime._recovery_completed.add(DEPLOYMENT_ID)
     return runtime, store, broker
@@ -1029,7 +1056,7 @@ def test_multiple_broker_accounts_and_deployments_run_independently(tmp_path) ->
         tmp_path,
         account_id=OTHER_ACCOUNT_ID,
         deployment_id=OTHER_DEPLOYMENT_ID,
-        components=_components(symbol="QQQ"),
+        components=_components_v4_entry(symbol="QQQ"),
     )
 
     assert first.process_completed_bar(DEPLOYMENT_ID, _bar()) is not None
@@ -1040,7 +1067,7 @@ def test_multiple_broker_accounts_and_deployments_run_independently(tmp_path) ->
 
 
 def test_one_deployment_can_fan_out_signal_plan_to_multiple_accounts(tmp_path) -> None:
-    components = _components()
+    components = _components_v4_entry()
     store = SQLiteRuntimeStore(tmp_path / "runtime.db")
     _seed_account(store, ACCOUNT_ID)
     _seed_account(store, OTHER_ACCOUNT_ID)
@@ -1064,6 +1091,7 @@ def test_one_deployment_can_fan_out_signal_plan_to_multiple_accounts(tmp_path) -
         control_plane=ControlPlane(state_store=store),
         startup_warmup_bars_source=_startup_warmup_source,
         portfolio_snapshot_factory=lambda _aid: PortfolioSnapshot(equity=100_000),
+        strategy_artifact_resolver=_strategy_artifact_resolver(components),
     )
 
     result = runtime.process_completed_bar(DEPLOYMENT_ID, _bar())

@@ -15,6 +15,8 @@ from uuid import UUID, uuid4
 import pytest
 
 from backend.app.brokers import BrokerOrderResult, BrokerOrderStatus, FakeBrokerAdapter
+from backend.app.composition import SignalSourceRegistry, StrategyArtifactKind, StrategyArtifactResolver
+from backend.app.decision.signal_sources import V4ExpressionSignalSource
 from backend.app.governor import PortfolioSnapshot
 from backend.app.domain import (
     CandidateSide,
@@ -37,6 +39,14 @@ from backend.app.domain.execution_style import (
 )
 from backend.app.domain.risk_profile import PositionSizingMethod
 from backend.app.domain.strategy import SignalRule
+from backend.app.domain.strategy_v4 import (
+    OnFillActionV4,
+    StrategyEntriesV4,
+    StrategyEntryV4,
+    StrategyLegV4,
+    StrategyStopV4,
+    StrategyVersionV4,
+)
 from backend.app.features import NormalizedBar, ResolvedDeploymentComponents
 from backend.app.orders import InternalOrderIntent
 from backend.app.orders.models import InternalOrderStatus
@@ -74,6 +84,30 @@ def _components(execution_mode: ExecutionMode = ExecutionMode.POST_FILL_BRACKET)
                 target_candidate_feature="5m.high[0]",
             )
         ],
+    )
+    strategy_v4 = StrategyVersionV4(
+        id=uuid4(),
+        strategy_v4_id=uuid4(),
+        version=1,
+        name="Critic Fix Strategy v4",
+        entries=StrategyEntriesV4(
+            long=StrategyEntryV4(
+                expression_text="5m.close > 5m.open",
+                feature_requirements=("5m.close", "5m.open"),
+            )
+        ),
+        stops=(StrategyStopV4(mode="simple", scope="all", simple_type="%", simple_value=5.0),),
+        legs=(
+            StrategyLegV4(
+                position=1,
+                kind="target",
+                size_pct=1.0,
+                target_type="%",
+                target_value=10.0,
+                on_fill_action=OnFillActionV4(kind="leave"),
+            ),
+        ),
+        feature_requirements=("5m.close", "5m.open"),
     )
     controls = StrategyControlsVersion(
         id=controls_id,
@@ -121,6 +155,7 @@ def _components(execution_mode: ExecutionMode = ExecutionMode.POST_FILL_BRACKET)
     return ResolvedDeploymentComponents(
         program=program,
         strategy=strategy,
+        strategy_version_v4=strategy_v4,
         strategy_controls=controls,
         risk_profile=risk,
         execution_style=execution,
@@ -131,8 +166,8 @@ def _components(execution_mode: ExecutionMode = ExecutionMode.POST_FILL_BRACKET)
 def _deployment(components: ResolvedDeploymentComponents) -> DeploymentContext:
     return DeploymentContext(
         deployment_id=DEPLOYMENT_ID,
-        strategy_version_id=components.strategy.id,
-        strategy_version=components.strategy.version,
+        strategy_version_id=components.strategy_version_v4.id,
+        strategy_version=components.strategy_version_v4.version,
     )
 
 
@@ -147,6 +182,19 @@ def _bar() -> NormalizedBar:
         close=100,
         volume=100_000,
     )
+
+
+def _strategy_artifact_resolver(components: ResolvedDeploymentComponents) -> StrategyArtifactResolver:
+    registry = SignalSourceRegistry()
+    registry.register(StrategyArtifactKind.EXPRESSION_V1, lambda _metadata: V4ExpressionSignalSource())
+
+    def lookup(strategy_version_v4_id: UUID) -> StrategyVersionV4:
+        sv4 = components.strategy_version_v4
+        if sv4 is None or sv4.id != strategy_version_v4_id:
+            raise KeyError(strategy_version_v4_id)
+        return sv4
+
+    return StrategyArtifactResolver(registry=registry, strategy_v4_lookup=lookup)
 
 
 def test_critic_fix_1_protection_placed_does_not_fire_when_all_children_rejected() -> None:
@@ -165,6 +213,7 @@ def test_critic_fix_1_protection_placed_does_not_fire_when_all_children_rejected
         components=components,
         broker_adapter=broker,
         portfolio_snapshot=PortfolioSnapshot(equity=100_000),
+        strategy_artifact_resolver=_strategy_artifact_resolver(components),
     )
 
     result = pipeline.process_bar(_bar())
@@ -189,6 +238,7 @@ def test_critic_fix_2_single_native_oco_child_submission() -> None:
         components=components,
         broker_adapter=broker,
         portfolio_snapshot=PortfolioSnapshot(equity=100_000),
+        strategy_artifact_resolver=_strategy_artifact_resolver(components),
     )
 
     pipeline.process_bar(_bar())
@@ -279,6 +329,7 @@ def test_critic_fix_6_post_fill_skipped_when_entry_has_order_class_bracket() -> 
         components=components,
         broker_adapter=broker,
         portfolio_snapshot=PortfolioSnapshot(equity=100_000),
+        strategy_artifact_resolver=_strategy_artifact_resolver(components),
     )
 
     result = pipeline.process_bar(_bar())
@@ -380,6 +431,7 @@ def test_p0_6_concurrent_partial_fill_handlers_do_not_double_protect() -> None:
         components=components,
         broker_adapter=broker,
         portfolio_snapshot=PortfolioSnapshot(equity=100_000),
+        strategy_artifact_resolver=_strategy_artifact_resolver(components),
     )
 
     # Seed a filled parent + signal plan lineage via one normal process_bar call.
@@ -443,6 +495,7 @@ def test_s2_operator_canceled_stop_child_not_replaced_on_next_fill() -> None:
         components=components,
         broker_adapter=broker,
         portfolio_snapshot=PortfolioSnapshot(equity=100_000),
+        strategy_artifact_resolver=_strategy_artifact_resolver(components),
     )
     result = pipeline.process_bar(_bar())
     parent = next(order for order in result.ledger_updates if order.intent == InternalOrderIntent.OPEN)
