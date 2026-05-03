@@ -66,7 +66,6 @@ class FeatureRegistryEntry:
         default_factory=lambda: frozenset(
             {
                 "backtest",
-                "chart_lab",
                 "live",
                 "optimization",
                 "paper",

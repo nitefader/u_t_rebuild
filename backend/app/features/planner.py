@@ -33,7 +33,7 @@ INTRADAY_TIMEFRAMES = frozenset({"1m", "5m", "15m", "30m", "1h", "4h"})
 # resolver can pick a pipeline per FeatureKey instead of per Deployment.
 _LIVE_CONSUMERS = frozenset({"live", "runtime", "paper", "sim_stream"})
 _HISTORICAL_CONSUMERS = frozenset({"backtest", "sim_replay", "optimization", "walk_forward"})
-_INSPECTION_CONSUMERS = frozenset({"chart_lab"})
+_INSPECTION_CONSUMERS = frozenset()
 _PORTFOLIO_CONSUMERS = frozenset({"portfolio_governor"})
 
 
@@ -273,16 +273,16 @@ def build_strategy_only_feature_plan(
     strategy: StrategyVersion,
     *,
     default_timeframe: str,
-    consumer: str = "chart_lab",
+    consumer: str = "runtime",
     feature_registry: FeatureRegistry = registry,
 ) -> FeaturePlan:
     """Build a FeaturePlan from a StrategyVersion alone — no Deployment needed.
 
-    Used by Chart Lab strategy-preview: the operator picks any saved Strategy
-    (any version, including drafts) and we derive its features without binding
-    a Watchlist / RiskProfile / ExecutionStyle. Symbol is supplied at preview
-    time, not by a UniverseSnapshot, so ``symbols`` on the returned plan is
-    intentionally empty — the caller passes the chosen symbol into the
+    Used for runtime-style strategy preview: the operator picks any saved
+    Strategy (any version, including drafts) and we derive its features without
+    binding a Watchlist / RiskProfile / ExecutionStyle. Symbol is supplied at
+    preview time, not by a UniverseSnapshot, so ``symbols`` on the returned plan
+    is intentionally empty — the caller passes the chosen symbol into the
     feature engine separately.
     """
     return _build_plan(
@@ -301,14 +301,14 @@ def build_feature_refs_plan(
     feature_refs: Iterable[str],
     symbols: tuple[str, ...],
     default_timeframe: str,
-    consumer: str = "chart_lab",
+    consumer: str = "runtime",
     feature_registry: FeatureRegistry = registry,
 ) -> FeaturePlan:
     """Build a FeaturePlan from explicit feature refs.
 
-    Chart Lab's feature-exploration mode has no StrategyVersion. The caller
-    still passes an opaque UUID so the canonical FeatureEngine can keep using
-    one immutable FeaturePlan shape without adding a second computation path.
+    Runtime-style feature inspection has no StrategyVersion. The caller still
+    passes an opaque UUID so the canonical FeatureEngine can keep using one
+    immutable FeaturePlan shape without adding a second computation path.
     """
 
     return _build_plan(

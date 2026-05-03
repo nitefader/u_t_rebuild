@@ -130,5 +130,38 @@ Direct, concise, decisive, no fluff, no over-explaining
 # It produces immutable, evidence-backed results; no lab may use a separate runtime, mutate Deployments, or compute features outside the backend spine.
 
 
+## Features must be registry-driven and parameterized.
+
+Do not hardcode indicator names into runtime, ChartLab, SimLab, Backtest, Optimizer, or Walk-Forward.
+
+New indicators must be added through:
+1. FeatureDefinition
+2. Feature parameter schema
+3. FeatureEngine computation
+4. FeatureCatalog metadata
+5. Feature tests
+
+All consumers must request features through FeatureEnginePort.
+
+### example feature usage Vision
+FeatureDefinition:
+  name: ema
+  default_params: { length: 20, source: close }
+
+FeatureInstance:
+  name: ema
+  params: { length: 50, source: close }
+  key: ema(close,50)
+  
+Runtime does not know EMA.
+ChartLab does not know EMA.
+Backtest does not know EMA.
+SimLab does not know EMA.
+Optimizer does not know EMA.
+
+They only know:
+
+FeatureEnginePort.calculate(feature_requirements)
+
 ## Final Principle
 No clever maze, no hidden state, no broken ownership, only clean, explainable flow
