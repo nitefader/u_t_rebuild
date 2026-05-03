@@ -9,15 +9,14 @@ the money-path:
 3. ``BrokerSyncService.current_sync_state`` reflects "fresh" after a stream
    event and "stale" once the staleness window has elapsed without
    subsequent truth.
-4. ``OrderManager.create_order`` blocks new OPEN intents while broker sync
+4. ``OrderManager.create_signal_plan_order`` blocks new OPEN intents while broker sync
    is stale, but still allows CLOSE / protective orders.
 """
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from time import sleep
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import pytest
 
@@ -34,7 +33,21 @@ from backend.app.brokers import (
     BrokerSync,
     BrokerSyncService,
 )
-from backend.app.domain import CandidateSide, IntentType, OrderType, TimeInForce, TradingMode
+from backend.app.domain import (
+    AccountEvaluationStatus,
+    AccountParticipationDecision,
+    AccountSignalPlanEvaluation,
+    GovernorDecisionStatus,
+    GovernorDecisionTrace,
+    OrderType,
+    RiskResolverResult,
+    SignalPlan,
+    SignalPlanEntry,
+    SignalPlanIntent,
+    SignalPlanSide,
+    TimeInForce,
+    TradingMode,
+)
 from backend.app.orders import (
     InternalOrderIntent,
     InternalOrderStatus,
@@ -42,12 +55,11 @@ from backend.app.orders import (
     OrderManagerError,
     TradeLedger,
 )
-from backend.tests.fixtures.legacy_intent import LegacyExecutionIntent as ExecutionIntent
-
 
 ACCOUNT_ID = UUID("11111111-2222-3333-4444-555555555555")
 DEPLOYMENT_ID = UUID("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
 PROGRAM_ID = UUID("99999999-8888-7777-6666-555555555555")
+STRATEGY_ID = UUID("22222222-3333-4444-5555-666666666666")
 
 
 class _StaticAdapter:
@@ -81,21 +93,53 @@ class _StaticAdapter:
         )
 
 
-def _intent(*, intent_type: IntentType = IntentType.ENTRY) -> ExecutionIntent:
-    return ExecutionIntent(
+def _create_signal_plan_order(
+    manager: OrderManager,
+    *,
+    intent: SignalPlanIntent = SignalPlanIntent.OPEN,
+):
+    lineage_id = uuid4()
+    plan = SignalPlan(
+        signal_plan_id=uuid4(),
         deployment_id=DEPLOYMENT_ID,
-        program_version_id=PROGRAM_ID,
+        strategy_id=STRATEGY_ID,
+        strategy_version_id=PROGRAM_ID,
         symbol="SPY",
-        side=CandidateSide.LONG,
-        intent_type=intent_type,
-        qty=10,
-        order_type=OrderType.MARKET,
-        time_in_force=TimeInForce.DAY,
-        timestamp=datetime(2026, 1, 2, 14, 30, tzinfo=timezone.utc),
-        signal_name="entry",
+        side=SignalPlanSide.LONG,
+        intent=intent,
+        entry=SignalPlanEntry(order_type=OrderType.MARKET, time_in_force_preference=TimeInForce.DAY)
+        if intent == SignalPlanIntent.OPEN
+        else None,
+        opening_signal_plan_id=None if intent == SignalPlanIntent.OPEN else lineage_id,
+        related_position_lineage_id=None if intent == SignalPlanIntent.OPEN else lineage_id,
         reason="signal_condition_true",
-        governor_approved=True,
-        governor_reason="approved",
+    )
+    return manager.create_signal_plan_order(
+        account_id=ACCOUNT_ID,
+        signal_plan=plan,
+        account_evaluation=AccountSignalPlanEvaluation(
+            evaluation_id=uuid4(),
+            account_id=ACCOUNT_ID,
+            signal_plan_id=plan.signal_plan_id,
+            deployment_id=plan.deployment_id,
+            strategy_id=plan.strategy_id,
+            status=AccountEvaluationStatus.ACCEPTED,
+            participation_decision=AccountParticipationDecision.PARTICIPATE,
+        ),
+        risk_result=RiskResolverResult(
+            account_id=ACCOUNT_ID,
+            signal_plan_id=plan.signal_plan_id,
+            allowed=True,
+            resolved_quantity=10,
+        ),
+        governor_decision=GovernorDecisionTrace(
+            governor_decision_id=uuid4(),
+            account_id=ACCOUNT_ID,
+            signal_plan_id=plan.signal_plan_id,
+            status=GovernorDecisionStatus.APPROVED,
+            approved=True,
+            reasons=("approved",),
+        ),
     )
 
 
@@ -109,7 +153,7 @@ def test_stream_routes_partial_fills_into_order_and_trade_ledgers() -> None:
         trade_ledger=trade_ledger,
     )
     router = BrokerStreamRouter(service)
-    order = manager.create_order(account_id=ACCOUNT_ID, execution_intent=_intent())
+    order = _create_signal_plan_order(manager)
 
     for cumulative, status, exec_id in (
         (4.0, BrokerOrderStatus.PARTIAL_FILL, "exec-1"),
@@ -160,14 +204,11 @@ def test_stale_broker_sync_blocks_new_opens_but_allows_closes() -> None:
     assert service.current_sync_state(ACCOUNT_ID).is_stale is True
 
     with pytest.raises(OrderManagerError) as excinfo:
-        manager.create_order(account_id=ACCOUNT_ID, execution_intent=_intent())
+        _create_signal_plan_order(manager)
     assert "broker_sync_stale" in str(excinfo.value)
 
     # CLOSE intents are not gated — positions must remain exitable.
-    closed = manager.create_order(
-        account_id=ACCOUNT_ID,
-        execution_intent=_intent(intent_type=IntentType.EXIT),
-    )
+    closed = _create_signal_plan_order(manager, intent=SignalPlanIntent.CLOSE)
     assert closed.intent == InternalOrderIntent.CLOSE
 
 

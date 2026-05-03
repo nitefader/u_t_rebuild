@@ -20,6 +20,8 @@ except ImportError:  # pragma: no cover
 
 from backend.app.brokers import AlpacaBrokerAdapter, BrokerSync
 from backend.app.brokers._paper_credentials import resolve_paper_credentials
+from backend.app.composition import SignalSourceRegistry, StrategyArtifactKind, StrategyArtifactResolver
+from backend.app.decision.signal_sources import V4ExpressionSignalSource
 from backend.app.domain import (
     CandidateSide,
     ConditionNode,
@@ -38,7 +40,15 @@ from backend.app.domain import (
 )
 from backend.app.domain.risk_profile import PositionSizingMethod
 from backend.app.domain.strategy import SignalRule
-from backend.app.features import NormalizedBar, ResolvedDeploymentComponents
+from backend.app.domain.strategy_v4 import (
+    OnFillActionV4,
+    StrategyEntriesV4,
+    StrategyEntryV4,
+    StrategyLegV4,
+    StrategyStopV4,
+    StrategyVersionV4,
+)
+from backend.app.features import IncrementalFeatureEngine, NormalizedBar, ResolvedDeploymentComponents
 from backend.app.governor import BrokerSyncFreshness, GovernorPolicy, PortfolioGovernor, PortfolioSnapshot, PositionSummary
 from backend.app.market_data import AlpacaMarketDataAdapter, MarketDataSubscription
 from backend.app.orders import OrderManager
@@ -104,8 +114,8 @@ def main(argv: list[str] | None = None) -> int:
     components = _components(symbol=subscription.symbol, timeframe=subscription.timeframe, qty=args.qty)
     deployment = DeploymentContext(
         deployment_id=DEFAULT_DEPLOYMENT_ID,
-        strategy_version_id=components.strategy.id,
-        strategy_version=components.strategy.version,
+        strategy_version_id=components.strategy_version_v4.id,
+        strategy_version=components.strategy_version_v4.version,
         mode="runtime_execute" if args.execute else "runtime_dry_run",
     )
     order_manager = OrderManager()
@@ -132,6 +142,7 @@ def main(argv: list[str] | None = None) -> int:
             order_manager=order_manager,
             broker_freshness=broker_freshness,
             portfolio_snapshot=portfolio_snapshot,
+            strategy_artifact_resolver=_strategy_artifact_resolver(components),
         )
     else:
         result = _run_dry(
@@ -141,6 +152,7 @@ def main(argv: list[str] | None = None) -> int:
             bars=bars,
             broker_freshness=broker_freshness,
             portfolio_snapshot=portfolio_snapshot,
+            strategy_artifact_resolver=_strategy_artifact_resolver(components),
         )
 
     _print_step("Printing runtime dry-run result")
@@ -156,6 +168,7 @@ def _run_dry(
     bars: tuple[NormalizedBar, ...],
     broker_freshness: BrokerSyncFreshness,
     portfolio_snapshot: PortfolioSnapshot,
+    strategy_artifact_resolver: StrategyArtifactResolver,
 ) -> dict[str, object]:
     orchestrator = RuntimeOrchestrator(
         account_id=account_id,
@@ -163,7 +176,9 @@ def _run_dry(
         components=components,
         governor=PortfolioGovernor(GovernorPolicy(global_kill_active=True)),
         broker_sync=broker_freshness,
+        feature_engine=IncrementalFeatureEngine(),
         portfolio_snapshot=portfolio_snapshot,
+        strategy_artifact_resolver=strategy_artifact_resolver,
     )
     latest = None
     for bar in bars:
@@ -198,6 +213,7 @@ def _run_execute(
     order_manager: OrderManager,
     broker_freshness: BrokerSyncFreshness,
     portfolio_snapshot: PortfolioSnapshot,
+    strategy_artifact_resolver: StrategyArtifactResolver,
 ) -> dict[str, object]:
     orchestrator = RuntimeOrchestrator(
         account_id=account_id,
@@ -206,8 +222,10 @@ def _run_execute(
         order_manager=order_manager,
         broker_adapter=broker_adapter,
         broker_sync=broker_sync,
+        feature_engine=IncrementalFeatureEngine(),
         broker_freshness=broker_freshness,
         portfolio_snapshot=portfolio_snapshot,
+        strategy_artifact_resolver=strategy_artifact_resolver,
     )
     latest = None
     orders_created = 0
@@ -299,6 +317,37 @@ def _components(*, symbol: str, timeframe: str, qty: int) -> ResolvedDeploymentC
             )
         ],
     )
+    strategy_v4 = StrategyVersionV4(
+        id=uuid4(),
+        strategy_v4_id=uuid4(),
+        version=1,
+        name="Runtime Dry Run Strategy v4",
+        entries=StrategyEntriesV4(
+            long=StrategyEntryV4(
+                expression_text=f"{timeframe}.close > {timeframe}.open",
+                feature_requirements=(f"{timeframe}.close", f"{timeframe}.open"),
+            )
+        ),
+        stops=(
+            StrategyStopV4(
+                mode="simple",
+                scope="all",
+                simple_type="%",
+                simple_value=2.0,
+            ),
+        ),
+        legs=(
+            StrategyLegV4(
+                position=1,
+                kind="target",
+                size_pct=1.0,
+                target_type="%",
+                target_value=3.0,
+                on_fill_action=OnFillActionV4(kind="leave"),
+            ),
+        ),
+        feature_requirements=(f"{timeframe}.close", f"{timeframe}.open"),
+    )
     controls = StrategyControlsVersion(
         id=controls_id,
         strategy_controls_id=uuid4(),
@@ -343,11 +392,25 @@ def _components(*, symbol: str, timeframe: str, qty: int) -> ResolvedDeploymentC
     return ResolvedDeploymentComponents(
         program=program,
         strategy=strategy,
+        strategy_version_v4=strategy_v4,
         strategy_controls=controls,
         risk_profile=risk,
         execution_style=execution,
         universe=universe,
     )
+
+
+def _strategy_artifact_resolver(components: ResolvedDeploymentComponents) -> StrategyArtifactResolver:
+    registry = SignalSourceRegistry()
+    registry.register(StrategyArtifactKind.EXPRESSION_V1, lambda _metadata: V4ExpressionSignalSource())
+
+    def lookup(strategy_version_v4_id: UUID) -> StrategyVersionV4:
+        sv4 = components.strategy_version_v4
+        if sv4 is None or sv4.id != strategy_version_v4_id:
+            raise KeyError(strategy_version_v4_id)
+        return sv4
+
+    return StrategyArtifactResolver(registry=registry, strategy_v4_lookup=lookup)
 
 
 def _portfolio_snapshot(

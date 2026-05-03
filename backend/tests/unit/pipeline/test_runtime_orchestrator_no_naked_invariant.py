@@ -28,6 +28,8 @@ from uuid import UUID, uuid4
 import pytest
 
 from backend.app.brokers import BrokerOrderResult, BrokerOrderStatus, FakeBrokerAdapter
+from backend.app.composition import SignalSourceRegistry, StrategyArtifactKind, StrategyArtifactResolver
+from backend.app.decision.signal_sources import V4ExpressionSignalSource
 from backend.app.governor import PortfolioSnapshot
 from backend.app.domain import (
     CandidateSide,
@@ -50,7 +52,15 @@ from backend.app.domain.execution_style import (
 )
 from backend.app.domain.risk_profile import PositionSizingMethod
 from backend.app.domain.strategy import SignalRule
-from backend.app.features import NormalizedBar, ResolvedDeploymentComponents
+from backend.app.domain.strategy_v4 import (
+    OnFillActionV4,
+    StrategyEntriesV4,
+    StrategyEntryV4,
+    StrategyLegV4,
+    StrategyStopV4,
+    StrategyVersionV4,
+)
+from backend.app.features import IncrementalFeatureEngine, NormalizedBar, ResolvedDeploymentComponents
 from backend.app.orders import InternalOrderIntent
 from backend.app.pipeline import PipelineEventType, RuntimeOrchestrator
 from backend.app.runtime import DeploymentContext
@@ -85,6 +95,30 @@ def _components() -> ResolvedDeploymentComponents:
                 target_candidate_feature="5m.high[0]",
             )
         ],
+    )
+    strategy_v4 = StrategyVersionV4(
+        id=uuid4(),
+        strategy_v4_id=uuid4(),
+        version=1,
+        name="No-Naked Strategy v4",
+        entries=StrategyEntriesV4(
+            long=StrategyEntryV4(
+                expression_text="5m.close > 5m.open",
+                feature_requirements=("5m.close", "5m.open"),
+            )
+        ),
+        stops=(StrategyStopV4(mode="simple", scope="all", simple_type="%", simple_value=5.0),),
+        legs=(
+            StrategyLegV4(
+                position=1,
+                kind="target",
+                size_pct=1.0,
+                target_type="%",
+                target_value=10.0,
+                on_fill_action=OnFillActionV4(kind="leave"),
+            ),
+        ),
+        feature_requirements=("5m.close", "5m.open"),
     )
     controls = StrategyControlsVersion(
         id=controls_id,
@@ -132,6 +166,7 @@ def _components() -> ResolvedDeploymentComponents:
     return ResolvedDeploymentComponents(
         program=program,
         strategy=strategy,
+        strategy_version_v4=strategy_v4,
         strategy_controls=controls,
         risk_profile=risk,
         execution_style=execution,
@@ -142,8 +177,8 @@ def _components() -> ResolvedDeploymentComponents:
 def _deployment(components: ResolvedDeploymentComponents) -> DeploymentContext:
     return DeploymentContext(
         deployment_id=DEPLOYMENT_ID,
-        strategy_version_id=components.strategy.id,
-        strategy_version=components.strategy.version,
+        strategy_version_id=components.strategy_version_v4.id,
+        strategy_version=components.strategy_version_v4.version,
     )
 
 
@@ -158,6 +193,19 @@ def _bar() -> NormalizedBar:
         close=100,
         volume=100_000,
     )
+
+
+def _strategy_artifact_resolver(components: ResolvedDeploymentComponents) -> StrategyArtifactResolver:
+    registry = SignalSourceRegistry()
+    registry.register(StrategyArtifactKind.EXPRESSION_V1, lambda _metadata: V4ExpressionSignalSource())
+
+    def lookup(strategy_version_v4_id: UUID) -> StrategyVersionV4:
+        sv4 = components.strategy_version_v4
+        if sv4 is None or sv4.id != strategy_version_v4_id:
+            raise KeyError(strategy_version_v4_id)
+        return sv4
+
+    return StrategyArtifactResolver(registry=registry, strategy_v4_lookup=lookup)
 
 
 class _NoFillPriceFakeBroker(FakeBrokerAdapter):
@@ -190,8 +238,10 @@ def test_no_naked_invariant_emits_alarm_when_protective_child_rejected() -> None
         account_id=ACCOUNT_ID,
         deployment=_deployment(components),
         components=components,
+        feature_engine=IncrementalFeatureEngine(),
         broker_adapter=broker,
         portfolio_snapshot=PortfolioSnapshot(equity=100_000),
+        strategy_artifact_resolver=_strategy_artifact_resolver(components),
     )
 
     result = pipeline.process_bar(_bar())
@@ -237,8 +287,10 @@ def test_no_naked_invariant_alarm_on_missing_fill_price() -> None:
         account_id=ACCOUNT_ID,
         deployment=_deployment(components),
         components=components,
+        feature_engine=IncrementalFeatureEngine(),
         broker_adapter=broker,
         portfolio_snapshot=PortfolioSnapshot(equity=100_000),
+        strategy_artifact_resolver=_strategy_artifact_resolver(components),
     )
 
     result = pipeline.process_bar(_bar())
@@ -270,8 +322,10 @@ def test_no_naked_invariant_logs_naked_when_signal_plan_intent_produces_no_legs(
         account_id=ACCOUNT_ID,
         deployment=_deployment(components),
         components=components,
+        feature_engine=IncrementalFeatureEngine(),
         broker_adapter=broker,
         portfolio_snapshot=PortfolioSnapshot(equity=100_000),
+        strategy_artifact_resolver=_strategy_artifact_resolver(components),
     )
 
     # Force ProtectivePlacer to return an empty plan even though the

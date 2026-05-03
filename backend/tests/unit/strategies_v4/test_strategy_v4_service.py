@@ -339,6 +339,11 @@ def test_compiled_ast_round_trips(svc: StrategyV4Service) -> None:
     from backend.app.strategies.expression_api import load_compiled
 
     v = svc.save(_simple_draft())
-    # We saved OK. Now verify load_compiled can reconstruct from text (fallback).
-    compiled = load_compiled("5m.ema(9) > 5m.ema(21)", None)
+    loaded = svc.get(v.id)
+    assert loaded.entries.long is not None
+    assert loaded.entries.long.compiled_blob is not None
+    compiled = load_compiled(
+        loaded.entries.long.expression_text,
+        loaded.entries.long.compiled_blob,
+    )
     assert compiled is not None

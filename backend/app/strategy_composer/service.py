@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import re
 from typing import Any
 from uuid import UUID, uuid4
@@ -8,14 +9,16 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
 from backend.app.domain._base import JsonDict
 from backend.app.domain.execution_style import (
+    BracketRunnerPreset,
     BracketSpec,
+    BracketStopTargetPreset,
     ExecutionStylePresetKind,
     ExecutionStyleVersion,
+    MultiTargetScaleOutPreset,
     OrderType,
     TimeInForce,
 )
 from backend.app.domain.risk_profile import PositionSizingMethod, RiskProfileVersion
-from backend.app.domain.signal_plan import SignalPlanSide
 from backend.app.domain.strategy import (
     CandidateSide,
     ConditionExpression,
@@ -28,6 +31,7 @@ from backend.app.domain.strategy import (
     SignalRule,
     StrategyVersion,
 )
+from backend.app.domain.strategy_v4 import StrategyVersionV4
 from backend.app.domain.strategy_controls import (
     AllowedDirections,
     SessionPreference,
@@ -56,8 +60,18 @@ from backend.app.features import (
 )
 from backend.app.features.spec import FeatureValidationError
 from backend.app.execution_plans import ExecutionPlanRepository
-from backend.app.strategies import StrategyService, StrategyWriteRequest
-from backend.app.strategies.models import StrategyVersionRecord
+from backend.app.strategies_v4.models import (
+    OnFillActionV4Draft,
+    StrategyEntriesV4Draft,
+    StrategyEntryV4Draft,
+    StrategyIdentityV4Draft,
+    StrategyLegV4Draft,
+    StrategyLogicalExitV4Draft,
+    StrategyLogicalExitsV4Draft,
+    StrategyStopV4Draft,
+    StrategyVersionV4Draft,
+)
+from backend.app.strategies_v4.service import StrategyV4Service
 from backend.app.strategy_composer.presets import (
     SignalPlanShapePreview,
     build_execution_style_version,
@@ -253,7 +267,7 @@ class StrategyDraftComponentSnapshots(BaseModel):
 class StrategyDraftSaveResponse(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    strategy_version: StrategyVersionRecord
+    strategy_version: StrategyVersionV4
     draft: StrategyDraft
     component_version_snapshots: StrategyDraftComponentSnapshots
     strategy_controls_version_id: UUID | None = None
@@ -270,11 +284,11 @@ class StrategyComposerService:
     def __init__(
         self,
         *,
-        strategy_service: StrategyService | None = None,
+        strategy_v4_service: StrategyV4Service | None = None,
         strategy_controls_repository: "StrategyControlsRepository | None" = None,
         execution_plan_repository: "ExecutionPlanRepository | None" = None,
     ) -> None:
-        self._strategy_service = strategy_service
+        self._strategy_v4_service = strategy_v4_service
         self._strategy_controls_repository = strategy_controls_repository
         self._execution_plan_repository = execution_plan_repository
 
@@ -402,16 +416,16 @@ class StrategyComposerService:
     def reuse_matches(self, request: ReuseMatchRequest) -> ReuseMatchResponse:
         prompt_tokens = self._tokens(request.prompt)
         strategy_matches: list[StrategyDraftComponentMatch] = []
-        if self._strategy_service is not None:
-            for strategy in self._strategy_service.list_strategies():
-                tokens = self._tokens(" ".join([strategy.name, strategy.description or "", *strategy.tags]))
+        if self._strategy_v4_service is not None:
+            for strategy in self._strategy_v4_service.list_all_heads():
+                tokens = self._tokens(" ".join([str(strategy.get("name", "")), str(strategy.get("description") or "")]))
                 overlap = len(prompt_tokens.intersection(tokens))
                 score = min(1.0, 0.35 + overlap * 0.15) if overlap else 0.2
                 strategy_matches.append(
                     StrategyDraftComponentMatch(
                         component_kind=StrategyDraftComponentKind.STRATEGY,
-                        component_id=strategy.strategy_id,
-                        display_name=strategy.name,
+                        component_id=strategy.get("strategy_v4_id"),
+                        display_name=str(strategy.get("name", "Strategy")),
                         score=score,
                         reason="name/tag overlap with composer prompt" if overlap else "available reusable Strategy",
                     )
@@ -594,8 +608,8 @@ class StrategyComposerService:
         )
 
     def save_draft(self, request: StrategyDraftSaveRequest) -> StrategyDraftSaveResponse:
-        if self._strategy_service is None:
-            raise ValueError("strategy service is required to save drafts")
+        if self._strategy_v4_service is None:
+            raise ValueError("strategy v4 service is required to save drafts")
         if not request.draft.validation.valid:
             raise ValueError(f"strategy draft failed validation: {request.draft.validation.errors}")
         normalized_strategy = self._normalize_strategy_features(request.draft.strategy)
@@ -608,21 +622,6 @@ class StrategyComposerService:
         )
         if coherence_errors:
             raise ValueError(f"strategy draft failed coherence check: {coherence_errors}")
-        strategy_record = self._strategy_service.create_strategy(
-            StrategyWriteRequest(
-                name=normalized_strategy.name,
-                description=normalized_strategy.description,
-                tags=tuple(normalized_strategy.tags),
-            )
-        )
-        payload = normalized_strategy.model_copy(
-            update={
-                "id": uuid4(),
-                "strategy_id": strategy_record.strategy_id,
-                "version": 1,
-            }
-        )
-        version = self._strategy_service.add_version(strategy_record.strategy_id, payload)
 
         saved_controls, controls_version_id = self._persist_strategy_controls(
             request.draft.strategy_controls
@@ -630,10 +629,17 @@ class StrategyComposerService:
         saved_execution_plan, plan_version_id = self._persist_execution_plan(
             request.draft.execution_style
         )
+        v4_draft = self._build_v4_draft(
+            strategy=normalized_strategy,
+            execution_style=saved_execution_plan,
+            strategy_controls_version_id=controls_version_id,
+            execution_plan_version_id=plan_version_id,
+        )
+        version = self._strategy_v4_service.save(v4_draft)
 
         saved_draft = request.draft.model_copy(
             update={
-                "strategy": payload,
+                "strategy": normalized_strategy,
                 "validation": validation,
                 "strategy_controls": saved_controls,
                 "execution_style": saved_execution_plan,
@@ -650,6 +656,284 @@ class StrategyComposerService:
             strategy_controls_version_id=controls_version_id,
             execution_plan_version_id=plan_version_id,
         )
+
+    def _build_v4_draft(
+        self,
+        *,
+        strategy: StrategyVersion,
+        execution_style: ExecutionStyleVersion,
+        strategy_controls_version_id: UUID | None,
+        execution_plan_version_id: UUID | None,
+    ) -> StrategyVersionV4Draft:
+        timeframe = self._strategy_timeframe(strategy)
+        return StrategyVersionV4Draft(
+            name=strategy.name,
+            description=strategy.description,
+            identity=StrategyIdentityV4Draft(
+                tags=list(strategy.tags),
+                direction=self._v4_direction(strategy),
+            ),
+            default_strategy_controls_version_id=strategy_controls_version_id,
+            default_execution_plan_version_id=execution_plan_version_id,
+            entries=StrategyEntriesV4Draft(
+                long=self._v4_entry_for_side(strategy, CandidateSide.LONG),
+                short=self._v4_entry_for_side(strategy, CandidateSide.SHORT),
+            ),
+            stops=self._v4_stops(execution_style),
+            legs=self._v4_legs(execution_style),
+            logical_exits=StrategyLogicalExitsV4Draft(
+                long=self._v4_logical_exits_for_side(strategy, CandidateSide.LONG, timeframe),
+                short=self._v4_logical_exits_for_side(strategy, CandidateSide.SHORT, timeframe),
+            ),
+        )
+
+    def _v4_entry_for_side(
+        self,
+        strategy: StrategyVersion,
+        side: CandidateSide,
+    ) -> StrategyEntryV4Draft | None:
+        expressions: list[str] = []
+        for rule in strategy.entry_rules:
+            if rule.intent_type != IntentType.ENTRY or rule.side != side:
+                continue
+            if rule.condition is None:
+                raise ValueError(f"composer_v4_unsupported_entry_without_condition:{side.value}")
+            expressions.append(self._condition_to_v4_expression(rule.condition))
+        if not expressions:
+            return None
+        expression_text = expressions[0] if len(expressions) == 1 else " OR ".join(f"({expr})" for expr in expressions)
+        return StrategyEntryV4Draft(expression_text=expression_text)
+
+    def _condition_to_v4_expression(self, condition: ConditionExpression) -> str:
+        if isinstance(condition, ConditionNode):
+            left = self._feature_ref_to_v4_expression(condition.left_feature)
+            op = self._condition_operator_to_v4(condition.operator)
+            if condition.right_feature is not None:
+                right = self._feature_ref_to_v4_expression(condition.right_feature)
+            else:
+                right = self._literal_to_v4_expression(condition.right_value)
+            return f"{left} {op} {right}"
+
+        joiner = " AND " if condition.operator in {"all", "and"} else " OR "
+        return joiner.join(f"({self._condition_to_v4_expression(child)})" for child in condition.children)
+
+    def _feature_ref_to_v4_expression(self, feature_ref: str) -> str:
+        normalized = self.normalize_feature_ref(feature_ref)
+        spec = parse_feature_expression(normalized)
+        if spec.lookback != 0 or spec.shift != 0:
+            raise ValueError(f"composer_v4_unsupported_feature_lookback:{normalized}")
+        timeframe = spec.timeframe
+        kind = spec.kind
+        params = dict(spec.params)
+        if kind in {"open", "high", "low", "close", "volume", "range", "body", "is_doji", "vwap"}:
+            return f"{timeframe}.{kind}"
+        if kind in {"sma", "ema", "rsi", "atr"}:
+            length = params.get("length")
+            if length is None:
+                raise ValueError(f"composer_v4_missing_length_param:{normalized}")
+            return f"{timeframe}.{kind}({length})"
+        if not params:
+            return f"{timeframe}.{kind}"
+        ordered_values = ", ".join(str(value) for _, value in sorted(params.items()))
+        return f"{timeframe}.{kind}({ordered_values})"
+
+    @staticmethod
+    def _condition_operator_to_v4(operator: ConditionOperator) -> str:
+        mapping = {
+            ConditionOperator.GT: ">",
+            ConditionOperator.GREATER_THAN: ">",
+            ConditionOperator.GTE: ">=",
+            ConditionOperator.LT: "<",
+            ConditionOperator.LESS_THAN: "<",
+            ConditionOperator.LTE: "<=",
+            ConditionOperator.EQ: "==",
+            ConditionOperator.CROSS_ABOVE: "crosses_above",
+            ConditionOperator.CROSS_BELOW: "crosses_below",
+        }
+        return mapping[operator]
+
+    @staticmethod
+    def _literal_to_v4_expression(value: float | int | str | bool | None) -> str:
+        if isinstance(value, bool):
+            return "true" if value else "false"
+        if isinstance(value, int | float):
+            return str(value)
+        if isinstance(value, str):
+            lowered = value.casefold()
+            if lowered in {"true", "false"}:
+                return lowered
+            try:
+                float(value)
+            except ValueError as exc:
+                raise ValueError(f"composer_v4_unsupported_string_literal:{value}") from exc
+            return value
+        raise ValueError("composer_v4_missing_literal")
+
+    def _v4_stops(self, execution_style: ExecutionStyleVersion) -> list[StrategyStopV4Draft]:
+        preset = execution_style.preset
+        stop_pct = 2.0
+        if isinstance(preset, BracketStopTargetPreset):
+            stop_pct = preset.stop_pct
+        elif isinstance(preset, BracketRunnerPreset):
+            stop_pct = preset.trail_pct
+        elif isinstance(preset, MultiTargetScaleOutPreset) and preset.stop_pct is not None:
+            stop_pct = preset.stop_pct
+        return [
+            StrategyStopV4Draft(
+                mode="simple",
+                scope="all",
+                simple_type="%",
+                simple_value=float(stop_pct),
+            )
+        ]
+
+    def _v4_legs(self, execution_style: ExecutionStyleVersion) -> list[StrategyLegV4Draft]:
+        preset = execution_style.preset
+        leave = OnFillActionV4Draft(kind="leave")
+        if isinstance(preset, BracketStopTargetPreset):
+            return [
+                StrategyLegV4Draft(
+                    position=1,
+                    kind="target",
+                    size_pct=1.0,
+                    target_type="%",
+                    target_value=float(preset.target_pct),
+                    on_fill_action=leave,
+                )
+            ]
+        if isinstance(preset, BracketRunnerPreset):
+            first_slice = float(preset.first_slice_pct)
+            runner_size = max(0.0, 1.0 - first_slice)
+            legs = [
+                StrategyLegV4Draft(
+                    position=1,
+                    kind="target",
+                    size_pct=first_slice,
+                    target_type="%",
+                    target_value=float(preset.first_target_pct),
+                    on_fill_action=leave,
+                )
+            ]
+            if runner_size > 0:
+                legs.append(
+                    StrategyLegV4Draft(
+                        position=2,
+                        kind="runner",
+                        size_pct=runner_size,
+                        target_type="trail-%",
+                        target_value=float(preset.trail_pct),
+                        on_fill_action=leave,
+                    )
+                )
+            return legs
+        if isinstance(preset, MultiTargetScaleOutPreset):
+            legs = [
+                StrategyLegV4Draft(
+                    position=index,
+                    kind="target",
+                    size_pct=float(target.slice_pct),
+                    target_type="%",
+                    target_value=float(target.target_pct),
+                    on_fill_action=leave,
+                )
+                for index, target in enumerate(preset.targets, start=1)
+            ]
+            total = sum(leg.size_pct for leg in legs)
+            if total < 1.0:
+                legs.append(
+                    StrategyLegV4Draft(
+                        position=len(legs) + 1,
+                        kind="runner",
+                        size_pct=1.0 - total,
+                        target_type="trail-%",
+                        target_value=float(preset.stop_pct or 2.0),
+                        on_fill_action=leave,
+                    )
+                )
+            return legs
+        return []
+
+    def _v4_logical_exits_for_side(
+        self,
+        strategy: StrategyVersion,
+        side: CandidateSide,
+        timeframe: str,
+    ) -> list[StrategyLogicalExitV4Draft]:
+        exits: list[StrategyLogicalExitV4Draft] = []
+        for rule in strategy.exit_rules:
+            if rule.intent_type != IntentType.EXIT or rule.side != side:
+                continue
+            if rule.logical_exit_rule is not None:
+                exits.extend(self._logical_exit_rule_to_v4(rule.logical_exit_rule, timeframe))
+            elif rule.condition is not None:
+                raise ValueError("composer_v4_unsupported_logical_exit:feature_condition")
+        return exits
+
+    def _logical_exit_rule_to_v4(
+        self,
+        rule: LogicalExitRule,
+        timeframe: str,
+    ) -> list[StrategyLogicalExitV4Draft]:
+        if rule.kind == LogicalExitRuleKind.BARS_SINCE_ENTRY:
+            return [StrategyLogicalExitV4Draft(template_id="bars_since", params={"bars": int(rule.bars or 1)})]
+        if rule.kind == LogicalExitRuleKind.TIME_IN_POSITION_SECONDS:
+            seconds = int(rule.seconds or 60)
+            bars = max(1, math.ceil(seconds / (self._timeframe_minutes(timeframe) * 60)))
+            return [StrategyLogicalExitV4Draft(template_id="bars_since", params={"bars": bars})]
+        if rule.kind == LogicalExitRuleKind.MINUTES_BEFORE_SESSION_CLOSE:
+            return [
+                StrategyLogicalExitV4Draft(
+                    template_id="session_end",
+                    params={"offset_minutes": int(rule.minutes_before_close or 5)},
+                )
+            ]
+        if rule.kind == LogicalExitRuleKind.TIME_OF_DAY_ET:
+            return [
+                StrategyLogicalExitV4Draft(
+                    template_id="session_end",
+                    params={"offset_minutes": self._minutes_before_regular_close(rule.time_of_day_et or "15:55")},
+                )
+            ]
+        if rule.kind == LogicalExitRuleKind.SESSION_WINDOW:
+            return [StrategyLogicalExitV4Draft(template_id="session_end", params={})]
+        if rule.kind == LogicalExitRuleKind.HYBRID:
+            raise ValueError("composer_v4_unsupported_logical_exit:hybrid")
+        raise ValueError(f"composer_v4_unsupported_logical_exit:{rule.kind.value}")
+
+    def _strategy_timeframe(self, strategy: StrategyVersion) -> str:
+        refs = self._strategy_feature_refs(strategy)
+        if refs:
+            return refs[0].split(".", 1)[0]
+        return "5m"
+
+    @staticmethod
+    def _v4_direction(strategy: StrategyVersion) -> str:
+        sides = {rule.side for rule in strategy.entry_rules if rule.intent_type == IntentType.ENTRY}
+        if CandidateSide.LONG in sides and CandidateSide.SHORT in sides:
+            return "both"
+        if CandidateSide.SHORT in sides:
+            return "short"
+        return "long"
+
+    @staticmethod
+    def _timeframe_minutes(timeframe: str) -> int:
+        match = re.fullmatch(r"([0-9]+)([mhdw])", timeframe)
+        if not match:
+            return 5
+        value = int(match.group(1))
+        unit = match.group(2)
+        multipliers = {"m": 1, "h": 60, "d": 1440, "w": 10080}
+        return value * multipliers[unit]
+
+    @staticmethod
+    def _minutes_before_regular_close(time_of_day_et: str) -> int:
+        try:
+            hours_text, minutes_text = time_of_day_et.split(":", 1)
+            minutes = int(hours_text) * 60 + int(minutes_text)
+        except ValueError:
+            return 5
+        close = 16 * 60
+        return max(1, close - minutes)
 
     def _persist_strategy_controls(
         self, controls: StrategyControlsVersion | None
@@ -700,7 +984,6 @@ class StrategyComposerService:
     ) -> StrategyDraftLaunchPlans:
         strategy_id = str(strategy.strategy_id)
         strategy_version_id = str(strategy.id)
-        placeholder_symbol = _INTERNAL_PLAN_PREVIEW_SYMBOL[0]
         common_request = {
             "strategy_id": strategy_id,
             "strategy_version_id": strategy_version_id,
@@ -709,14 +992,6 @@ class StrategyComposerService:
             "source": "yahoo",
         }
         return StrategyDraftLaunchPlans(
-            chart_lab=StrategyDraftLaunchPlan(
-                surface="chart_lab",
-                method="GET",
-                route="/api/v1/chart-lab/stream",
-                request={"symbol": placeholder_symbol, "query": {"symbol": placeholder_symbol}},
-                ready=True,
-                notes="Open the WebSocket for operator chart inspection only; this does not create research evidence.",
-            ),
             backtest=StrategyDraftLaunchPlan(
                 surface="backtest",
                 route="/api/v1/research/jobs/backtest",

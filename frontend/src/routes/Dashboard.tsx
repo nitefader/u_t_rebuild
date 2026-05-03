@@ -7,8 +7,6 @@ import { KpiCard } from "@/components/ui/Card";
 import { LoadingState } from "@/components/empty/LoadingState";
 import { ErrorState } from "@/components/empty/ErrorState";
 import { SyncSignal, type SyncState } from "@/components/badges/SyncSignal";
-import { ChartLabHubCard } from "@/components/cards/ChartLabHubCard";
-import { ResearchJobsHubCard } from "@/components/jobs/ResearchJobsHubCard";
 import type { RuntimeOverview } from "@/api/schemas/operations";
 import type { TradeStreamStatus, HubStatus } from "@/api/schemas/system";
 import { PageHeader } from "./PageHeader";
@@ -51,8 +49,6 @@ export function Dashboard(): JSX.Element {
             overviewLoading={overview.isLoading}
             overviewError={overview.isError}
           />
-          <ChartLabHubCard />
-          <ResearchJobsHubCard limit={10} />
         </>
       )}
     </div>

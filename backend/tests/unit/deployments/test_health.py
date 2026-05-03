@@ -91,7 +91,7 @@ def _make_active_deployment() -> Deployment:
     return Deployment(
         deployment_id=uuid4(),
         name="Mean Reversion Protector",
-        strategy_version_id=uuid4(),
+        strategy_version_v4_id=uuid4(),
         watchlist_ids=(uuid4(),),
         subscribed_account_ids=(uuid4(),),
         lifecycle_status=DeploymentLifecycleStatus.ACTIVE,

@@ -60,7 +60,10 @@ export function EditDeploymentDrawer({
       DeploymentsApi.update(deployment.deployment_id, {
         name: name.trim(),
         description: description.trim() || null,
-        strategy_version_id: deployment.strategy_version_id,
+        strategy_version_v4_id: deployment.strategy_version_v4_id,
+        strategy_controls_version_id: deployment.strategy_controls_version_id,
+        execution_plan_version_id: deployment.execution_plan_version_id,
+        risk_plan_version_id: deployment.risk_plan_version_id,
         watchlist_ids: watchlistIds,
         subscribed_account_ids: accountIds,
         runtime_overrides: deployment.runtime_overrides,

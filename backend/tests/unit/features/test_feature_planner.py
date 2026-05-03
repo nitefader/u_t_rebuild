@@ -160,7 +160,7 @@ def test_feature_plan_deduplicates_by_feature_key() -> None:
         risk_feature_refs=["5m.atr:length=14[0]"],
     )
 
-    plan = build_feature_plan(components, consumer="chart_lab")
+    plan = build_feature_plan(components, consumer="runtime")
 
     assert len(plan.feature_keys) == len(set(plan.feature_keys))
     close_specs = [spec for spec in plan.feature_specs if spec.kind == "close"]
@@ -171,7 +171,7 @@ def test_feature_plan_deduplicates_by_feature_key() -> None:
 def test_feature_plan_serializes_immutable_feature_params_to_json() -> None:
     components = _components(strategy_feature_refs=["5m.ema:length=20[0]"])
 
-    plan = build_feature_plan(components, consumer="chart_lab")
+    plan = build_feature_plan(components, consumer="runtime")
 
     payload = plan.model_dump(mode="json")
     ema_spec = next(spec for spec in payload["feature_specs"] if spec["kind"] == "ema")
@@ -222,21 +222,21 @@ def test_feature_plan_rejects_invalid_feature() -> None:
     components = _components(risk_feature_refs=["5m.bollinger_bands:length=10[0]"])
 
     with pytest.raises(FeaturePlanError):
-        build_feature_plan(components, consumer="chart_lab")
+        build_feature_plan(components, consumer="runtime")
 
 
 def test_feature_plan_rejects_invalid_feature_param() -> None:
     components = _components(execution_feature_refs=["5m.ema:period=20[0]"])
 
     with pytest.raises(FeaturePlanError):
-        build_feature_plan(components, consumer="chart_lab")
+        build_feature_plan(components, consumer="runtime")
 
 
 def test_feature_plan_rejects_invalid_timeframe() -> None:
     components = _components(controls_feature_refs=["60m.close[0]"])
 
     with pytest.raises(FeaturePlanError):
-        build_feature_plan(components, consumer="chart_lab")
+        build_feature_plan(components, consumer="runtime")
 
 
 # ---------------------------------------------------------------------------

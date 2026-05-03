@@ -5,8 +5,9 @@ from datetime import datetime, timedelta, timezone
 from uuid import UUID, uuid4
 
 from backend.app.brokers import AlpacaBrokerAdapter, BrokerOrderStatus, BrokerPositionSide, BrokerPositionSnapshot, FakeBrokerAdapter
+from backend.app.composition import SignalSourceRegistry, StrategyArtifactKind, StrategyArtifactResolver
 from backend.app.control_plane import ControlPlane
-from backend.app.decision import SignalEvaluation
+from backend.app.decision.signal_sources import V4ExpressionSignalSource
 from backend.app.domain import (
     AccountEvaluationStatus,
     AccountParticipationDecision,
@@ -212,8 +213,37 @@ def _components_v4(*, bars_since: int = 5) -> ResolvedDeploymentComponents:
     )
 
 
+def _components_v4_entry(*, symbols: list[str] | None = None) -> ResolvedDeploymentComponents:
+    components = _components(symbols=symbols)
+    strategy = StrategyVersionV4(
+        id=uuid4(),
+        strategy_v4_id=uuid4(),
+        version=1,
+        name="V4 Entry",
+        entries=StrategyEntriesV4(
+            long=StrategyEntryV4(
+                expression_text="5m.close > 5m.open",
+                feature_requirements=("5m.close", "5m.open"),
+            )
+        ),
+        stops=(StrategyStopV4(mode="simple", scope="all", simple_type="%", simple_value=2.0),),
+        legs=(
+            StrategyLegV4(
+                position=1,
+                kind="target",
+                size_pct=1.0,
+                target_type="%",
+                target_value=3.0,
+                on_fill_action=OnFillActionV4(kind="leave"),
+            ),
+        ),
+        feature_requirements=("5m.close", "5m.open"),
+    )
+    return components.model_copy(update={"strategy_version_v4": strategy})
+
+
 def _deployment(components: ResolvedDeploymentComponents) -> DeploymentContext:
-    if components.strategy_version_v4 is not None and components.strategy is None:
+    if components.strategy_version_v4 is not None:
         return DeploymentContext(
             deployment_id=DEPLOYMENT_ID,
             strategy_version_id=components.strategy_version_v4.id,
@@ -223,6 +253,27 @@ def _deployment(components: ResolvedDeploymentComponents) -> DeploymentContext:
         deployment_id=DEPLOYMENT_ID,
         strategy_version_id=components.strategy.id,
         strategy_version=components.strategy.version,
+    )
+
+
+def _strategy_artifact_resolver(
+    components: ResolvedDeploymentComponents,
+) -> StrategyArtifactResolver:
+    registry = SignalSourceRegistry()
+    registry.register(
+        StrategyArtifactKind.EXPRESSION_V1,
+        lambda _metadata: V4ExpressionSignalSource(),
+    )
+
+    def lookup(strategy_version_v4_id: UUID) -> StrategyVersionV4:
+        sv4 = components.strategy_version_v4
+        if sv4 is None or sv4.id != strategy_version_v4_id:
+            raise KeyError(strategy_version_v4_id)
+        return sv4
+
+    return StrategyArtifactResolver(
+        registry=registry,
+        strategy_v4_lookup=lookup,
     )
 
 
@@ -284,7 +335,9 @@ def _filled_signal_plan_open_order(
     opening_signal_plan_id: UUID,
     position_lineage_id: UUID,
     created_at: datetime,
+    account_id: UUID = ACCOUNT_ID,
     qty: float = 10,
+    side: CandidateSide = CandidateSide.LONG,
 ) -> InternalOrder:
     strategy_id = (
         components.strategy_version_v4.strategy_v4_id
@@ -299,7 +352,7 @@ def _filled_signal_plan_open_order(
     return InternalOrder(
         order_id=uuid4(),
         client_order_id=f"sp-{uuid4()}",
-        account_id=ACCOUNT_ID,
+        account_id=account_id,
         origin=OrderOrigin.SIGNAL_PLAN,
         deployment_id=DEPLOYMENT_ID,
         strategy_id=strategy_id,
@@ -311,7 +364,7 @@ def _filled_signal_plan_open_order(
         account_evaluation_id=uuid4(),
         governor_decision_id=uuid4(),
         symbol="SPY",
-        side=CandidateSide.LONG,
+        side=side,
         quantity=qty,
         filled_quantity=qty,
         order_type=OrderType.MARKET,
@@ -321,6 +374,35 @@ def _filled_signal_plan_open_order(
         created_at=created_at,
         updated_at=created_at,
     )
+
+
+def _order_manager_with_open_position_orders(
+    *,
+    components: ResolvedDeploymentComponents,
+    positions: tuple[BrokerPositionSnapshot, ...],
+    current_bar: NormalizedBar,
+    broker_adapter: FakeBrokerAdapter | None = None,
+) -> OrderManager:
+    manager = OrderManager(broker_adapter=broker_adapter) if broker_adapter is not None else OrderManager()
+    for position in positions:
+        if position.deployment_id != DEPLOYMENT_ID or position.qty == 0:
+            continue
+        if (position.status or "").lower() in {"closed", "flat"}:
+            continue
+        assert position.opening_signal_plan_id is not None
+        assert position.position_lineage_id is not None
+        manager.ledger.add(
+            _filled_signal_plan_open_order(
+                components=components,
+                opening_signal_plan_id=position.opening_signal_plan_id,
+                position_lineage_id=position.position_lineage_id,
+                created_at=current_bar.timestamp - timedelta(minutes=1),
+                account_id=position.account_id,
+                qty=abs(position.qty),
+                side=CandidateSide.LONG if position.qty > 0 else CandidateSide.SHORT,
+            )
+        )
+    return manager
 
 
 class PositionReader:
@@ -343,29 +425,6 @@ class HydrationBarsSource:
         return self.bars_by_key.get((request.symbol.upper(), request.timeframe), ())
 
 
-class ExitOnlySignalEngine:
-    def evaluate(self, strategy, snapshot, *, position_contexts=None):  # type: ignore[no-untyped-def]
-        # Honor the new doctrine: exit candidates only fire when there's an
-        # open position to exit. The orchestrator now supplies position_contexts
-        # built from the position_reader.
-        ctx = (position_contexts or {}).get(snapshot.symbol)
-        if ctx is None or not ctx.has_position:
-            return SignalEvaluation(intents=())
-        return SignalEvaluation(
-            intents=(
-                CandidateTradeIntent(
-                    timestamp=snapshot.timestamp,
-                    symbol=snapshot.symbol,
-                    side=CandidateSide.LONG,
-                    intent_type=IntentType.EXIT,
-                    signal_name="logical_exit",
-                    reason="signal_condition_true",
-                    feature_values_used={},
-                ),
-            )
-        )
-
-
 def _orchestrator(
     *,
     components: ResolvedDeploymentComponents | None = None,
@@ -375,10 +434,9 @@ def _orchestrator(
     control_plane: ControlPlane | None = None,
     account_ids: tuple[UUID, ...] | None = None,
     position_reader: object | None = None,
-    signal_engine: object | None = None,
     portfolio_snapshot: PortfolioSnapshot | None = None,
 ) -> RuntimeOrchestrator:
-    resolved = components or _components()
+    resolved = components or _components_v4_entry()
     # W2-A-1b: tests that don't intentionally exercise the new
     # portfolio_equity_unavailable fail-closed rule get a default snapshot
     # with non-None equity. Tests that probe equity=None must pass an
@@ -388,16 +446,21 @@ def _orchestrator(
         account_ids=account_ids,
         deployment=_deployment(resolved),
         components=resolved,
+        feature_engine=IncrementalFeatureEngine(),
         governor=governor,
         broker_adapter=broker_adapter,
         order_manager=order_manager,
         control_plane=control_plane,
         position_reader=position_reader,
-        signal_engine=signal_engine,  # type: ignore[arg-type]
         portfolio_snapshot=(
             portfolio_snapshot
             if portfolio_snapshot is not None
             else PortfolioSnapshot(equity=100_000)
+        ),
+        strategy_artifact_resolver=(
+            _strategy_artifact_resolver(resolved)
+            if resolved.strategy_version_v4 is not None
+            else None
         ),
     )
 
@@ -465,23 +528,6 @@ def _protective_signal_plan(components: ResolvedDeploymentComponents) -> SignalP
     )
 
 
-def test_end_to_end_signal_to_order_created() -> None:
-    broker = FakeBrokerAdapter([BrokerOrderStatus.ACCEPTED])
-    pipeline = _orchestrator(broker_adapter=broker)
-
-    result = pipeline.process_bar(_bar())
-
-    assert len(result.candidate_intents) == 1
-    assert len(result.signal_plans) == 1
-    assert len(result.governor_decisions) == 1
-    assert result.governor_decisions[0].approved is True
-    assert len(result.orders) == 1
-    assert result.orders[0].status == InternalOrderStatus.CREATED
-    assert len(broker.submitted_orders) == 1
-    assert any(event.event_type == PipelineEventType.CANDIDATE_TRADE_INTENT for event in result.events)
-    assert any(event.event_type == PipelineEventType.ORDER_CREATED for event in result.events)
-
-
 def test_governor_blocks_new_opens() -> None:
     pipeline = _orchestrator(governor=PortfolioGovernor(GovernorPolicy(global_kill_active=True)))
 
@@ -540,7 +586,7 @@ def test_protective_orders_pass_under_pause() -> None:
 
 
 def test_attribution_preserved_account_deployment_signal_plan() -> None:
-    components = _components()
+    components = _components_v4_entry()
     result = _orchestrator(components=components).process_bar(_bar())
 
     ledger_update = result.ledger_updates[0]
@@ -548,8 +594,8 @@ def test_attribution_preserved_account_deployment_signal_plan() -> None:
     evaluation = result.account_evaluations[0]
     assert ledger_update.account_id == ACCOUNT_ID
     assert ledger_update.deployment_id == DEPLOYMENT_ID
-    assert ledger_update.strategy_id == components.strategy.strategy_id
-    assert ledger_update.strategy_version_id == components.strategy.id
+    assert ledger_update.strategy_id == components.strategy_version_v4.strategy_v4_id
+    assert ledger_update.strategy_version_id == components.strategy_version_v4.id
     assert ledger_update.signal_plan_id == signal_plan.signal_plan_id
     assert ledger_update.account_evaluation_id == evaluation.evaluation_id
     assert ledger_update.client_order_id.startswith(f"sigplan-{ACCOUNT_ID.hex[:8]}-{signal_plan.signal_plan_id.hex[:8]}-open-")
@@ -573,39 +619,31 @@ def test_one_signal_plan_fans_out_to_multiple_account_evaluations_and_orders() -
     assert len(broker.submitted_orders) == 2
 
 
-def test_deployment_entry_signal_plan_comes_from_watchlist_universe() -> None:
-    components = _components(symbols=["SPY"])
-    result = _orchestrator(components=components).process_bar(_bar(open_=99, close=100))
-
-    assert len(result.signal_plans) == 1
-    assert result.signal_plans[0].intent == SignalPlanIntent.OPEN
-    assert result.signal_plans[0].deployment_id == DEPLOYMENT_ID
-    assert result.signal_plans[0].strategy_id == components.strategy.strategy_id
-    assert result.signal_plans[0].watchlist_snapshot_id == components.universe.id
-    allocations = result.account_evaluations[0].risk_resolver_result.leg_allocations
-    assert [allocation.leg_label for allocation in allocations] == ["entry", "stop", "T1"]
-    assert allocations[0].resolved_quantity == 10
-    assert allocations[1].lifecycle_intent == SignalPlanIntent.STOP
-    assert allocations[2].lifecycle_intent == SignalPlanIntent.TARGET
-
-
 def test_deployment_exit_signal_plan_comes_from_account_position() -> None:
-    components = _components(include_exit_rule=True)
+    components = _components_v4(bars_since=1)
     position_lineage_id = uuid4()
     opening_signal_plan_id = uuid4()
+    current_bar = _bar_1m(index=1, open_=100, close=101)
     position = _position(
-        strategy_id=components.strategy.strategy_id,
+        strategy_id=components.strategy_version_v4.strategy_v4_id,
         opening_signal_plan_id=opening_signal_plan_id,
         position_lineage_id=position_lineage_id,
     )
     reader = PositionReader((position,))
     broker = FakeBrokerAdapter([BrokerOrderStatus.ACCEPTED])
+    manager = _order_manager_with_open_position_orders(
+        components=components,
+        positions=(position,),
+        current_bar=current_bar,
+        broker_adapter=broker,
+    )
 
     result = _orchestrator(
         components=components,
         broker_adapter=broker,
+        order_manager=manager,
         position_reader=reader,
-    ).process_bar(_bar(open_=100, close=99))
+    ).process_bar(current_bar)
 
     assert reader.deployment_queries == [DEPLOYMENT_ID]
     assert len(result.signal_plans) == 1
@@ -614,56 +652,6 @@ def test_deployment_exit_signal_plan_comes_from_account_position() -> None:
     assert result.signal_plans[0].opening_signal_plan_id == opening_signal_plan_id
     assert result.signal_plans[0].related_position_lineage_id == position_lineage_id
     assert result.orders[0].position_lineage_id == position_lineage_id
-    assert result.orders[0].intent == InternalOrderIntent.LOGICAL_EXIT
-    assert len(broker.submitted_orders) == 1
-
-
-def test_logical_exit_feature_condition_can_fire_on_first_live_bar_after_hydration() -> None:
-    components = _components(include_exit_rule=True)
-    exit_rule = components.strategy.exit_rules[0].model_copy(
-        update={
-            "condition": ConditionNode(
-                left_feature="5m.close[0]",
-                operator=ConditionOperator.LESS_THAN,
-                right_feature="5m.low[1]",
-            )
-        }
-    )
-    components = components.model_copy(
-        update={
-            "strategy": components.strategy.model_copy(update={"exit_rules": (exit_rule,)})
-        }
-    )
-    opening_signal_plan_id = uuid4()
-    position_lineage_id = uuid4()
-    position = _position(
-        strategy_id=components.strategy.strategy_id,
-        opening_signal_plan_id=opening_signal_plan_id,
-        position_lineage_id=position_lineage_id,
-    )
-    broker = FakeBrokerAdapter([BrokerOrderStatus.ACCEPTED])
-    pipeline = _orchestrator(
-        components=components,
-        broker_adapter=broker,
-        position_reader=PositionReader((position,)),
-    )
-    warmup_bars = (
-        _bar(0, open_=100, close=105),
-        _bar(1, open_=100, close=105),
-    )
-
-    hydration = pipeline.hydrate_features(
-        symbols=("SPY",),
-        as_of=warmup_bars[-1].timestamp,
-        bars_source=HydrationBarsSource({("SPY", "5m"): warmup_bars}),
-    )
-    result = pipeline.process_bar(_bar(2, open_=100, close=97))
-
-    assert hydration.success is True
-    assert len(result.signal_plans) == 1
-    assert result.signal_plans[0].intent == SignalPlanIntent.LOGICAL_EXIT
-    assert result.signal_plans[0].opening_signal_plan_id == opening_signal_plan_id
-    assert result.signal_plans[0].related_position_lineage_id == position_lineage_id
     assert result.orders[0].intent == InternalOrderIntent.LOGICAL_EXIT
     assert len(broker.submitted_orders) == 1
 
@@ -740,21 +728,27 @@ def test_v4_bars_since_logical_exit_waits_before_configured_bar_count() -> None:
 
 
 def test_logical_exit_cancels_superseded_passive_exit_before_submit() -> None:
-    components = _components(include_exit_rule=True)
+    components = _components_v4(bars_since=1)
     position_lineage_id = uuid4()
     opening_signal_plan_id = uuid4()
+    current_bar = _bar_1m(index=1, open_=100, close=101)
     position = _position(
-        strategy_id=components.strategy.strategy_id,
+        strategy_id=components.strategy_version_v4.strategy_v4_id,
         opening_signal_plan_id=opening_signal_plan_id,
         position_lineage_id=position_lineage_id,
     )
     broker = FakeBrokerAdapter([BrokerOrderStatus.ACCEPTED, BrokerOrderStatus.ACCEPTED])
-    manager = OrderManager(broker_adapter=broker)
+    manager = _order_manager_with_open_position_orders(
+        components=components,
+        positions=(position,),
+        current_bar=current_bar,
+        broker_adapter=broker,
+    )
     target_plan = SignalPlan(
         signal_plan_id=uuid4(),
         deployment_id=DEPLOYMENT_ID,
-        strategy_id=components.strategy.strategy_id,
-        strategy_version_id=components.strategy.id,
+        strategy_id=components.strategy_version_v4.strategy_v4_id,
+        strategy_version_id=components.strategy_version_v4.id,
         symbol="SPY",
         side=SignalPlanSide.LONG,
         intent=SignalPlanIntent.TARGET,
@@ -770,7 +764,7 @@ def test_logical_exit_cancels_superseded_passive_exit_before_submit() -> None:
             account_id=ACCOUNT_ID,
             signal_plan_id=target_plan.signal_plan_id,
             deployment_id=DEPLOYMENT_ID,
-            strategy_id=components.strategy.strategy_id,
+            strategy_id=components.strategy_version_v4.strategy_v4_id,
             status=AccountEvaluationStatus.ACCEPTED,
             participation_decision=AccountParticipationDecision.PARTICIPATE,
         ),
@@ -797,8 +791,7 @@ def test_logical_exit_cancels_superseded_passive_exit_before_submit() -> None:
         broker_adapter=broker,
         order_manager=manager,
         position_reader=PositionReader((position,)),
-        signal_engine=ExitOnlySignalEngine(),
-    ).process_bar(_bar(open_=100, close=99))
+    ).process_bar(current_bar)
 
     target_update = manager.ledger.get(target_order.order_id)
     assert target_update.status == InternalOrderStatus.CANCELED
@@ -810,16 +803,30 @@ def test_logical_exit_cancels_superseded_passive_exit_before_submit() -> None:
 
 
 def test_deployment_exit_does_not_depend_on_current_watchlist_membership() -> None:
-    components = _components(symbols=["QQQ"], include_exit_rule=True)
-    position = _position(strategy_id=components.strategy.strategy_id)
+    components = _components_v4(bars_since=1)
+    components = components.model_copy(
+        update={
+            "universe": components.universe.model_copy(
+                update={"symbols": [UniverseSymbol(symbol="QQQ")]}
+            )
+        }
+    )
+    current_bar = _bar_1m(index=1, open_=100, close=101)
+    position = _position(strategy_id=components.strategy_version_v4.strategy_v4_id)
     broker = FakeBrokerAdapter([BrokerOrderStatus.ACCEPTED])
+    manager = _order_manager_with_open_position_orders(
+        components=components,
+        positions=(position,),
+        current_bar=current_bar,
+        broker_adapter=broker,
+    )
 
     result = _orchestrator(
         components=components,
         broker_adapter=broker,
+        order_manager=manager,
         position_reader=PositionReader((position,)),
-        signal_engine=ExitOnlySignalEngine(),
-    ).process_bar(_bar(open_=100, close=99))
+    ).process_bar(current_bar)
 
     assert len(result.signal_plans) == 1
     assert result.signal_plans[0].symbol == "SPY"
@@ -830,23 +837,30 @@ def test_deployment_exit_does_not_depend_on_current_watchlist_membership() -> No
 
 def test_deployment_exit_multi_account_act_ignore_independently() -> None:
     third_account_id = UUID("33333333-4444-5555-6666-777777777777")
-    components = _components(include_exit_rule=True)
-    active_position = _position(account_id=ACCOUNT_ID, strategy_id=components.strategy.strategy_id)
+    components = _components_v4(bars_since=1)
+    current_bar = _bar_1m(index=1, open_=100, close=101)
+    active_position = _position(account_id=ACCOUNT_ID, strategy_id=components.strategy_version_v4.strategy_v4_id)
     closed_position = _position(
         account_id=OTHER_ACCOUNT_ID,
-        strategy_id=components.strategy.strategy_id,
+        strategy_id=components.strategy_version_v4.strategy_v4_id,
         qty=0,
         status="closed",
     )
     broker = FakeBrokerAdapter([BrokerOrderStatus.ACCEPTED])
+    manager = _order_manager_with_open_position_orders(
+        components=components,
+        positions=(active_position, closed_position),
+        current_bar=current_bar,
+        broker_adapter=broker,
+    )
 
     result = _orchestrator(
         components=components,
         broker_adapter=broker,
         account_ids=(ACCOUNT_ID, OTHER_ACCOUNT_ID, third_account_id),
+        order_manager=manager,
         position_reader=PositionReader((active_position, closed_position)),
-        signal_engine=ExitOnlySignalEngine(),
-    ).process_bar(_bar(open_=100, close=99))
+    ).process_bar(current_bar)
 
     assert len(result.signal_plans) == 1
     assert [evaluation.account_id for evaluation in result.account_evaluations] == [
@@ -863,16 +877,22 @@ def test_deployment_exit_multi_account_act_ignore_independently() -> None:
 
 
 def test_deployment_exit_blocks_ambiguous_multiple_active_lineages_for_same_account() -> None:
-    components = _components(include_exit_rule=True)
-    first = _position(account_id=ACCOUNT_ID, strategy_id=components.strategy.strategy_id)
-    second = _position(account_id=ACCOUNT_ID, strategy_id=components.strategy.strategy_id)
+    components = _components_v4(bars_since=1)
+    current_bar = _bar_1m(index=1, open_=100, close=101)
+    first = _position(account_id=ACCOUNT_ID, strategy_id=components.strategy_version_v4.strategy_v4_id)
+    second = _position(account_id=ACCOUNT_ID, strategy_id=components.strategy_version_v4.strategy_v4_id)
+    manager = _order_manager_with_open_position_orders(
+        components=components,
+        positions=(first, second),
+        current_bar=current_bar,
+    )
 
     result = _orchestrator(
         components=components,
         broker_adapter=FakeBrokerAdapter([BrokerOrderStatus.ACCEPTED]),
+        order_manager=manager,
         position_reader=PositionReader((first, second)),
-        signal_engine=ExitOnlySignalEngine(),
-    ).process_bar(_bar(open_=100, close=99))
+    ).process_bar(current_bar)
 
     assert result.orders == ()
     assert len(result.account_evaluations) == 1
@@ -881,14 +901,15 @@ def test_deployment_exit_blocks_ambiguous_multiple_active_lineages_for_same_acco
 
 
 def test_deployment_exit_preserves_account_specific_opening_lineage_and_side() -> None:
-    components = _components(include_exit_rule=True)
+    components = _components_v4(bars_since=1)
+    current_bar = _bar_1m(index=1, open_=100, close=101)
     long_opening_id = uuid4()
     long_lineage_id = uuid4()
     short_opening_id = uuid4()
     short_lineage_id = uuid4()
     long_position = _position(
         account_id=ACCOUNT_ID,
-        strategy_id=components.strategy.strategy_id,
+        strategy_id=components.strategy_version_v4.strategy_v4_id,
         opening_signal_plan_id=long_opening_id,
         position_lineage_id=long_lineage_id,
     )
@@ -900,18 +921,25 @@ def test_deployment_exit_preserves_account_specific_opening_lineage_and_side() -
         avg_entry_price=100,
         market_value=-400,
         deployment_id=DEPLOYMENT_ID,
-        strategy_id=components.strategy.strategy_id,
+        strategy_id=components.strategy_version_v4.strategy_v4_id,
         opening_signal_plan_id=short_opening_id,
         position_lineage_id=short_lineage_id,
+    )
+    broker = FakeBrokerAdapter([BrokerOrderStatus.ACCEPTED, BrokerOrderStatus.ACCEPTED])
+    manager = _order_manager_with_open_position_orders(
+        components=components,
+        positions=(long_position, short_position),
+        current_bar=current_bar,
+        broker_adapter=broker,
     )
 
     result = _orchestrator(
         components=components,
-        broker_adapter=FakeBrokerAdapter([BrokerOrderStatus.ACCEPTED, BrokerOrderStatus.ACCEPTED]),
+        broker_adapter=broker,
         account_ids=(ACCOUNT_ID, OTHER_ACCOUNT_ID),
+        order_manager=manager,
         position_reader=PositionReader((long_position, short_position)),
-        signal_engine=ExitOnlySignalEngine(),
-    ).process_bar(_bar(open_=100, close=99))
+    ).process_bar(current_bar)
 
     orders_by_account = {order.account_id: order for order in result.orders}
     assert orders_by_account[ACCOUNT_ID].opening_signal_plan_id == long_opening_id
@@ -923,10 +951,11 @@ def test_deployment_exit_preserves_account_specific_opening_lineage_and_side() -
 
 
 def test_deployment_exit_ignores_positions_from_other_deployments() -> None:
-    components = _components(include_exit_rule=True)
+    components = _components_v4(bars_since=1)
+    current_bar = _bar_1m(index=1, open_=100, close=101)
     other_deployment_position = _position(
         deployment_id=UUID("bbbbbbbb-cccc-dddd-eeee-ffffffffffff"),
-        strategy_id=components.strategy.strategy_id,
+        strategy_id=components.strategy_version_v4.strategy_v4_id,
     )
     broker = FakeBrokerAdapter([BrokerOrderStatus.ACCEPTED])
 
@@ -934,8 +963,7 @@ def test_deployment_exit_ignores_positions_from_other_deployments() -> None:
         components=components,
         broker_adapter=broker,
         position_reader=PositionReader((other_deployment_position,)),
-        signal_engine=ExitOnlySignalEngine(),
-    ).process_bar(_bar(open_=100, close=99))
+    ).process_bar(current_bar)
 
     assert result.signal_plans == ()
     assert result.account_evaluations == ()
@@ -944,16 +972,22 @@ def test_deployment_exit_ignores_positions_from_other_deployments() -> None:
 
 
 def test_deployment_exit_reads_positions_without_mutating_broker_truth() -> None:
-    components = _components(include_exit_rule=True)
-    position = _position(strategy_id=components.strategy.strategy_id)
+    components = _components_v4(bars_since=1)
+    current_bar = _bar_1m(index=1, open_=100, close=101)
+    position = _position(strategy_id=components.strategy_version_v4.strategy_v4_id)
     reader = PositionReader((position,))
     before = reader.positions
+    manager = _order_manager_with_open_position_orders(
+        components=components,
+        positions=(position,),
+        current_bar=current_bar,
+    )
 
     result = _orchestrator(
         components=components,
+        order_manager=manager,
         position_reader=reader,
-        signal_engine=ExitOnlySignalEngine(),
-    ).process_bar(_bar(open_=100, close=99))
+    ).process_bar(current_bar)
 
     assert reader.positions == before
     assert result.signal_plans[0].deployment_id == DEPLOYMENT_ID
@@ -961,14 +995,21 @@ def test_deployment_exit_reads_positions_without_mutating_broker_truth() -> None
 
 
 def test_account_without_position_ignores_exit_signal_plan() -> None:
-    components = _components(include_exit_rule=True)
+    components = _components_v4(bars_since=1)
+    current_bar = _bar_1m(index=1, open_=100, close=101)
+    other_position = _position(account_id=OTHER_ACCOUNT_ID, strategy_id=components.strategy_version_v4.strategy_v4_id)
+    manager = _order_manager_with_open_position_orders(
+        components=components,
+        positions=(other_position,),
+        current_bar=current_bar,
+    )
 
     result = _orchestrator(
         components=components,
         account_ids=(ACCOUNT_ID,),
-        position_reader=PositionReader((_position(account_id=OTHER_ACCOUNT_ID, strategy_id=components.strategy.strategy_id),)),
-        signal_engine=ExitOnlySignalEngine(),
-    ).process_bar(_bar(open_=100, close=99))
+        order_manager=manager,
+        position_reader=PositionReader((other_position,)),
+    ).process_bar(current_bar)
 
     assert len(result.signal_plans) == 1
     assert result.account_evaluations[0].account_id == ACCOUNT_ID
@@ -997,18 +1038,20 @@ def test_multi_account_fanout_rejects_one_account_without_blocking_other() -> No
 
 def test_multi_account_governor_uses_account_specific_broker_freshness() -> None:
     broker = FakeBrokerAdapter([BrokerOrderStatus.ACCEPTED])
-    resolved = _components()
+    resolved = _components_v4_entry()
     pipeline = RuntimeOrchestrator(
         account_id=ACCOUNT_ID,
         account_ids=(ACCOUNT_ID, OTHER_ACCOUNT_ID),
         deployment=_deployment(resolved),
         components=resolved,
+        feature_engine=IncrementalFeatureEngine(),
         broker_adapter=broker,
         broker_freshness_by_account={
             ACCOUNT_ID: BrokerSyncFreshness(is_stale=False),
             OTHER_ACCOUNT_ID: BrokerSyncFreshness(is_stale=True, reason="other_account_stale"),
         },
         portfolio_snapshot=PortfolioSnapshot(equity=100_000),
+        strategy_artifact_resolver=_strategy_artifact_resolver(resolved),
     )
 
     result = pipeline.process_bar(_bar())
@@ -1018,46 +1061,6 @@ def test_multi_account_governor_uses_account_specific_broker_freshness() -> None
     assert result.account_evaluations[1].status == AccountEvaluationStatus.BLOCKED
     assert result.account_evaluations[1].rejection_reasons == ("other_account_stale",)
     assert [order.account_id for order in result.orders] == [ACCOUNT_ID]
-
-
-def test_reprocessing_same_account_signal_plan_does_not_resubmit_broker_order() -> None:
-    broker = FakeBrokerAdapter([BrokerOrderStatus.ACCEPTED])
-    resolved = _components()
-    signal_plan = SignalPlan(
-        signal_plan_id=uuid4(),
-        deployment_id=DEPLOYMENT_ID,
-        strategy_id=resolved.strategy.strategy_id,
-        strategy_version_id=resolved.strategy.id,
-        watchlist_snapshot_id=resolved.universe.id,
-        symbol="SPY",
-        side=SignalPlanSide.LONG,
-        intent=SignalPlanIntent.OPEN,
-        entry=SignalPlanEntry(order_type=OrderType.MARKET, time_in_force_preference=TimeInForce.DAY),
-    )
-
-    class FixedSignalPlanBuilder:
-        def build_from_candidate(self, **kwargs):  # type: ignore[no-untyped-def]
-            return signal_plan
-
-    pipeline = RuntimeOrchestrator(
-        account_id=ACCOUNT_ID,
-        deployment=_deployment(resolved),
-        components=resolved,
-        broker_adapter=broker,
-        signal_plan_builder=FixedSignalPlanBuilder(),  # type: ignore[arg-type]
-        portfolio_snapshot=PortfolioSnapshot(equity=100_000),
-    )
-
-    first = pipeline.process_bar(_bar())
-    second = pipeline.process_bar(_bar(1))
-
-    assert len(first.orders) == 1
-    assert len(first.broker_results) == 1
-    assert len(second.orders) == 1
-    assert second.orders[0].order_id == first.orders[0].order_id
-    assert second.orders[0].client_order_id == first.orders[0].client_order_id
-    assert second.broker_results == ()
-    assert len(broker.submitted_orders) == 1
 
 
 def test_live_broker_adapter_requires_explicit_runtime_submit_enablement() -> None:
@@ -1097,14 +1100,16 @@ def test_live_broker_adapter_submits_when_runtime_submit_is_explicitly_enabled()
         mode = TradingMode.BROKER_LIVE
 
     broker = LiveFakeBrokerAdapter([BrokerOrderStatus.ACCEPTED])
-    resolved = _components()
+    resolved = _components_v4_entry()
     pipeline = RuntimeOrchestrator(
         account_id=ACCOUNT_ID,
         deployment=_deployment(resolved),
         components=resolved,
+        feature_engine=IncrementalFeatureEngine(),
         broker_adapter=broker,
         live_order_submission_enabled=True,
         portfolio_snapshot=PortfolioSnapshot(equity=100_000),
+        strategy_artifact_resolver=_strategy_artifact_resolver(resolved),
     )
 
     result = pipeline.process_bar(_bar())
@@ -1139,9 +1144,16 @@ def test_output_events_include_broker_result_and_ledger_update() -> None:
 
 def test_no_component_bypass() -> None:
     source = inspect.getsource(orchestrator_module)
+    v4_exit_source = inspect.getsource(
+        orchestrator_module.RuntimeOrchestrator._evaluate_v4_logical_exit_intents
+    )
 
     assert ".compute(" not in source
     assert "InternalOrder(" not in source
+    assert "build_signal_plan_from_v4(" not in source
+    assert "_signal_engine" not in source
+    assert "StrategyVersion(" not in v4_exit_source
+    assert "SignalRule(" not in v4_exit_source
     assert ".can_open_new_position(" in source
     assert ".create_signal_plan_order(" in source
     assert ".submit_order(" in source
@@ -1197,7 +1209,7 @@ def test_protective_intent_without_active_position_creates_no_order() -> None:
 
 
 def test_pipeline_matches_batch_signal_expectation() -> None:
-    components = _components()
+    components = _components_v4_entry()
     bar = _bar()
     result = _orchestrator(components=components).process_bar(bar)
     pipeline_feature_values = result.signal_plans[0].feature_snapshot
@@ -1212,7 +1224,7 @@ def test_pipeline_matches_batch_signal_expectation() -> None:
 
 def test_full_pipeline_governor_order_manager_alpaca_adapter_broker_sync(monkeypatch) -> None:
     monkeypatch.setattr(alpaca_module, "MarketOrderRequest", FakeAlpacaOrderRequest)
-    components = _components()
+    components = _components_v4_entry()
     client = PipelineAlpacaClient()
     adapter = AlpacaBrokerAdapter(mode=TradingMode.BROKER_PAPER, trading_client=client)
     governor = CountingGovernor()
@@ -1231,7 +1243,7 @@ def test_full_pipeline_governor_order_manager_alpaca_adapter_broker_sync(monkeyp
 
 
 def test_full_pipeline_preflight_blocks_invalid_alpaca_order_before_submit() -> None:
-    components = _components()
+    components = _components_v4_entry()
     limit_execution = components.execution_style.model_copy(update={"entry_order_type": OrderType.LIMIT})
     components = components.model_copy(update={"execution_style": limit_execution})
     client = PipelineAlpacaClient()
@@ -1315,6 +1327,7 @@ def test_orchestrator_attaches_stream_router_to_provided_stream_adapter() -> Non
         account_id=ACCOUNT_ID,
         deployment=_deployment(resolved),
         components=resolved,
+        feature_engine=IncrementalFeatureEngine(),
         stream_adapter=stream_adapter,
     )
 
@@ -1408,7 +1421,7 @@ def _portfolio_with_one_open_position():
 
 
 def _orchestrator_with_resolver(*, resolver, components=None, broker_adapter=None, portfolio_snapshot=None):
-    resolved = components or _components()
+    resolved = components or _components_v4_entry()
     # W2-A-1b: default to a non-None equity snapshot so the new
     # portfolio_equity_unavailable rule does not pre-empt the resolver tests
     # (which probe per-Account / per-Plan policy, not equity availability).
@@ -1416,12 +1429,18 @@ def _orchestrator_with_resolver(*, resolver, components=None, broker_adapter=Non
         account_id=ACCOUNT_ID,
         deployment=_deployment(resolved),
         components=resolved,
+        feature_engine=IncrementalFeatureEngine(),
         broker_adapter=broker_adapter,
         governor_policy_resolver=resolver,
         portfolio_snapshot=(
             portfolio_snapshot
             if portfolio_snapshot is not None
             else PortfolioSnapshot(equity=100_000)
+        ),
+        strategy_artifact_resolver=(
+            _strategy_artifact_resolver(resolved)
+            if resolved.strategy_version_v4 is not None
+            else None
         ),
     )
 
@@ -1543,14 +1562,16 @@ def test_resolver_handles_multi_account_fanout_independently() -> None:
     resolver = GovernorPolicyResolver(
         get_policy_inputs=lambda aid, _h: (_account_lookup(aid), _make_plan_config()),
     )
-    resolved = _components()
+    resolved = _components_v4_entry()
     pipeline = RuntimeOrchestrator(
         account_id=ACCOUNT_ID,
         account_ids=(ACCOUNT_ID, OTHER_ACCOUNT_ID),
         deployment=_deployment(resolved),
         components=resolved,
+        feature_engine=IncrementalFeatureEngine(),
         governor_policy_resolver=resolver,
         portfolio_snapshot=PortfolioSnapshot(equity=100_000),
+        strategy_artifact_resolver=_strategy_artifact_resolver(resolved),
     )
     result = pipeline.process_bar(_bar())
     # Two governor decisions, one per account, both approved (cap is 10).
@@ -1598,19 +1619,21 @@ def test_resolver_missing_plan_rejects_entry_signal() -> None:
         get_policy_inputs=lambda _aid, _h: (None, None),
     )
     # Use a deployment with an explicit risk_horizon so enforce_plan_required=True.
-    resolved = _components()
+    resolved = _components_v4_entry()
     deployment = DeploymentContext(
         deployment_id=DEPLOYMENT_ID,
-        strategy_version_id=resolved.strategy.id,
-        strategy_version=resolved.strategy.version,
+        strategy_version_id=resolved.strategy_version_v4.id,
+        strategy_version=resolved.strategy_version_v4.version,
         risk_horizon=TradingHorizon.INTRADAY,  # explicit horizon declared
     )
     pipeline = RuntimeOrchestrator(
         account_id=ACCOUNT_ID,
         deployment=deployment,
         components=resolved,
+        feature_engine=IncrementalFeatureEngine(),
         governor_policy_resolver=resolver,
         portfolio_snapshot=PortfolioSnapshot(equity=100_000),
+        strategy_artifact_resolver=_strategy_artifact_resolver(resolved),
     )
 
     result = pipeline.process_bar(_bar())
@@ -1632,14 +1655,16 @@ def test_missing_explicit_risk_horizon_rejects_when_floor_requires_plan() -> Non
     not set explicit risk_horizon must not bypass plan enforcement through the
     StrategyControls fallback. Reject with rule_id="risk_horizon_missing".
     """
-    resolved = _components()
+    resolved = _components_v4_entry()
     deployment = _deployment(resolved)  # no explicit risk_horizon
     pipeline = RuntimeOrchestrator(
         account_id=ACCOUNT_ID,
         deployment=deployment,
         components=resolved,
+        feature_engine=IncrementalFeatureEngine(),
         governor=PortfolioGovernor(GovernorPolicy(requires_risk_plan=True)),
         portfolio_snapshot=PortfolioSnapshot(equity=100_000),
+        strategy_artifact_resolver=_strategy_artifact_resolver(resolved),
     )
 
     result = pipeline.process_bar(_bar())
@@ -1666,7 +1691,7 @@ def test_governor_candidate_inputs_caps_post_fill_pct_at_100() -> None:
         SignalPlanSide,
         SignalPlanStop,
     )
-    from backend.app.decision.signal_plan_builder import post_fill_pct_rule
+    from backend.app.decision.signal_plan_common import post_fill_pct_rule
 
     pipeline = _orchestrator()  # equity=100k default
     plan = SignalPlan(
@@ -1720,6 +1745,7 @@ def test_resolver_missing_plan_does_not_block_protective_exit() -> None:
         account_ids=(ACCOUNT_ID,),
         deployment=deployment,
         components=components,
+        feature_engine=IncrementalFeatureEngine(),
         governor_policy_resolver=resolver,
         broker_adapter=FakeBrokerAdapter([BrokerOrderStatus.FILLED]),
         position_reader=PositionReader(

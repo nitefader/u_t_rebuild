@@ -1,7 +1,6 @@
 import { Outlet } from "react-router-dom";
 import { SideNav } from "./SideNav";
 import { TopBar } from "./TopBar";
-import { JobToaster } from "@/components/jobs/JobToaster";
 import { ToastProvider } from "@/components/ui/Toast";
 import { useApplyTheme } from "@/store/useAppShell";
 
@@ -17,7 +16,6 @@ export function AppShell(): JSX.Element {
             <Outlet />
           </main>
         </div>
-        <JobToaster />
       </div>
     </ToastProvider>
   );

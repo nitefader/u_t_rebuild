@@ -28,7 +28,9 @@ import pytest
 
 from backend.app.broker_accounts.models import BrokerAccount, BrokerAccountValidationStatus
 from backend.app.brokers import BrokerOrderStatus, BrokerSync, BrokerSyncState, FakeBrokerAdapter
+from backend.app.composition import SignalSourceRegistry, StrategyArtifactKind, StrategyArtifactResolver
 from backend.app.control_plane import ControlPlane
+from backend.app.decision.signal_sources import V4ExpressionSignalSource
 from backend.app.domain import (
     CandidateSide,
     ConditionNode,
@@ -46,7 +48,8 @@ from backend.app.domain import (
 )
 from backend.app.domain.risk_profile import PositionSizingMethod
 from backend.app.domain.strategy import SignalRule
-from backend.app.features import NormalizedBar, ResolvedDeploymentComponents
+from backend.app.domain.strategy_v4 import StrategyVersionV4
+from backend.app.features import IncrementalFeatureEngine, NormalizedBar, ResolvedDeploymentComponents
 from backend.app.governor import PortfolioSnapshot
 from backend.app.orders import OrderManager
 from backend.app.persistence import SQLiteOrderLedger, SQLiteRuntimeStore
@@ -123,6 +126,27 @@ def _components(*, symbol: str = "SPY") -> ResolvedDeploymentComponents:
     )
 
 
+def _strategy_artifact_resolver(
+    components: ResolvedDeploymentComponents,
+) -> StrategyArtifactResolver:
+    registry = SignalSourceRegistry()
+    registry.register(
+        StrategyArtifactKind.EXPRESSION_V1,
+        lambda _metadata: V4ExpressionSignalSource(),
+    )
+
+    def lookup(strategy_version_v4_id: UUID) -> StrategyVersionV4:
+        sv4 = components.strategy_version_v4
+        if sv4 is None or sv4.id != strategy_version_v4_id:
+            raise KeyError(strategy_version_v4_id)
+        return sv4
+
+    return StrategyArtifactResolver(
+        registry=registry,
+        strategy_v4_lookup=lookup,
+    )
+
+
 def _bar(index: int, *, symbol: str = "SPY", base: datetime | None = None) -> NormalizedBar:
     """Bar strictly after warmup bars. ``base`` must be > utc_now() at warmup time."""
     _base = base if base is not None else datetime.now(timezone.utc) + timedelta(minutes=2)
@@ -195,6 +219,7 @@ def _make_orchestrator(
         broker_sync=broker_sync,
         order_manager=order_manager,
         control_plane=control_plane,
+        feature_engine=IncrementalFeatureEngine(),
         startup_warmup_bars_source=_WARMUP_SOURCE,
         portfolio_snapshot_factory=lambda aid: portfolio_snapshot_by_account.get(aid, PortfolioSnapshot()),
     )
@@ -349,6 +374,7 @@ def test_deployment_with_null_strategy_fails_fast_at_start() -> None:
             account_id=uuid4(),
             deployment=dep,
             components=comps_no_strategy,
+            feature_engine=IncrementalFeatureEngine(),
         )
 
 
@@ -400,5 +426,7 @@ def test_deployment_with_v4_strategy_does_not_raise() -> None:
         account_id=uuid4(),
         deployment=dep,
         components=comps_v4_only,
+        feature_engine=IncrementalFeatureEngine(),
+        strategy_artifact_resolver=_strategy_artifact_resolver(comps_v4_only),
     )
     assert orchestrator is not None

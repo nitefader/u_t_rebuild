@@ -197,7 +197,6 @@ export function NewDeploymentScreen(): JSX.Element {
       DeploymentsApi.create({
         name: name.trim(),
         description: description.trim() || null,
-        strategy_version_id: undefined,
         strategy_version_v4_id: selectedStrategy?.head_version_id ?? "",
         strategy_controls_version_id: controlsId || undefined,
         execution_plan_version_id: execPlanId || undefined,

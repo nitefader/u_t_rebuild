@@ -25,8 +25,8 @@ from backend.app.domain.strategy_controls import (
     StrategyControlsVersion,
 )
 from backend.app.execution_plans import ExecutionPlanRepository
-from backend.app.strategies import StrategyService
-from backend.app.strategies.persistence import StrategyRepository
+from backend.app.strategies_v4.persistence import StrategyV4Repository
+from backend.app.strategies_v4.service import StrategyV4Service
 from backend.app.strategy_composer import (
     AIComposerRequest,
     StrategyComposerService,
@@ -36,7 +36,7 @@ from backend.app.strategy_controls import StrategyControlsRepository
 
 
 def _make_bracket_draft(composer: StrategyComposerService, *, stop_pct: float, target_pct: float, cooldown_minutes: int):
-    draft = composer.compose(AIComposerRequest(prompt="green bar entry"))
+    draft = composer.compose(AIComposerRequest(prompt="green bar entry exit after 5 minutes"))
     bracket_plan = draft.execution_style.model_copy(
         update={
             "execution_mode": ExecutionMode.POST_FILL_BRACKET,
@@ -71,7 +71,7 @@ def test_save_draft_persists_strategy_controls_and_execution_plan(tmp_path: Path
     controls_repo = StrategyControlsRepository(db)
     plan_repo = ExecutionPlanRepository(db)
     composer = StrategyComposerService(
-        strategy_service=StrategyService(repository=StrategyRepository(db)),
+        strategy_v4_service=StrategyV4Service(repository=StrategyV4Repository(db)),
         strategy_controls_repository=controls_repo,
         execution_plan_repository=plan_repo,
     )
@@ -98,7 +98,7 @@ def test_save_draft_persists_native_alpaca_bracket_mode(tmp_path: Path) -> None:
     db = tmp_path / "test.db"
     plan_repo = ExecutionPlanRepository(db)
     composer = StrategyComposerService(
-        strategy_service=StrategyService(repository=StrategyRepository(db)),
+        strategy_v4_service=StrategyV4Service(repository=StrategyV4Repository(db)),
         execution_plan_repository=plan_repo,
     )
     draft = _make_bracket_draft(composer, stop_pct=5.0, target_pct=10.0, cooldown_minutes=0)
@@ -120,7 +120,7 @@ def test_save_draft_persists_native_alpaca_bracket_mode(tmp_path: Path) -> None:
 def test_save_draft_no_repos_is_noop_pass_through(tmp_path: Path) -> None:
     db = tmp_path / "test.db"
     composer = StrategyComposerService(
-        strategy_service=StrategyService(repository=StrategyRepository(db)),
+        strategy_v4_service=StrategyV4Service(repository=StrategyV4Repository(db)),
     )
     draft = _make_bracket_draft(composer, stop_pct=5.0, target_pct=10.0, cooldown_minutes=15)
 

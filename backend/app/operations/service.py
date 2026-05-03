@@ -763,7 +763,7 @@ class OperationsCenterService:
     ) -> UUID | None:
         if context is not None and context.strategy_version_id is not None:
             return context.strategy_version_id
-        record_strategy_version_id = getattr(record, "strategy_version_id", None)
+        record_strategy_version_id = getattr(record, "strategy_version_v4_id", None)
         if record_strategy_version_id is not None:
             return record_strategy_version_id
         return orders[0].strategy_version_id if orders else None

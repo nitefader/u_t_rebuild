@@ -19,7 +19,6 @@ from backend.app.domain import (
     RiskPlanTier,
     RiskPlanVersion,
     RiskPlanVersionStatus,
-    ResearchRunKind,
 )
 from backend.app.domain._base import utc_now
 from backend.app.persistence import SQLiteRuntimeStore
@@ -203,8 +202,8 @@ def _research_source_lineage(
     store: SQLiteRuntimeStore,
 ) -> tuple[UUID | None, str | None, dict[str, Any]]:
     research_sources = {
-        RiskPlanSource.OPTIMIZATION_GENERATED: ("OptimizationRun", ResearchRunKind.OPTIMIZATION),
-        RiskPlanSource.WALK_FORWARD_RECOMMENDED: ("WalkForwardRun", ResearchRunKind.WALK_FORWARD),
+        RiskPlanSource.OPTIMIZATION_GENERATED: "OptimizationRun",
+        RiskPlanSource.WALK_FORWARD_RECOMMENDED: "WalkForwardRun",
     }
     if request.source not in research_sources:
         return request.source_run_id, request.source_evidence_type, dict(request.evidence_lineage)
@@ -214,45 +213,13 @@ def _research_source_lineage(
             status_code=422,
             detail="research-derived Risk Plans require source_run_id",
         )
-    try:
-        artifact = store.load_research_run_artifact_for_run(request.source_run_id)
-    except KeyError as exc:
-        raise HTTPException(
-            status_code=422,
-            detail=(
-                "research-derived Risk Plans require immutable evidence lineage: "
-                f"no ResearchRunArtifact found for source_run_id {request.source_run_id}"
-            ),
-        ) from exc
-
-    snapshot = artifact.deployment_snapshot
-    default_evidence_type, expected_kind = research_sources[request.source]
-    if artifact.run_kind != expected_kind:
-        raise HTTPException(
-            status_code=422,
-            detail=(
-                f"{request.source.value} Risk Plans require {expected_kind.value} evidence; "
-                f"artifact {artifact.artifact_id} is {artifact.run_kind.value}"
-            ),
-        )
-    source_evidence_type = request.source_evidence_type or default_evidence_type
-    lineage = dict(request.evidence_lineage)
-    lineage.update(
-        {
-            "source_run_id": str(request.source_run_id),
-            "source_evidence_type": source_evidence_type,
-            "artifact_id": str(artifact.artifact_id),
-            "deployment_snapshot_id": str(snapshot.snapshot_id),
-            "research_run_kind": artifact.run_kind.value,
-            "strategy_id": str(snapshot.strategy_id),
-            "strategy_version_id": str(snapshot.strategy_version_id),
-            "strategy_controls_version_id": str(snapshot.strategy_controls_version_id),
-            "execution_plan_version_id": str(snapshot.execution_plan_version_id),
-            "risk_plan_version_id": str(snapshot.risk_plan_version_id),
-            "symbols": list(snapshot.symbols),
-        }
+    raise HTTPException(
+        status_code=422,
+        detail=(
+            "research-derived Risk Plans are disabled until the research spine "
+            "is rewired in S12.7/S12.8"
+        ),
     )
-    return request.source_run_id, source_evidence_type, lineage
 
 
 @router.get("/api/v1/risk-plans", response_model=RiskPlanListResponse)
@@ -531,9 +498,11 @@ def _risk_plan_list_item(store: SQLiteRuntimeStore, risk_plan: RiskPlan) -> Risk
     versions = store.list_risk_plan_versions(risk_plan.risk_plan_id)
     active_version = _active_or_latest_draft_version(versions)
     linked_accounts = store.list_broker_accounts_by_default_risk_plan(risk_plan.risk_plan_id)
-    backtest_runs = store.list_backtest_runs_for_risk_plan_versions(
-        tuple(version.risk_plan_version_id for version in versions),
-        limit=1,
+    list_backtests = getattr(store, "list_backtest_runs_for_risk_plan_versions", None)
+    backtest_runs = (
+        list_backtests(tuple(version.risk_plan_version_id for version in versions), limit=1)
+        if callable(list_backtests)
+        else ()
     )
     cards = store.list_risk_decision_cards_for_risk_plan_versions(
         tuple(version.risk_plan_version_id for version in versions)
@@ -596,9 +565,11 @@ def _backtest_usage_for_plan(
     store: SQLiteRuntimeStore,
     versions: tuple[RiskPlanVersion, ...],
 ) -> tuple[RiskPlanBacktestUsage, ...]:
-    runs = store.list_backtest_runs_for_risk_plan_versions(
-        tuple(version.risk_plan_version_id for version in versions),
-        limit=20,
+    list_backtests = getattr(store, "list_backtest_runs_for_risk_plan_versions", None)
+    runs = (
+        list_backtests(tuple(version.risk_plan_version_id for version in versions), limit=20)
+        if callable(list_backtests)
+        else ()
     )
     return tuple(
         RiskPlanBacktestUsage(

@@ -540,8 +540,8 @@ async function setLastCriterionRow(session, metric, operator, value) {
 }
 
 async function firstUsableStrategy(session) {
-  const strategies = await browserApi(session, "/api/v1/strategies");
-  const strategy = strategies.strategies.find((item) => item.latest_version_id);
+  const strategies = await browserApi(session, "/api/v1/strategies/v4/");
+  const strategy = strategies.find((item) => item.head_version_id);
   assert(strategy, "No strategy version available for Deployment UI attachment walkthrough");
   return strategy;
 }
@@ -622,12 +622,12 @@ async function runUiOperatorPass(session) {
   await clickButtonByText(session, "New Deployment");
   await waitForText(session, "The Deployment publishes SignalPlans");
   await setControlByLabel(session, "Display name", `Headless UI Entry Deployment ${stamp}`);
-  await setControlByLabel(session, "Strategy", strategy.strategy_id);
+  await setControlByLabel(session, "Strategy", strategy.strategy_v4_id);
   await waitFor("strategy versions load", async () => {
     const text = await bodyText(session);
     return text.includes("Strategy version") && !text.includes("No Strategy versions");
   });
-  await setControlByLabel(session, "Strategy version", strategy.latest_version_id);
+  await setControlByLabel(session, "Strategy version", strategy.head_version_id);
   pass("UI Deployment drawer accepts current Strategy version", strategy.name);
   await clickButtonByText(session, "Cancel");
 }
@@ -992,8 +992,8 @@ try {
   journeyPass("day_trader", "schedule_lifecycle", "Schedule run-now/pause/resume/archive lifecycle", watchlistScheduleName);
   journeyPass("swing_quant", "schedule_audit", "Watchlist refresh schedule audit lifecycle", watchlistScheduleName);
 
-  const strategies = await browserApi(session, "/api/v1/strategies");
-  const strategy = strategies.strategies.find((item) => item.latest_version_id);
+  const strategies = await browserApi(session, "/api/v1/strategies/v4/");
+  const strategy = strategies.find((item) => item.head_version_id);
   const accounts = await browserApi(session, "/api/v1/broker-accounts");
   assert(strategy, "No strategy version available for Deployment attachment walkthrough");
   assert(accounts.accounts.length > 0, "No broker account available for Deployment attachment walkthrough");
@@ -1002,7 +1002,7 @@ try {
     body: {
       name: `Headless Entry Deployment ${stamp}`,
       description: "Headless walkthrough deployment; entries from Watchlist only",
-      strategy_version_id: strategy.latest_version_id,
+      strategy_version_v4_id: strategy.head_version_id,
       watchlist_ids: [dynamicWatchlist.watchlist_id],
       subscribed_account_ids: [accounts.accounts[0].id],
       runtime_overrides: { source: "headless_screener_watchlist_walkthrough" },

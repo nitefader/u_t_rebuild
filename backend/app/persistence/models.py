@@ -204,39 +204,6 @@ CREATE INDEX IF NOT EXISTS ix_manual_trade_audit_events_code_time
 CREATE INDEX IF NOT EXISTS ix_manual_trade_audit_events_order_id
     ON manual_trade_audit_events(order_id);
 
-CREATE TABLE IF NOT EXISTS research_evidence (
-    evidence_id TEXT PRIMARY KEY,
-    evidence_type TEXT NOT NULL,
-    strategy_id TEXT NOT NULL,
-    strategy_version_id TEXT NOT NULL,
-    created_at TEXT NOT NULL,
-    payload TEXT NOT NULL
-);
-CREATE INDEX IF NOT EXISTS ix_research_evidence_strategy
-    ON research_evidence(strategy_id, strategy_version_id);
-CREATE INDEX IF NOT EXISTS ix_research_evidence_type
-    ON research_evidence(evidence_type);
-CREATE INDEX IF NOT EXISTS ix_research_evidence_created_at
-    ON research_evidence(created_at);
-
-CREATE TABLE IF NOT EXISTS research_run_artifacts (
-    artifact_id TEXT PRIMARY KEY,
-    run_id TEXT NOT NULL,
-    run_kind TEXT NOT NULL,
-    strategy_id TEXT NOT NULL,
-    strategy_version_id TEXT NOT NULL,
-    deployment_snapshot_id TEXT NOT NULL,
-    source_deployment_id TEXT,
-    created_at TEXT NOT NULL,
-    payload TEXT NOT NULL
-);
-CREATE INDEX IF NOT EXISTS ix_research_run_artifacts_run
-    ON research_run_artifacts(run_id, run_kind);
-CREATE INDEX IF NOT EXISTS ix_research_run_artifacts_strategy
-    ON research_run_artifacts(strategy_id, strategy_version_id);
-CREATE INDEX IF NOT EXISTS ix_research_run_artifacts_snapshot
-    ON research_run_artifacts(deployment_snapshot_id);
-
 CREATE TABLE IF NOT EXISTS risk_decision_cards (
     risk_decision_id TEXT PRIMARY KEY,
     mode TEXT NOT NULL,
@@ -312,29 +279,6 @@ CREATE UNIQUE INDEX IF NOT EXISTS ux_historical_datasets_identity
 CREATE INDEX IF NOT EXISTS ix_historical_datasets_symbol
     ON historical_datasets(symbol);
 
-CREATE TABLE IF NOT EXISTS research_jobs (
-    job_id TEXT PRIMARY KEY,
-    kind TEXT NOT NULL,
-    status TEXT NOT NULL,
-    progress_current INTEGER NOT NULL DEFAULT 0,
-    progress_total INTEGER NOT NULL DEFAULT 0,
-    progress_label TEXT NOT NULL DEFAULT '',
-    cancel_requested INTEGER NOT NULL DEFAULT 0,
-    result_run_id TEXT,
-    error TEXT,
-    created_at TEXT NOT NULL,
-    started_at TEXT,
-    finished_at TEXT,
-    operator_session_id TEXT,
-    payload TEXT NOT NULL
-);
-CREATE INDEX IF NOT EXISTS ix_research_jobs_status
-    ON research_jobs(status, created_at);
-CREATE INDEX IF NOT EXISTS ix_research_jobs_kind
-    ON research_jobs(kind, created_at);
-CREATE INDEX IF NOT EXISTS ix_research_jobs_result_run_id
-    ON research_jobs(result_run_id);
-
 -- W2-A-2 (audit P0 #2 — pre-T-7 bundle, 2026-04-30): durable record of every
 -- AccountSignalPlanEvaluation outcome. Pre-W2-A the orchestrator built these
 -- in memory and Operations reconstructed them from the order ledger only,
@@ -380,3 +324,31 @@ CREATE TABLE IF NOT EXISTS daily_account_states (
 CREATE INDEX IF NOT EXISTS ix_daily_account_states_account_day
     ON daily_account_states(account_id, market_day DESC);
 """
+
+
+RESEARCH_ORCHESTRATION_TABLES = (
+    "backtest_results",
+    "backtest_runs",
+    "optimization_candidates",
+    "optimization_landscapes",
+    "optimization_results",
+    "optimization_runs",
+    "regime_classifications",
+    "regime_runs",
+    "regime_tags",
+    "research_evidence",
+    "research_jobs",
+    "research_run_artifacts",
+    "research_runs",
+    "sim_lab_runs",
+    "sim_lab_sessions",
+    "simulation_runs",
+    "walk_forward_equity_curves",
+    "walk_forward_folds",
+    "walk_forward_oos_regime_breakdown",
+    "walk_forward_parameter_stability",
+    "walk_forward_recommendations",
+    "walk_forward_results",
+    "walk_forward_runs",
+    "walk_forward_windows",
+)

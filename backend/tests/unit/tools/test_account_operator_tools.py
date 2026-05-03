@@ -14,7 +14,7 @@ from backend.app.brokers import (
 )
 from backend.app.domain import TradingMode
 from backend.app.domain._base import utc_now
-from backend.app.features import NormalizedBar
+from backend.app.features import IncrementalFeatureEngine, NormalizedBar
 from backend.app.governor import GovernorPolicy, PortfolioGovernor, PortfolioSnapshot
 from backend.app.orders import InternalOrder, OrderManager
 from backend.app.pipeline import RuntimeOrchestrator
@@ -375,16 +375,18 @@ def test_runtime_smoke_governor_blocks_when_required() -> None:
     components = runtime_smoke._components(symbol="SPY", qty=1)
     deployment = runtime_smoke.DeploymentContext(
         deployment_id=runtime_smoke.DEFAULT_DEPLOYMENT_ID,
-        strategy_version_id=components.strategy.id,
-        strategy_version=components.strategy.version,
+        strategy_version_id=components.strategy_version_v4.id,
+        strategy_version=components.strategy_version_v4.version,
         mode="runtime_smoke",
     )
     orchestrator = RuntimeOrchestrator(
         account_id=runtime_smoke.DEFAULT_ACCOUNT_ID,
         deployment=deployment,
         components=components,
+        feature_engine=IncrementalFeatureEngine(),
         governor=PortfolioGovernor(GovernorPolicy(global_kill_active=True)),
         portfolio_snapshot=PortfolioSnapshot(equity=100_000),
+        strategy_artifact_resolver=runtime_smoke._strategy_artifact_resolver(components),
     )
 
     result = orchestrator.process_bar(runtime_smoke._generated_completed_bars(symbol="SPY", count=1)[0])

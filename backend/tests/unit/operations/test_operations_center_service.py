@@ -21,7 +21,6 @@ from backend.app.domain import (
     AccountEvaluationStatus,
     AccountParticipationDecision,
     AccountSignalPlanEvaluation,
-    BacktestRun,
     CandidateSide,
     GovernorDecisionStatus,
     GovernorDecisionTrace,
@@ -126,19 +125,6 @@ def _program(version: int = 3) -> ProgramVersion:
 
 def _deployment(deployment_id: UUID = DEPLOYMENT_ID) -> DeploymentContext:
     return DeploymentContext(deployment_id=deployment_id, program=_program())
-
-
-def _backtest_evidence() -> BacktestRun:
-    return BacktestRun(
-        run_id=uuid4(),
-        strategy_id=uuid4(),
-        strategy_version_id=uuid4(),
-        start=NOW - timedelta(days=30),
-        end=NOW,
-        bar_count=100,
-        signal_plan_count=5,
-        simulated_trade_count=3,
-    )
 
 
 def _order(status: InternalOrderStatus = InternalOrderStatus.ACCEPTED, deployment_id: UUID = DEPLOYMENT_ID) -> InternalOrder:
@@ -430,51 +416,6 @@ def test_stale_and_recovery_deployments_are_visible_with_recovered_ready_not_run
     assert recovered.is_running is False
 
 
-def test_runtime_overview_summarizes_research_evidence_without_trading_authority(tmp_path) -> None:
-    store, _ = _store(tmp_path)
-    evidence = _backtest_evidence()
-    store.save_research_evidence(evidence)
-
-    overview = OperationsCenterService(
-        control_plane=ControlPlane(state_store=store),
-        runtime_store=store,
-    ).get_runtime_overview()
-
-    assert len(overview.research_evidence_summary) == 1
-    assert overview.research_evidence_summary[0].evidence_type == "backtest_run"
-    assert overview.research_evidence_summary[0].count == 1
-    assert overview.research_evidence_summary[0].latest_created_at == evidence.created_at
-
-
-def test_research_evidence_detail_and_filter_queries_are_operations_read_only(tmp_path) -> None:
-    store, _ = _store(tmp_path)
-    evidence = _backtest_evidence()
-    other_evidence = BacktestRun(
-        run_id=uuid4(),
-        strategy_id=uuid4(),
-        strategy_version_id=uuid4(),
-        start=NOW - timedelta(days=10),
-        end=NOW,
-        bar_count=50,
-        signal_plan_count=2,
-        simulated_trade_count=1,
-    )
-    store.save_research_evidence(evidence)
-    store.save_research_evidence(other_evidence)
-
-    service = OperationsCenterService(
-        control_plane=ControlPlane(state_store=store),
-        runtime_store=store,
-    )
-
-    assert service.get_research_evidence(evidence.run_id) == evidence
-    assert service.list_research_evidence(strategy_id=evidence.strategy_id) == (evidence,)
-    assert {item.run_id for item in service.list_research_evidence(evidence_type="backtest_run")} == {
-        evidence.run_id,
-        other_evidence.run_id,
-    }
-
-
 def test_account_operations_shows_broker_snapshot_positions_and_control_state(tmp_path) -> None:
     service, store, _ = _service(tmp_path)
     ControlPlane(state_store=store).pause_account(ACCOUNT_ID)
@@ -567,7 +508,7 @@ def test_runtime_overview_counts_real_deployment_records_without_order_lineage()
                 Deployment(
                     deployment_id=DEPLOYMENT_ID,
                     name="Mean Reversion Deployment",
-                    strategy_version_id=STRATEGY_VERSION_ID,
+                    strategy_version_v4_id=STRATEGY_VERSION_ID,
                     watchlist_ids=(uuid4(),),
                     subscribed_account_ids=(ACCOUNT_ID,),
                 ),

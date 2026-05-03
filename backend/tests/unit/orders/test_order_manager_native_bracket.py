@@ -18,7 +18,7 @@ from uuid import UUID, uuid4
 
 import pytest
 
-from backend.app.decision.signal_plan_builder import post_fill_pct_rule
+from backend.app.decision.signal_plan_common import post_fill_pct_rule
 from backend.app.domain import (
     AccountEvaluationStatus,
     AccountParticipationDecision,

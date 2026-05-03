@@ -26,6 +26,7 @@ import threading
 from collections.abc import Iterable
 from datetime import timedelta
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 from uuid import UUID
@@ -35,6 +36,8 @@ from backend.app.brokers import (
     AlpacaBrokerError,
     BrokerSync,
 )
+from backend.app.composition import build_strategy_artifact_resolver
+from backend.app.composition.feature_engine import register_feature_engine
 from backend.app.control_plane import ControlPlane
 from backend.app.governor import (
     PortfolioSnapshot,
@@ -45,7 +48,7 @@ from backend.app.market_data import MarketDataStreamHub
 from backend.app.orders import OrderManager
 from backend.app.config.runtime_paths import get_runtime_db_path
 from backend.app.domain._base import utc_now
-from backend.app.features import FeatureHydrationBarsRequest, NormalizedBar
+from backend.app.features import FeatureHydrationBarsRequest, IncrementalFeatureEngine, NormalizedBar
 from backend.app.persistence import SQLiteOrderLedger, SQLiteRuntimeStore
 
 from .account_trading_orchestrator import BrokerRuntimeDeployment, BrokerRuntimeOrchestrator
@@ -326,11 +329,14 @@ def run_account_trading(
         provider="alpaca",
     )
     control_plane = ControlPlane(state_store=runtime_store)
-    from backend.app.api.routes.chart_lab import ChartLabConfig
+    from backend.app.market_data.data_feed_config import ChartLabConfig
     from backend.app.runtime.runtime_context import HubKey, bootstrap_manual_trade_composition, bootstrap_streams, hub_registry
 
     bootstrap_manual_trade_composition(broker_account_service)
     bootstrap_streams(broker_account_service)
+    _registry, strategy_artifact_resolver = build_strategy_artifact_resolver()
+    composition_state = SimpleNamespace()
+    feature_engine = register_feature_engine(composition_state, IncrementalFeatureEngine())
     account_trading = BrokerRuntimeOrchestrator(
         deployments=tuple(deployments or ()),
         runtime_store=runtime_store,
@@ -338,6 +344,8 @@ def run_account_trading(
         broker_sync=broker_sync,
         order_manager=order_manager,
         control_plane=control_plane,
+        feature_engine=feature_engine,
+        strategy_artifact_resolver=strategy_artifact_resolver,
         portfolio_snapshot_factory=build_portfolio_snapshot_factory(runtime_store),
         startup_warmup_bars_source=RuntimeHistoricalWarmupBarsSource(runtime_store),
     )

@@ -16,13 +16,19 @@ try:  # pragma: no cover - optional dotenv support; tests don't depend on it.
 except ImportError:  # pragma: no cover
     pass
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 
 from backend.app.api.api_key_middleware import OptionalApiKeyMiddleware
+from backend.app.composition.feature_engine import register_feature_engine
+from backend.app.composition import (
+    SignalSourceRegistry,
+    StrategyArtifactResolver,
+    build_strategy_artifact_resolver,
+)
+from backend.app.features import IncrementalFeatureEngine
 from backend.app.api.routes import (
     ai,
     broker_accounts,
-    chart_lab,
     data_center,
     deployments,
     discovery_schedules,
@@ -30,12 +36,9 @@ from backend.app.api.routes import (
     market_data,
     operations,
     operations_trade_stream,
-    research_jobs,
-    research_runs,
     risk_decisions,
     risk_plans,
     screener,
-    strategies,
     strategies_v4,
     execution_plans,
     strategy_controls,
@@ -47,9 +50,44 @@ from backend.app.api.routes import (
     watchlists,
 )
 
-
 app = FastAPI(title="Ultimate Trader API")
 app.add_middleware(OptionalApiKeyMiddleware)
+
+
+def _configure_strategy_artifact_composition(target_app: FastAPI) -> None:
+    registry, resolver = build_strategy_artifact_resolver()
+    target_app.state.signal_source_registry = registry
+    target_app.state.strategy_artifact_resolver = resolver
+
+
+def _configure_feature_engine_composition(target_app: FastAPI) -> None:
+    register_feature_engine(target_app.state, IncrementalFeatureEngine())
+
+
+def get_signal_source_registry(request: Request) -> SignalSourceRegistry:
+    registry: object | None = getattr(
+        request.app.state,
+        "signal_source_registry",
+        None,
+    )
+    if not isinstance(registry, SignalSourceRegistry):
+        raise RuntimeError("signal_source_registry is not configured")
+    return registry
+
+
+def get_strategy_artifact_resolver(request: Request) -> StrategyArtifactResolver:
+    resolver: object | None = getattr(
+        request.app.state,
+        "strategy_artifact_resolver",
+        None,
+    )
+    if not isinstance(resolver, StrategyArtifactResolver):
+        raise RuntimeError("strategy_artifact_resolver is not configured")
+    return resolver
+
+
+_configure_strategy_artifact_composition(app)
+_configure_feature_engine_composition(app)
 
 
 def _kill_orphan_python_children() -> int:
@@ -224,12 +262,12 @@ def _bootstrap_streams() -> None:  # pragma: no cover
             BrokerRuntimeSupervisor,
         )
         from backend.app.runtime.runtime_context import hub_registry, HubKey
-        from backend.app.api.routes.chart_lab import ChartLabConfig
         from backend.app.brokers import BrokerSync
         from backend.app.broker_accounts.runtime_service import (
             create_broker_account_service_from_environment,
         )
         from backend.app.control_plane import ControlPlane
+        from backend.app.market_data.data_feed_config import ChartLabConfig
         from backend.app.orders import OrderManager
         from backend.app.runtime.account_trading_entrypoint import (
             AccountScopedAlpacaBrokerAdapter,
@@ -266,6 +304,8 @@ def _bootstrap_streams() -> None:  # pragma: no cover
                 provider="alpaca",
             )
             control_plane = ControlPlane(state_store=runtime_store)
+            strategy_artifact_resolver = app.state.strategy_artifact_resolver
+            feature_engine = app.state.feature_engine
             account_trading = BrokerRuntimeOrchestrator(
                 deployments=(),
                 runtime_store=runtime_store,
@@ -273,6 +313,8 @@ def _bootstrap_streams() -> None:  # pragma: no cover
                 broker_sync=broker_sync,
                 order_manager=order_manager,
                 control_plane=control_plane,
+                feature_engine=feature_engine,
+                strategy_artifact_resolver=strategy_artifact_resolver,
                 portfolio_snapshot_factory=build_portfolio_snapshot_factory(
                     runtime_store
                 ),
@@ -370,15 +412,11 @@ app.include_router(broker_accounts.router)
 app.include_router(manual_trade.router)
 app.include_router(operations.router)
 app.include_router(operations_trade_stream.router)
-app.include_router(research_runs.router)
-app.include_router(research_jobs.router)
 app.include_router(risk_decisions.router)
 app.include_router(risk_plans.router)
 app.include_router(market_data.router)
 app.include_router(data_center.router)
 app.include_router(ai.router)
-app.include_router(chart_lab.router)
-app.include_router(strategies.router)
 app.include_router(strategies_v4.router)
 app.include_router(execution_plans.router)
 app.include_router(strategy_controls.router)

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from datetime import timedelta
 from uuid import UUID, uuid4
 
 from fastapi import FastAPI
@@ -9,7 +8,7 @@ from fastapi.testclient import TestClient
 from backend.app.api.routes import risk_plans
 from backend.app.ai import AIProvider, AIProviderStatus, AIServiceList, AIServiceRecord
 from backend.app.broker_accounts.models import BrokerAccount, BrokerAccountValidationStatus
-from backend.app.domain import BacktestRun, RiskDecisionCard, RiskDecisionMode, RiskDecisionStatus, TradingMode
+from backend.app.domain import RiskDecisionCard, RiskDecisionMode, RiskDecisionStatus, TradingMode
 from backend.app.domain._base import utc_now
 from backend.app.persistence import SQLiteRuntimeStore
 
@@ -290,23 +289,6 @@ def test_risk_plan_list_rows_include_active_version_and_usage_summary(tmp_path) 
         json={"risk_plan_version_id": second_version_id},
     )
     assert activated.status_code == 200
-    run_id = uuid4()
-    now = utc_now()
-    store.save_research_evidence(
-        BacktestRun(
-            run_id=run_id,
-            strategy_id=uuid4(),
-            strategy_version_id=uuid4(),
-            start=now - timedelta(days=10),
-            end=now,
-            bar_count=10,
-            signal_plan_count=1,
-            simulated_trade_count=1,
-            metrics={"risk_plan_version_id": second_version_id, "sharpe": 1.2},
-            created_at=now,
-        )
-    )
-
     listed = client.get("/api/v1/risk-plans")
 
     assert listed.status_code == 200
@@ -336,30 +318,6 @@ def test_risk_plan_detail_includes_linked_accounts_backtests_and_decision_stats(
     )
     store.save_broker_account(account)
     run_id = uuid4()
-    now = utc_now()
-    strategy_id = uuid4()
-    strategy_version_id = uuid4()
-    store.save_research_evidence(
-        BacktestRun(
-            run_id=run_id,
-            strategy_id=strategy_id,
-            strategy_version_id=strategy_version_id,
-            start=now - timedelta(days=5),
-            end=now,
-            bar_count=5,
-            signal_plan_count=2,
-            simulated_trade_count=2,
-            metrics={
-                "risk_plan_version_id": str(risk_plan_version_id),
-                "sharpe": 1.4,
-                "max_drawdown": -0.06,
-                "total_return": 0.18,
-                "monte_carlo": {"replications": 100},
-                "warnings": ["thin sample"],
-            },
-            created_at=now,
-        )
-    )
     store.save_risk_decision_card(
         _risk_decision_card(
             run_id=run_id,
@@ -395,12 +353,7 @@ def test_risk_plan_detail_includes_linked_accounts_backtests_and_decision_stats(
         }
     ]
     assert body["linked_accounts"][0]["last_risk_decision_at"] is not None
-    assert body["backtest_usage"][0]["run_id"] == str(run_id)
-    assert body["backtest_usage"][0]["strategy_id"] == str(strategy_id)
-    assert body["backtest_usage"][0]["strategy_version_id"] == str(strategy_version_id)
-    assert body["backtest_usage"][0]["sharpe"] == 1.4
-    assert body["backtest_usage"][0]["monte_carlo_summary"] == {"replications": 100}
-    assert body["backtest_usage"][0]["warnings"] == ["thin sample"]
+    assert body["backtest_usage"] == []
     assert body["decision_stats"]["total"] == 2
     assert body["decision_stats"]["approved"] == 1
     assert body["decision_stats"]["rejected"] == 1

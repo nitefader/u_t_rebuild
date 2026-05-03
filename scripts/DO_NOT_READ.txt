@@ -1,0 +1,1 @@
+python scripts\mission_orchestrator.py --reset --max-cycles 5

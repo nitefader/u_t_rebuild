@@ -36,7 +36,6 @@ describe("<Deployments />", () => {
     restore = installFetchMock([
       { url: "/api/v1/deployments", body: { deployments: [] } },
       { url: "/api/v1/watchlists", body: { watchlists: [] } },
-      { url: "/api/v1/strategies", body: { strategies: [] } },
       { url: "/api/v1/strategies/v4/", body: [] },
       { url: "/api/v1/system/status", body: STATUS_OK },
     ]);
@@ -56,7 +55,7 @@ describe("<Deployments />", () => {
               deployment_id: "33333333-3333-3333-3333-333333333333",
               name: "Layered SPY",
               description: null,
-              strategy_version_id: "44444444-4444-4444-4444-444444444444",
+              strategy_version_v4_id: "44444444-4444-4444-4444-444444444444",
               watchlist_ids: ["55555555-5555-5555-5555-555555555555"],
               subscribed_account_ids: ["66666666-6666-6666-6666-666666666666"],
               lifecycle_status: "draft",
@@ -91,24 +90,20 @@ describe("<Deployments />", () => {
         },
       },
       {
-        url: "/api/v1/strategies",
-        body: {
-          strategies: [
-            {
-              strategy_id: "77777777-7777-7777-7777-777777777777",
-              name: "Opening Range Strategy",
-              description: null,
-              tags: [],
-              status: "active",
-              created_at: new Date().toISOString(),
-              latest_version_id: "44444444-4444-4444-4444-444444444444",
-              frozen_version_ids: ["44444444-4444-4444-4444-444444444444"],
-              version_count: 1,
-            },
-          ],
-        },
+        url: "/api/v1/strategies/v4/",
+        body: [
+          {
+            strategy_v4_id: "77777777-7777-7777-7777-777777777777",
+            name: "Opening Range Strategy",
+            description: null,
+            head_version: 1,
+            head_version_id: "44444444-4444-4444-4444-444444444444",
+            total_versions: 1,
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+          },
+        ],
       },
-      { url: "/api/v1/strategies/v4/", body: [] },
       { url: "/api/v1/system/status", body: STATUS_OK },
     ]);
     renderRoute(<Deployments />);
@@ -131,7 +126,7 @@ describe("<Deployments />", () => {
               deployment_id: "33333333-3333-3333-3333-333333333333",
               name: "Intraday Rocket",
               description: null,
-              strategy_version_id: "44444444-4444-4444-4444-444444444444",
+              strategy_version_v4_id: "44444444-4444-4444-4444-444444444444",
               watchlist_ids: [],
               subscribed_account_ids: [],
               lifecycle_status: "draft",
@@ -146,7 +141,6 @@ describe("<Deployments />", () => {
         },
       },
       { url: "/api/v1/watchlists", body: { watchlists: [] } },
-      { url: "/api/v1/strategies", body: { strategies: [] } },
       { url: "/api/v1/strategies/v4/", body: [] },
       { url: "/api/v1/system/status", body: STATUS_OK },
     ]);
@@ -168,7 +162,7 @@ describe("<Deployments />", () => {
               deployment_id: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
               name: "Active One",
               description: null,
-              strategy_version_id: "44444444-4444-4444-4444-444444444444",
+              strategy_version_v4_id: "44444444-4444-4444-4444-444444444444",
               watchlist_ids: [],
               subscribed_account_ids: [],
               lifecycle_status: "active",
@@ -182,7 +176,7 @@ describe("<Deployments />", () => {
               deployment_id: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
               name: "Draft One",
               description: null,
-              strategy_version_id: "44444444-4444-4444-4444-444444444444",
+              strategy_version_v4_id: "44444444-4444-4444-4444-444444444444",
               watchlist_ids: [],
               subscribed_account_ids: [],
               lifecycle_status: "draft",
@@ -196,7 +190,6 @@ describe("<Deployments />", () => {
         },
       },
       { url: "/api/v1/watchlists", body: { watchlists: [] } },
-      { url: "/api/v1/strategies", body: { strategies: [] } },
       { url: "/api/v1/strategies/v4/", body: [] },
       { url: "/api/v1/system/status", body: STATUS_OK },
     ]);
@@ -234,7 +227,6 @@ describe("<Deployments />", () => {
         },
       },
       { url: "/api/v1/watchlists", body: { watchlists: [] } },
-      { url: "/api/v1/strategies", body: { strategies: [] } },
       {
         url: "/api/v1/strategies/v4/",
         body: [
@@ -284,24 +276,20 @@ describe("<Deployments />", () => {
         },
       },
       {
-        url: "/api/v1/strategies",
-        body: {
-          strategies: [
-            {
-              strategy_id: "77777777-7777-7777-7777-777777777777",
-              name: "Opening Range Strategy",
-              description: null,
-              tags: [],
-              status: "active",
-              created_at: now,
-              latest_version_id: "44444444-4444-4444-4444-444444444444",
-              frozen_version_ids: [],
-              version_count: 1,
-            },
-          ],
-        },
+        url: "/api/v1/strategies/v4/",
+        body: [
+          {
+            strategy_v4_id: "77777777-7777-7777-7777-777777777777",
+            name: "Opening Range Strategy",
+            description: null,
+            head_version: 1,
+            head_version_id: "44444444-4444-4444-4444-444444444444",
+            total_versions: 1,
+            created_at: now,
+            updated_at: now,
+          },
+        ],
       },
-      { url: "/api/v1/strategies/v4/", body: [] },
       {
         url: "/api/v1/broker-accounts",
         body: {
@@ -341,7 +329,6 @@ describe("<Deployments />", () => {
     restore = installFetchMock([
       { url: "/api/v1/deployments", body: { detail: "kaboom" }, status: 500 },
       { url: "/api/v1/watchlists", body: { watchlists: [] } },
-      { url: "/api/v1/strategies", body: { strategies: [] } },
       { url: "/api/v1/strategies/v4/", body: [] },
       { url: "/api/v1/system/status", body: STATUS_OK },
     ]);
@@ -364,7 +351,7 @@ describe("<Deployments />", () => {
               deployment_id: "33333333-3333-3333-3333-333333333333",
               name: "Draft Deployment",
               description: null,
-              strategy_version_id: "44444444-4444-4444-4444-444444444444",
+              strategy_version_v4_id: "44444444-4444-4444-4444-444444444444",
               watchlist_ids: ["55555555-5555-5555-5555-555555555555"],
               subscribed_account_ids: ["66666666-6666-6666-6666-666666666666"],
               lifecycle_status: "draft",
@@ -378,7 +365,7 @@ describe("<Deployments />", () => {
               deployment_id: "99999999-9999-9999-9999-999999999999",
               name: "Active Deployment",
               description: null,
-              strategy_version_id: "44444444-4444-4444-4444-444444444444",
+              strategy_version_v4_id: "44444444-4444-4444-4444-444444444444",
               watchlist_ids: ["55555555-5555-5555-5555-555555555555"],
               subscribed_account_ids: ["66666666-6666-6666-6666-666666666666"],
               lifecycle_status: "active",
@@ -413,24 +400,20 @@ describe("<Deployments />", () => {
         },
       },
       {
-        url: "/api/v1/strategies",
-        body: {
-          strategies: [
-            {
-              strategy_id: "77777777-7777-7777-7777-777777777777",
-              name: "Opening Range Strategy",
-              description: null,
-              tags: [],
-              status: "active",
-              created_at: now,
-              latest_version_id: "44444444-4444-4444-4444-444444444444",
-              frozen_version_ids: ["44444444-4444-4444-4444-444444444444"],
-              version_count: 1,
-            },
-          ],
-        },
+        url: "/api/v1/strategies/v4/",
+        body: [
+          {
+            strategy_v4_id: "77777777-7777-7777-7777-777777777777",
+            name: "Opening Range Strategy",
+            description: null,
+            head_version: 1,
+            head_version_id: "44444444-4444-4444-4444-444444444444",
+            total_versions: 1,
+            created_at: now,
+            updated_at: now,
+          },
+        ],
       },
-      { url: "/api/v1/strategies/v4/", body: [] },
       { url: "/api/v1/system/status", body: STATUS_OK },
       {
         url: "/api/v1/deployments/33333333-3333-3333-3333-333333333333/delete",

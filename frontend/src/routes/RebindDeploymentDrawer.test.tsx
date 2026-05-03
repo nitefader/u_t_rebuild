@@ -15,7 +15,7 @@ const BASE_DEPLOYMENT: Deployment = {
   runtime_overrides: {},
   created_at: NOW,
   updated_at: NOW,
-  strategy_version_id: "44444444-4444-4444-4444-444444444444",
+  strategy_version_v4_id: "44444444-4444-4444-4444-444444444444",
 };
 
 const CONTROLS_LIST = {

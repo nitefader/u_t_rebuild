@@ -1,0 +1,18 @@
+{
+  "type": "object",
+  "properties": {
+    "STARTED": { "type": "string" },
+    "COMPLETED": { "type": "string" },
+    "FILES_CHANGED": { "type": "string" },
+    "TESTS_RUN": { "type": "string" },
+    "RESULTS": { "type": "string" },
+    "BEHAVIOR_CHANGED": { "type": "string" },
+    "BLOCKERS": { "type": "string" },
+    "QUESTIONS": { "type": "string" },
+    "NEXT_RECOMMENDED_STEP": { "type": "string" },
+    "CONFIDENCE": { "type": "string" },
+    "COMMIT_HASH": { "type": "string" }
+  },
+  "required": ["STARTED","COMPLETED","FILES_CHANGED","TESTS_RUN","RESULTS","BEHAVIOR_CHANGED","BLOCKERS","QUESTIONS","NEXT_RECOMMENDED_STEP","CONFIDENCE","COMMIT_HASH"],
+  "additionalProperties": false
+}

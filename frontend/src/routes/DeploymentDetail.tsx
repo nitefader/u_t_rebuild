@@ -25,7 +25,6 @@ import { relativeTime } from "@/lib/format";
 
 function fieldLabel(key: string): string {
   const map: Record<string, string> = {
-    strategy_version_id: "Strategy (legacy)",
     strategy_version_v4_id: "Strategy v4",
     strategy_controls_version_id: "Controls",
     execution_plan_version_id: "Execution Plan",
@@ -217,14 +216,6 @@ export function DeploymentDetail(): JSX.Element {
               <div className="text-sm font-semibold">Bound Versions</div>
             </div>
             <div className="grid grid-cols-1 gap-2 border-t border-border/70 px-4 py-3 text-xs sm:grid-cols-2">
-              <MetaField
-                label="Strategy (legacy)"
-                value={
-                  deployment.strategy_version_id
-                    ? deployment.strategy_version_id.slice(0, 8) + "…"
-                    : "—"
-                }
-              />
               <MetaField
                 label="Strategy v4"
                 value={

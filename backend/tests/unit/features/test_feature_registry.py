@@ -77,7 +77,7 @@ def test_registry_creates_portfolio_feature_with_portfolio_scope() -> None:
 
 
 def test_registry_reports_consumer_support() -> None:
-    registry.require_consumer_support("close", "chart_lab")
+    registry.require_consumer_support("close", "runtime")
     registry.require_consumer_support("close", "sim_replay")
     registry.require_consumer_support("close", "backtest")
 

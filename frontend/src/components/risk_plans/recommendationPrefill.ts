@@ -1,6 +1,18 @@
 import type { RiskPlanFormState } from "./riskPlanForm";
 import { EMPTY_FORM } from "./riskPlanForm";
-import type { RiskPlanTier } from "@/api/schemas/riskPlans";
+import type { RiskPlanSource, RiskPlanTier } from "@/api/schemas/riskPlans";
+
+export const RESEARCH_OFFLINE_RISK_PLAN_SOURCES = [
+  "optimization_generated",
+  "walk_forward_recommended",
+] as const satisfies readonly RiskPlanSource[];
+
+export function isResearchOfflineRiskPlanSource(source: RiskPlanSource): boolean {
+  // disabled: research spine offline until S12.7/S12.8.
+  return RESEARCH_OFFLINE_RISK_PLAN_SOURCES.includes(
+    source as (typeof RESEARCH_OFFLINE_RISK_PLAN_SOURCES)[number],
+  );
+}
 
 /**
  * Convert a research recommendation (WF / Optimization) into a

@@ -109,6 +109,7 @@ def test_create_strategy(client: TestClient) -> None:
     assert body["name"] == "Route Test Strategy"
     assert "id" in body
     assert "strategy_v4_id" in body
+    assert "compiled_blob" not in json.dumps(body)
 
 
 def test_create_strategy_invalid_returns_422(client: TestClient) -> None:

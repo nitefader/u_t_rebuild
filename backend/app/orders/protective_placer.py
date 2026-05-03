@@ -44,7 +44,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from uuid import UUID
 
-from backend.app.decision.signal_plan_builder import parse_post_fill_pct
+from backend.app.decision.signal_plan_common import parse_post_fill_pct
 from backend.app.domain.signal_plan import (
     SignalPlan,
     SignalPlanIntent,

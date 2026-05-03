@@ -8,15 +8,12 @@ import pytest
 from pydantic import ValidationError
 
 from backend.app.domain import (
-    ChartLabSession,
     ConditionNode,
     ConditionOperator,
     ExecutionStyleVersion,
-    GovernorMode,
     OrderType,
     ProgramVersion,
     RiskProfileVersion,
-    SimulationSession,
     StrategyControlsVersion,
     StrategyVersion,
     TimeInForce,
@@ -247,65 +244,6 @@ def test_component_schemas_are_separate() -> None:
     assert universe.symbols[0].symbol == "SPY"
 
 
-@pytest.mark.parametrize(
-    "field_name",
-    [
-        "orders",
-        "fills",
-        "positions",
-        "pnl",
-        "equity",
-        "drawdown",
-        "cash",
-        "broker_account_id",
-        "deployment_id",
-    ],
-)
-def test_chart_lab_session_rejects_execution_state(field_name: str) -> None:
-    now = _now()
-    payload: dict[str, object] = {
-        "id": uuid4(),
-        "mode": TradingMode.CHART_LAB_BATCH,
-        "symbol": "SPY",
-        "timeframe": "5m",
-        "start": now,
-        "end": now + timedelta(days=1),
-        "strategy_version_id": uuid4(),
-        field_name: [],
-    }
-
-    with pytest.raises(ValidationError):
-        ChartLabSession(**payload)
-
-
-@pytest.mark.parametrize(
-    "field_name",
-    [
-        "broker_account_id",
-        "alpaca_order_id",
-        "client_order_id",
-        "real_order_id",
-        "deployment_id",
-    ],
-)
-def test_simulation_session_rejects_real_broker_submission_fields(field_name: str) -> None:
-    now = _now()
-    payload: dict[str, object] = {
-        "id": uuid4(),
-        "mode": TradingMode.SIM_LAB_HISTORICAL,
-        "program_version_id": uuid4(),
-        "symbol_count": 3,
-        "start": now,
-        "end": now + timedelta(days=1),
-        "initial_cash": 100000,
-        "governor_mode": GovernorMode.OFF,
-        field_name: "forbidden",
-    }
-
-    with pytest.raises(ValidationError):
-        SimulationSession(**payload)
-
-
 def test_banned_names_do_not_appear_in_domain_files() -> None:
     domain_dir = Path(__file__).parents[3] / "app" / "domain"
     banned = ["StrategyGovernor", "AccountGovernor", "AccountAllocation"]
@@ -357,30 +295,6 @@ def test_broker_modes_require_adapter_and_sync() -> None:
     with pytest.raises(TradingModeBoundaryError, match="requires BrokerSync"):
         validate_trading_mode_boundary(TradingMode.BROKER_LIVE, broker_adapter=object())
     validate_trading_mode_boundary(TradingMode.BROKER_PAPER, broker_adapter=object(), broker_sync=object())
-
-
-def test_lab_sessions_reject_invalid_canonical_mode_usage() -> None:
-    now = _now()
-    with pytest.raises(ValidationError):
-        ChartLabSession(
-            id=uuid4(),
-            mode=TradingMode.BROKER_PAPER,
-            symbol="SPY",
-            timeframe="5m",
-            start=now,
-            end=now + timedelta(days=1),
-            strategy_version_id=uuid4(),
-        )
-    with pytest.raises(ValidationError):
-        SimulationSession(
-            id=uuid4(),
-            mode=TradingMode.CHART_LAB_BATCH,
-            program_version_id=uuid4(),
-            symbol_count=1,
-            start=now,
-            end=now + timedelta(days=1),
-            initial_cash=100000,
-        )
 
 
 def test_no_ambiguous_mode_string_literals_remain_in_backend_app() -> None:

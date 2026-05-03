@@ -23,6 +23,8 @@ from uuid import UUID, uuid4
 import pytest
 
 from backend.app.brokers import BrokerOrderStatus, FakeBrokerAdapter
+from backend.app.composition import SignalSourceRegistry, StrategyArtifactKind, StrategyArtifactResolver
+from backend.app.decision.signal_sources import V4ExpressionSignalSource
 from backend.app.domain import (
     AccountEvaluationStatus,
     AccountParticipationDecision,
@@ -46,7 +48,15 @@ from backend.app.domain.execution_style import (
 )
 from backend.app.domain.risk_profile import PositionSizingMethod
 from backend.app.domain.strategy import SignalRule
-from backend.app.features import NormalizedBar, ResolvedDeploymentComponents
+from backend.app.domain.strategy_v4 import (
+    OnFillActionV4,
+    StrategyEntriesV4,
+    StrategyEntryV4,
+    StrategyLegV4,
+    StrategyStopV4,
+    StrategyVersionV4,
+)
+from backend.app.features import IncrementalFeatureEngine, NormalizedBar, ResolvedDeploymentComponents
 from backend.app.governor import GovernorPolicy, PortfolioGovernor, PortfolioSnapshot
 from backend.app.persistence import SQLiteRuntimeStore
 from backend.app.pipeline import RuntimeOrchestrator
@@ -82,6 +92,30 @@ def _components(*, side: CandidateSide = CandidateSide.LONG) -> ResolvedDeployme
                 condition=condition,
             )
         ],
+    )
+    strategy_v4 = StrategyVersionV4(
+        id=uuid4(),
+        strategy_v4_id=uuid4(),
+        version=1,
+        name="W2-A persistence v4",
+        entries=StrategyEntriesV4(
+            long=StrategyEntryV4(
+                expression_text="5m.close > 5m.open",
+                feature_requirements=("5m.close", "5m.open"),
+            )
+        ),
+        stops=(StrategyStopV4(mode="simple", scope="all", simple_type="%", simple_value=5.0),),
+        legs=(
+            StrategyLegV4(
+                position=1,
+                kind="target",
+                size_pct=1.0,
+                target_type="%",
+                target_value=10.0,
+                on_fill_action=OnFillActionV4(kind="leave"),
+            ),
+        ),
+        feature_requirements=("5m.close", "5m.open"),
     )
     controls = StrategyControlsVersion(
         id=controls_id,
@@ -129,6 +163,7 @@ def _components(*, side: CandidateSide = CandidateSide.LONG) -> ResolvedDeployme
     return ResolvedDeploymentComponents(
         program=program,
         strategy=strategy,
+        strategy_version_v4=strategy_v4,
         strategy_controls=controls,
         risk_profile=risk,
         execution_style=execution,
@@ -139,8 +174,8 @@ def _components(*, side: CandidateSide = CandidateSide.LONG) -> ResolvedDeployme
 def _deployment(components: ResolvedDeploymentComponents) -> DeploymentContext:
     return DeploymentContext(
         deployment_id=DEPLOYMENT_ID,
-        strategy_version_id=components.strategy.id,
-        strategy_version=components.strategy.version,
+        strategy_version_id=components.strategy_version_v4.id,
+        strategy_version=components.strategy_version_v4.version,
     )
 
 
@@ -155,6 +190,19 @@ def _bar(*, open_: float = 99, close: float = 100) -> NormalizedBar:
         close=close,
         volume=100_000,
     )
+
+
+def _strategy_artifact_resolver(components: ResolvedDeploymentComponents) -> StrategyArtifactResolver:
+    registry = SignalSourceRegistry()
+    registry.register(StrategyArtifactKind.EXPRESSION_V1, lambda _metadata: V4ExpressionSignalSource())
+
+    def lookup(strategy_version_v4_id: UUID) -> StrategyVersionV4:
+        sv4 = components.strategy_version_v4
+        if sv4 is None or sv4.id != strategy_version_v4_id:
+            raise KeyError(strategy_version_v4_id)
+        return sv4
+
+    return StrategyArtifactResolver(registry=registry, strategy_v4_lookup=lookup)
 
 
 def _orchestrator_with_store(
@@ -174,6 +222,7 @@ def _orchestrator_with_store(
         account_ids=account_ids,
         deployment=_deployment(resolved),
         components=resolved,
+        feature_engine=IncrementalFeatureEngine(),
         broker_adapter=FakeBrokerAdapter(
             [BrokerOrderStatus.FILLED, BrokerOrderStatus.ACCEPTED, BrokerOrderStatus.ACCEPTED]
             * 5  # generous for multi-account fanout
@@ -181,6 +230,7 @@ def _orchestrator_with_store(
         governor=governor,
         runtime_store=runtime_store,
         portfolio_snapshot=portfolio_snapshot or PortfolioSnapshot(equity=100_000),
+        strategy_artifact_resolver=_strategy_artifact_resolver(resolved),
     )
 
 

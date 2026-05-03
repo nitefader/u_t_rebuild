@@ -17,15 +17,16 @@ from backend.app.brokers import (
     BrokerPositionSnapshot,
 )
 from backend.app.control_plane import ControlPlane
+from backend.app.composition import StrategyArtifactResolver
 from backend.app.domain import CandidateSide, TradingMode
 from backend.app.domain._base import utc_now
 from backend.app.features import (
     FeatureAvailability,
     FeatureCache,
+    FeatureEnginePort,
     FeatureHydrationBarsRequest,
     FeatureHydrationResult,
     FeatureHydrationService,
-    IncrementalFeatureEngine,
     NormalizedBar,
     ResolvedDeploymentComponents,
 )
@@ -127,11 +128,11 @@ class BrokerRuntimeOrchestrator:
         order_manager: OrderManager,
         control_plane: ControlPlane,
         governor: PortfolioGovernor | None = None,
-        feature_engine_factory: Callable[[], IncrementalFeatureEngine] = IncrementalFeatureEngine,
-        signal_engine: object | None = None,
+        feature_engine: FeatureEnginePort,
         portfolio_snapshot_factory: Callable[[UUID], PortfolioSnapshot] | None = None,
         bar_source: Callable[[UUID], NormalizedBar | None] | None = None,
         startup_warmup_bars_source: StartupWarmupBarsSource | None = None,
+        strategy_artifact_resolver: StrategyArtifactResolver | None = None,
         recovery_orchestrator: object | None = None,
     ) -> None:
         self._runtime_store = runtime_store
@@ -140,11 +141,11 @@ class BrokerRuntimeOrchestrator:
         self._order_manager = order_manager
         self._control_plane = control_plane
         self._governor = governor or PortfolioGovernor()
-        self._feature_engine_factory = feature_engine_factory
-        self._signal_engine = signal_engine
+        self._feature_engine = feature_engine
         self._portfolio_snapshot_factory = portfolio_snapshot_factory or (lambda _account_id: PortfolioSnapshot())
         self._bar_source = bar_source
         self._startup_warmup_bars_source = startup_warmup_bars_source
+        self._strategy_artifact_resolver = strategy_artifact_resolver
         self._recovery_orchestrator = recovery_orchestrator
         self._deployments = {entry.deployment.deployment_id: entry for entry in deployments}
         self._pipelines: dict[UUID, RuntimeOrchestrator] = {}
@@ -967,8 +968,7 @@ class BrokerRuntimeOrchestrator:
             deployment=entry.deployment,
             components=entry.components,
             initial_cash=entry.initial_cash,
-            feature_engine=self._feature_engine_factory(),
-            signal_engine=self._signal_engine,
+            feature_engine=self._feature_engine,
             governor=self._governor,
             governor_policy_resolver=self._build_governor_policy_resolver(),
             order_manager=self._order_manager,
@@ -990,6 +990,7 @@ class BrokerRuntimeOrchestrator:
             daily_state_factory=self._daily_state_for,
             daily_state_aggregator=self._daily_aggregator,
             daily_states=self._daily_states,
+            strategy_artifact_resolver=self._strategy_artifact_resolver,
         )
         self._pipelines[deployment_id] = pipeline
         return pipeline

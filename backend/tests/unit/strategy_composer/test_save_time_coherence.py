@@ -27,8 +27,8 @@ from backend.app.domain import (
     StrategyVersion,
     TradingHorizon,
 )
-from backend.app.strategies import StrategyService
-from backend.app.strategies.persistence import StrategyRepository
+from backend.app.strategies_v4.persistence import StrategyV4Repository
+from backend.app.strategies_v4.service import StrategyV4Service
 from backend.app.strategy_composer import (
     AIComposerRequest,
     StrategyComposerService,
@@ -38,15 +38,15 @@ from backend.app.strategy_composer import (
 
 
 def _service(tmp_path: Path) -> StrategyComposerService:
-    repo = StrategyRepository(tmp_path / "strategies.db")
-    return StrategyComposerService(strategy_service=StrategyService(repository=repo))
+    repo = StrategyV4Repository(tmp_path / "strategies.db")
+    return StrategyComposerService(strategy_v4_service=StrategyV4Service(repository=repo))
 
 
 def _draft(service: StrategyComposerService, **wizard_overrides):
     intent_kwargs = {"direction": AllowedDirections.LONG}
     intent_kwargs.update(wizard_overrides)
     return service.compose(
-        AIComposerRequest(prompt="test draft", wizard_intent=WizardIntent(**intent_kwargs))
+        AIComposerRequest(prompt="test draft exit after 5 minutes", wizard_intent=WizardIntent(**intent_kwargs))
     )
 
 
@@ -124,7 +124,7 @@ def test_coherence_check_no_op_when_strategy_controls_absent(tmp_path: Path) -> 
     """Drafts composed without a wizard intent have no Strategy Controls;
     save must not impose coherence rules that depend on Controls."""
     service = _service(tmp_path)
-    draft = service.compose(AIComposerRequest(prompt="legacy draft no wizard"))
+    draft = service.compose(AIComposerRequest(prompt="legacy draft no wizard exit after 5 minutes"))
     assert draft.strategy_controls is None
 
     response = service.save_draft(StrategyDraftSaveRequest(draft=draft))

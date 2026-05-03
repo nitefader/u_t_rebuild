@@ -11,11 +11,6 @@ import { NewDeploymentScreen } from "@/routes/NewDeploymentScreen";
 import { Operations } from "@/routes/Operations";
 import { Providers } from "@/routes/Providers";
 import { Settings } from "@/routes/Settings";
-import { ChartLab } from "@/routes/ChartLab";
-import { SimLab } from "@/routes/SimLab";
-import { Backtests } from "@/routes/Backtests";
-import { Optimization } from "@/routes/Optimization";
-import { WalkForward } from "@/routes/WalkForward";
 import { DataCenterHistoricalDatasets } from "@/routes/DataCenterHistoricalDatasets";
 import { RiskPlans } from "@/routes/RiskPlans";
 import { RiskPlanDetail } from "@/routes/RiskPlanDetail";
@@ -61,11 +56,6 @@ export const router = createBrowserRouter([
       { path: "providers", element: <Providers /> },
       { path: "data-center/historical-datasets", element: <DataCenterHistoricalDatasets /> },
       { path: "settings", element: <Settings /> },
-      { path: "chart-lab", element: <ChartLab /> },
-      { path: "sim-lab", element: <SimLab /> },
-      { path: "backtests", element: <Backtests /> },
-      { path: "optimization", element: <Optimization /> },
-      { path: "walk-forward", element: <WalkForward /> },
       { path: "*", element: <NotFound /> },
     ],
   },

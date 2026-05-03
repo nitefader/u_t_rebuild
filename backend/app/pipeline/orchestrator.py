@@ -21,19 +21,11 @@ from backend.app.brokers import (
     build_market_rule_preflight_request,
 )
 from backend.app.control_plane.service import ControlPlane
-from backend.app.decision import (
-    PositionContext,
-    SignalEngine,
-    SignalEvaluation,
-    SignalEvaluationError,
-    SignalPlanBuilder,
-)
-from backend.app.decision.signal_plan_builder_v4 import (
-    ExpressionLoader as V4ExpressionLoader,
-    build_signal_plan_from_v4,
-    _default_expression_loader as _v4_default_expression_loader,
-)
-from backend.app.decision.signal_plan_builder import parse_post_fill_pct
+from backend.app.composition import StrategyArtifactResolver
+from backend.app.decision import SignalPlanBuilder
+from backend.app.decision.ports import PositionSignalContext, SignalEvaluationContext, SignalSourcePort
+from backend.app.decision.signal_plan_common import parse_post_fill_pct
+from backend.app.deployments.models import Deployment
 from backend.app.domain._base import utc_now
 from backend.app.domain import (
     AccountEvaluationStatus,
@@ -49,8 +41,6 @@ from backend.app.domain import (
     SignalPlan,
     SignalPlanIntent,
     SignalPlanSide,
-    SignalRule,
-    StrategyVersion,
     TradingMode,
 )
 from backend.app.features import (
@@ -63,7 +53,7 @@ from backend.app.features import (
     FeaturePlan,
     FeatureSnapshot,
     FeatureValue,
-    IncrementalFeatureEngine,
+    FeatureEnginePort,
     NormalizedBar,
     ResolvedDeploymentComponents,
     build_feature_plan,
@@ -147,7 +137,6 @@ class DeploymentPositionManager:
     def is_active(position: BrokerPositionSnapshot) -> bool:
         return position.qty != 0 and (position.status or "").lower() not in {"closed", "flat"}
 
-
 class RuntimeOrchestrator:
     _NATIVE_BRACKET_REFERENCE_MAX_AGE_SECONDS = 5 * 60
 
@@ -159,8 +148,7 @@ class RuntimeOrchestrator:
         deployment: DeploymentContext,
         components: ResolvedDeploymentComponents,
         initial_cash: float = 100_000,
-        feature_engine: IncrementalFeatureEngine | None = None,
-        signal_engine: SignalEngine | None = None,
+        feature_engine: FeatureEnginePort,
         controls_gate: StrategyControlsGate | None = None,
         signal_plan_builder: SignalPlanBuilder | None = None,
         risk_resolver: RiskResolver | None = None,
@@ -188,7 +176,7 @@ class RuntimeOrchestrator:
         daily_state_factory: "Callable[[UUID], object | None] | None" = None,
         daily_state_aggregator: object | None = None,
         daily_states: "dict[UUID, object] | None" = None,
-        v4_expression_loader: "V4ExpressionLoader | None" = None,
+        strategy_artifact_resolver: StrategyArtifactResolver | None = None,
     ) -> None:
         self._account_id = account_id
         self._account_ids = tuple(dict.fromkeys(account_ids or (account_id,)))
@@ -201,9 +189,13 @@ class RuntimeOrchestrator:
             raise RuntimeError(
                 f"deployment_strategy_unset:{deployment.deployment_id}"
             )
+        if (
+            components.strategy_version_v4 is not None
+            and strategy_artifact_resolver is None
+        ):
+            raise ValueError("v4 components require a strategy_artifact_resolver")
         self._initial_cash = initial_cash
-        self._feature_engine = feature_engine or IncrementalFeatureEngine()
-        self._signal_engine = signal_engine or SignalEngine()
+        self._feature_engine = feature_engine
         self._controls_gate = controls_gate or StrategyControlsGate()
         self._signal_plan_builder = signal_plan_builder or SignalPlanBuilder()
         self._risk_resolver = risk_resolver or RiskResolver()
@@ -281,7 +273,7 @@ class RuntimeOrchestrator:
         # form, e.g. "1m.close", "1m.rsi(2)") can find values in the runtime
         # FeatureSnapshot (keyed by the long form make_feature_key produces).
         # Without this bridge every v4 expression lookup raises EvalError →
-        # build_signal_plan_from_v4 returns None → silent no-signal forever.
+        # the legacy v4 builder returned None -> silent no-signal forever.
         self._v4_dotted_to_runtime_key: dict[str, str] = {}
         if components.strategy_version_v4 is not None:
             from backend.app.features.parser import parse_feature_expression
@@ -314,12 +306,7 @@ class RuntimeOrchestrator:
         # read->compute->create->submit sequence atomic for one parent.
         self._post_fill_parent_locks: dict[UUID, threading.Lock] = {}
         self._post_fill_parent_locks_guard = threading.Lock()
-        # V4 expression loader: bound once at construction time so the hot
-        # path never re-parses raw text.  Defaults to load_compiled which
-        # handles pickle drift via text fallback.
-        self._v4_expression_loader: V4ExpressionLoader = (
-            v4_expression_loader or _v4_default_expression_loader
-        )
+        self._strategy_artifact_resolver = strategy_artifact_resolver
 
     @property
     def order_manager(self) -> OrderManager:
@@ -367,6 +354,7 @@ class RuntimeOrchestrator:
 
     def process_bar(self, bar: NormalizedBar) -> PipelineResult:
         self._reset_positions_cache()
+        self._reset_v4_signal_source_cache()
         normalized_bar = bar.model_copy(update={"symbol": bar.symbol.upper()})
         self._ensure_feature_plan_accepts_position_symbol(normalized_bar.symbol)
         feature_update = self._feature_engine.update(
@@ -446,11 +434,11 @@ class RuntimeOrchestrator:
                 )
             # V4 logical exits use the same position-management spine once
             # translated from v4 templates to typed logical-exit rules.
-            signal_result = self._evaluate_v4_logical_exit_intents(
+            logical_exit_intents = self._evaluate_v4_logical_exit_intents(
                 normalized_bar=normalized_bar,
                 runtime_snapshot=runtime_snapshot,
             )
-            for candidate in signal_result.intents:
+            for candidate in logical_exit_intents:
                 candidate_intents.append(candidate)
                 self._event_log.append(
                     timestamp=candidate.timestamp,
@@ -460,7 +448,7 @@ class RuntimeOrchestrator:
                     details={"signal_name": candidate.signal_name},
                 )
             self._process_position_management_candidates(
-                signal_result=signal_result,
+                candidate_intents=logical_exit_intents,
                 normalized_bar=normalized_bar,
                 signal_plans=signal_plans,
                 account_evaluations=account_evaluations,
@@ -469,75 +457,6 @@ class RuntimeOrchestrator:
                 broker_results=broker_results,
                 ledger_updates=ledger_updates,
             )
-        else:
-            try:
-                signal_result = self._signal_engine.evaluate(
-                    self._components.strategy,
-                    runtime_snapshot,
-                    position_contexts=self._position_contexts(bar=normalized_bar),
-                )
-            except SignalEvaluationError as exc:
-                self._event_log.append(
-                    timestamp=normalized_bar.timestamp,
-                    event_type=PipelineEventType.SIGNAL_BLOCKED,
-                    symbol=normalized_bar.symbol,
-                    message=str(exc),
-                )
-                return self._result()
-
-            for candidate in signal_result.intents:
-                candidate_intents.append(candidate)
-                self._event_log.append(
-                    timestamp=candidate.timestamp,
-                    event_type=PipelineEventType.CANDIDATE_TRADE_INTENT,
-                    symbol=candidate.symbol,
-                    message="candidate trade intent emitted",
-                    details={"signal_name": candidate.signal_name},
-                )
-                if candidate.intent_type != IntentType.ENTRY or candidate.symbol.upper() not in self._entry_symbols:
-                    continue
-                strategy_id, strategy_version_id = self._active_strategy_ids()
-                signal_plan = self._signal_plan_builder.build_from_candidate(
-                    candidate=candidate,
-                    deployment_id=self._deployment.deployment_id,
-                    strategy_id=strategy_id,
-                    strategy_version_id=strategy_version_id,
-                    watchlist_snapshot_id=self._components.universe.id,
-                    execution_plan=self._components.execution_style,
-                )
-                if signal_plan.entry is not None:
-                    signal_plan = signal_plan.model_copy(
-                        update={
-                            "entry": signal_plan.entry.model_copy(
-                                update={
-                                    "order_type": self._components.execution_style.entry_order_type,
-                                    "time_in_force_preference": self._components.execution_style.time_in_force,
-                                }
-                            )
-                        }
-                    )
-                signal_plans.append(signal_plan)
-                self._process_entry_signal_plan_for_accounts(
-                    signal_plan=signal_plan,
-                    normalized_bar=normalized_bar,
-                    stop_candidate=candidate.stop_candidate,
-                    account_evaluations=account_evaluations,
-                    governor_decisions=governor_decisions,
-                    orders=orders,
-                    broker_results=broker_results,
-                    ledger_updates=ledger_updates,
-                )
-            self._process_position_management_candidates(
-                signal_result=signal_result,
-                normalized_bar=normalized_bar,
-                signal_plans=signal_plans,
-                account_evaluations=account_evaluations,
-                governor_decisions=governor_decisions,
-                orders=orders,
-                broker_results=broker_results,
-                ledger_updates=ledger_updates,
-            )
-
         return self._result(
             candidate_intents=candidate_intents,
             signal_plans=signal_plans,
@@ -674,7 +593,7 @@ class RuntimeOrchestrator:
     def _process_position_management_candidates(
         self,
         *,
-        signal_result: SignalEvaluation,
+        candidate_intents: tuple[CandidateTradeIntent, ...],
         normalized_bar: NormalizedBar,
         signal_plans: list[SignalPlan],
         account_evaluations: list[AccountSignalPlanEvaluation],
@@ -683,7 +602,7 @@ class RuntimeOrchestrator:
         broker_results: list[BrokerOrderResult],
         ledger_updates: list[InternalOrder],
     ) -> None:
-        exit_candidates = tuple(candidate for candidate in signal_result.intents if candidate.intent_type == IntentType.EXIT)
+        exit_candidates = tuple(candidate for candidate in candidate_intents if candidate.intent_type == IntentType.EXIT)
         if not exit_candidates:
             return
 
@@ -851,6 +770,26 @@ class RuntimeOrchestrator:
     def _reset_positions_cache(self) -> None:
         if hasattr(self, "_positions_cache_for_bar"):
             self._positions_cache_for_bar = None
+
+    def _reset_v4_signal_source_cache(self) -> None:
+        if hasattr(self, "_v4_signal_source_for_bar"):
+            self._v4_signal_source_for_bar = None
+
+    def _resolve_v4_signal_source_for_bar(self, sv4: object) -> SignalSourcePort:
+        cached = getattr(self, "_v4_signal_source_for_bar", None)
+        if cached is not None:
+            return cached
+        assert self._strategy_artifact_resolver is not None
+        signal_source, _metadata = self._strategy_artifact_resolver.resolve(
+            Deployment(
+                deployment_id=self._deployment.deployment_id,
+                name=str(self._deployment.deployment_id),
+                strategy_version_v4_id=getattr(sv4, "id"),
+                risk_horizon=self._deployment_risk_horizon,
+            )
+        )
+        self._v4_signal_source_for_bar = signal_source
+        return signal_source
 
     def _cancel_superseded_position_management_orders(
         self,
@@ -1214,7 +1153,7 @@ class RuntimeOrchestrator:
         not a replacement for post-fill.
         """
 
-        from backend.app.decision.signal_plan_builder import parse_post_fill_pct
+        from backend.app.decision.signal_plan_common import parse_post_fill_pct
 
         execution_mode = getattr(self._components.execution_style, "execution_mode", None)
         if execution_mode is None or getattr(execution_mode, "value", execution_mode) != "native_alpaca_bracket":
@@ -1836,16 +1775,16 @@ class RuntimeOrchestrator:
             projected_state=decision.projected_state,
         )
 
-    def _position_contexts(self, *, bar: NormalizedBar) -> dict[str, PositionContext]:
-        """Build per-symbol PositionContext for SignalEngine exit-rule evaluation.
+    def _position_contexts(self, *, bar: NormalizedBar) -> dict[str, PositionSignalContext]:
+        """Build per-symbol PositionSignalContext for logical-exit evaluation.
 
         Doctrine: ``logical_exit`` is the only exit intent. Time / bar / session
-        / hybrid exit rules need this context; pure feature-condition exits
-        only need ``has_position`` so the engine knows there's something to
-        exit.
+        / hybrid exit rules need this context; pure feature-condition exits only
+        need ``has_position`` so the port source knows there is something to exit.
         """
         positions = self._positions_for_deployment()
-        contexts: dict[str, PositionContext] = {}
+        contexts: dict[str, PositionSignalContext] = {}
+        session_defaults = PositionSignalContext()
         for position in positions:
             if not DeploymentPositionManager.is_active(position):
                 continue
@@ -1861,16 +1800,25 @@ class RuntimeOrchestrator:
                 bars_since_entry = min(current.current_bar_index, bars_since_entry)
             if current is not None and current.current_bar_index is not None and bars_since_entry is None:
                 bars_since_entry = current.current_bar_index
-            contexts[symbol] = PositionContext(
+            contexts[symbol] = PositionSignalContext(
                 has_position=True,
                 entry_timestamp=opened_at,
                 entry_bar_index=0 if bars_since_entry is not None else None,
                 current_bar_index=bars_since_entry,
                 bar_timestamp=bar.timestamp,
+                session_open_et=session_defaults.session_open_et,
+                session_close_et=session_defaults.session_close_et,
             )
-        # Always supply a PositionContext for the bar's symbol so the engine
-        # can short-circuit "no position" cleanly when no live position exists.
-        contexts.setdefault(bar.symbol.upper(), PositionContext(bar_timestamp=bar.timestamp))
+        # Always supply a context for the bar's symbol so the source can
+        # short-circuit no-position exits cleanly.
+        contexts.setdefault(
+            bar.symbol.upper(),
+            PositionSignalContext(
+                bar_timestamp=bar.timestamp,
+                session_open_et=session_defaults.session_open_et,
+                session_close_et=session_defaults.session_close_et,
+            ),
+        )
         return contexts
 
     def _position_entry_timestamp(self, position: BrokerPositionSnapshot) -> datetime | None:
@@ -1970,95 +1918,111 @@ class RuntimeOrchestrator:
         payload = candidate.diagnostics.get("logical_exit_rule_payload")
         if payload is None:
             return None
+        if isinstance(payload, Mapping) and "template_id" in payload:
+            return RuntimeOrchestrator._logical_exit_rule_from_v4_payload(payload)
         try:
             return LogicalExitRule.model_validate(payload)
         except Exception:
             return None
+
+    @staticmethod
+    def _logical_exit_rule_from_v4_payload(payload: Mapping[str, object]) -> LogicalExitRule | None:
+        template_id = payload.get("template_id")
+        params_raw = payload.get("params", {})
+        params = params_raw if isinstance(params_raw, Mapping) else {}
+        if template_id == "bars_since":
+            bars = RuntimeOrchestrator._positive_int_param(params, "bars")
+            if bars is None:
+                return None
+            return LogicalExitRule(
+                kind=LogicalExitRuleKind.BARS_SINCE_ENTRY,
+                bars=bars,
+                label=f"bars_since:{bars}",
+            )
+        if template_id == "session_end":
+            minutes = RuntimeOrchestrator._positive_int_param(params, "offset_minutes") or 5
+            return LogicalExitRule(
+                kind=LogicalExitRuleKind.MINUTES_BEFORE_SESSION_CLOSE,
+                minutes_before_close=minutes,
+                label=f"session_end:{minutes}",
+            )
+        return None
 
     def _evaluate_v4_logical_exit_intents(
         self,
         *,
         normalized_bar: NormalizedBar,
         runtime_snapshot: FeatureSnapshot,
-    ) -> SignalEvaluation:
+    ) -> tuple[CandidateTradeIntent, ...]:
         sv4 = self._components.strategy_version_v4
         if sv4 is None:
-            return SignalEvaluation(intents=())
+            return ()
 
         active_sides = self._active_position_sides_for_symbol(normalized_bar.symbol)
         if not active_sides:
-            return SignalEvaluation(intents=())
+            return ()
 
-        rules: list[SignalRule] = []
-        for side_name in ("long", "short"):
-            if side_name not in active_sides:
-                continue
-            exits = sv4.logical_exits.long if side_name == "long" else sv4.logical_exits.short
-            for exit_template in exits:
-                logical_rule, blocker = self._v4_logical_exit_rule_from_template(exit_template)
-                if logical_rule is None:
-                    self._event_log.append(
-                        timestamp=normalized_bar.timestamp,
-                        event_type=PipelineEventType.SIGNAL_BLOCKED,
-                        symbol=normalized_bar.symbol,
-                        message="v4 logical exit template is not runtime-supported",
-                        details={
-                            "template_id": getattr(exit_template, "template_id", "unknown"),
-                            "reason": blocker or "unsupported_v4_logical_exit_template",
-                        },
-                    )
+        sides_to_evaluate = tuple(
+            side_name
+            for side_name in ("long", "short")
+            if side_name in active_sides
+            and (sv4.logical_exits.long if side_name == "long" else sv4.logical_exits.short)
+        )
+        if not sides_to_evaluate:
+            return ()
+
+        from backend.app.features import FeatureSnapshot as _RtFeatureSnapshot
+
+        translated_values = {}
+        for dotted_key, runtime_key in self._v4_dotted_to_runtime_key.items():
+            fv = runtime_snapshot.values.get(runtime_key)
+            if fv is not None:
+                translated_values[dotted_key] = fv
+        translated_snapshot = _RtFeatureSnapshot(
+            symbol=runtime_snapshot.symbol,
+            timeframe=runtime_snapshot.timeframe,
+            timestamp=runtime_snapshot.timestamp,
+            values=translated_values,
+        )
+
+        signal_source = self._resolve_v4_signal_source_for_bar(sv4)
+        position_contexts = self._position_contexts(bar=normalized_bar)
+        symbol = normalized_bar.symbol.upper()
+        position_signal_context = position_contexts.get(
+            symbol,
+            PositionSignalContext(bar_timestamp=normalized_bar.timestamp),
+        )
+
+        intents: list[CandidateTradeIntent] = []
+        for side_str in sides_to_evaluate:
+            context = SignalEvaluationContext(
+                strategy=sv4,
+                evaluation_type="logical_exit",
+                symbol=symbol,
+                side=side_str,  # type: ignore[arg-type]
+                timestamp=normalized_bar.timestamp,
+                deployment_id=self._deployment.deployment_id,
+                watchlist_snapshot_id=self._components.universe.id,
+                position_contexts={symbol: position_signal_context},
+            )
+            result = signal_source.evaluate(translated_snapshot, context)
+            intents.extend(result.candidate_intents)
+            for template_id, reason in result.diagnostics.items():
+                if template_id == "reason":
                     continue
-                rules.append(
-                    SignalRule(
-                        name=f"v4_{getattr(exit_template, 'template_id', 'logical_exit')}_{side_name}",
-                        side=CandidateSide.LONG if side_name == "long" else CandidateSide.SHORT,
-                        intent_type=IntentType.EXIT,
-                        logical_exit_rule=logical_rule,
-                    )
+                self._event_log.append(
+                    timestamp=normalized_bar.timestamp,
+                    event_type=PipelineEventType.SIGNAL_BLOCKED,
+                    symbol=normalized_bar.symbol,
+                    message="v4 logical exit template is not runtime-supported",
+                    details={
+                        "template_id": template_id,
+                        "reason": reason,
+                        "side": side_str,
+                    },
                 )
 
-        if not rules:
-            return SignalEvaluation(intents=())
-
-        position_contexts = self._position_contexts(bar=normalized_bar)
-        if any(
-            rule.logical_exit_rule is not None
-            and rule.logical_exit_rule.kind == LogicalExitRuleKind.BARS_SINCE_ENTRY
-            and position_contexts.get(normalized_bar.symbol.upper(), PositionContext()).current_bar_index is None
-            for rule in rules
-        ):
-            self._event_log.append(
-                timestamp=normalized_bar.timestamp,
-                event_type=PipelineEventType.SIGNAL_BLOCKED,
-                symbol=normalized_bar.symbol,
-                message="v4 bars-since logical exit cannot evaluate without position entry timestamp",
-                details={"reason": "position_entry_timestamp_unavailable"},
-            )
-            return SignalEvaluation(intents=())
-
-        synthetic_strategy = StrategyVersion(
-            id=sv4.id,
-            strategy_id=sv4.strategy_v4_id,
-            version=sv4.version,
-            name=f"{sv4.name} logical exits",
-            entry_rules=[],
-            exit_rules=rules,
-        )
-        try:
-            return self._signal_engine.evaluate(
-                synthetic_strategy,
-                runtime_snapshot,
-                position_contexts=position_contexts,
-            )
-        except SignalEvaluationError as exc:
-            self._event_log.append(
-                timestamp=normalized_bar.timestamp,
-                event_type=PipelineEventType.SIGNAL_BLOCKED,
-                symbol=normalized_bar.symbol,
-                message=str(exc),
-                details={"reason": "v4_logical_exit_evaluation_failed"},
-            )
-            return SignalEvaluation(intents=())
+        return tuple(intents)
 
     def _active_position_sides_for_symbol(self, symbol: str) -> set[str]:
         symbol_upper = symbol.upper()
@@ -2077,35 +2041,6 @@ class RuntimeOrchestrator:
                 if side in {"long", "short"}:
                     active_sides.add(side)
         return active_sides
-
-    def _v4_logical_exit_rule_from_template(self, exit_template: object) -> tuple[LogicalExitRule | None, str | None]:
-        template_id = getattr(exit_template, "template_id", None)
-        params = getattr(exit_template, "params", {}) or {}
-        if template_id == "bars_since":
-            bars = self._positive_int_param(params, "bars")
-            if bars is None:
-                return None, "bars_since_missing_positive_bars_param"
-            return (
-                LogicalExitRule(
-                    kind=LogicalExitRuleKind.BARS_SINCE_ENTRY,
-                    bars=bars,
-                    label=f"bars_since:{bars}",
-                ),
-                None,
-            )
-        if template_id == "session_end":
-            minutes = self._positive_int_param(params, "offset_minutes") or 5
-            return (
-                LogicalExitRule(
-                    kind=LogicalExitRuleKind.MINUTES_BEFORE_SESSION_CLOSE,
-                    minutes_before_close=minutes,
-                    label=f"session_end:{minutes}",
-                ),
-                None,
-            )
-        if template_id in {"no_progress", "opposite_cross"}:
-            return None, f"{template_id}_requires_feature_expression_runtime_wiring"
-        return None, f"unknown_v4_logical_exit_template:{template_id}"
 
     @staticmethod
     def _positive_int_param(params: Mapping[str, object], key: str) -> int | None:
@@ -2155,6 +2090,7 @@ class RuntimeOrchestrator:
             timestamp=runtime_snapshot.timestamp,
             values=translated_values,
         )
+        signal_source = self._resolve_v4_signal_source_for_bar(sv4)
 
         for side_str in ("long", "short"):
             entry = sv4.entries.long if side_str == "long" else sv4.entries.short
@@ -2163,18 +2099,19 @@ class RuntimeOrchestrator:
             if normalized_bar.symbol.upper() not in self._entry_symbols:
                 continue
 
-            signal_plan = build_signal_plan_from_v4(
+            context = SignalEvaluationContext(
                 strategy=sv4,
-                snapshot=translated_snapshot,
                 symbol=normalized_bar.symbol.upper(),
                 side=side_str,  # type: ignore[arg-type]
                 timestamp=normalized_bar.timestamp,
                 deployment_id=self._deployment.deployment_id,
                 watchlist_snapshot_id=self._components.universe.id,
-                expression_loader=self._v4_expression_loader,
+                position_contexts={},
             )
-            if signal_plan is None:
+            result = signal_source.evaluate(translated_snapshot, context)
+            if result.decision != "emitted" or result.signal_plan is None:
                 continue
+            signal_plan = result.signal_plan
 
             plans.append(signal_plan)
             # Synthetic CandidateTradeIntent for event logging only.

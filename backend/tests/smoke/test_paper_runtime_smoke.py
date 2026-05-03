@@ -15,28 +15,32 @@ from backend.app.brokers import (
     BrokerSyncState,
 )
 from backend.app.broker_accounts import BrokerAccount, BrokerAccountValidationStatus
+from backend.app.composition import SignalSourceRegistry, StrategyArtifactKind, StrategyArtifactResolver
 from backend.app.control_plane import ControlPlane
+from backend.app.decision.signal_sources import V4ExpressionSignalSource
 from backend.app.domain import (
-    CandidateSide,
-    ConditionNode,
-    ConditionOperator,
     ExecutionStyleVersion,
-    IntentType,
     OrderType,
-    ProgramVersion,
     RiskProfileVersion,
     StrategyControlsVersion,
-    StrategyVersion,
     TimeInForce,
     TradingMode,
     UniverseSnapshot,
     UniverseSymbol,
 )
 from backend.app.domain.risk_profile import PositionSizingMethod
-from backend.app.domain.strategy import SignalRule
+from backend.app.domain.strategy_v4 import (
+    OnFillActionV4,
+    StrategyEntriesV4,
+    StrategyEntryV4,
+    StrategyLegV4,
+    StrategyStopV4,
+    StrategyVariableV4,
+    StrategyVersionV4,
+)
 from backend.app.features import IncrementalFeatureEngine, NormalizedBar, ResolvedDeploymentComponents
 from backend.app.governor import BrokerSyncFreshness as GovernorBrokerSyncFreshness
-from backend.app.governor import GovernorPolicy, PortfolioGovernor
+from backend.app.governor import GovernorPolicy, PortfolioGovernor, PortfolioSnapshot
 from backend.app.operations import OperationsCenterService
 from backend.app.orders import InternalOrder, InternalOrderStatus, OrderManager
 from backend.app.persistence import SQLiteOrderLedger, SQLiteRuntimeStore
@@ -107,7 +111,7 @@ class MockAlpacaClient:
         self.orders_by_client_order_id[client_order_id] = payload
         return payload
 
-    def get_orders(self) -> list[dict[str, object]]:
+    def get_orders(self, **_kwargs) -> list[dict[str, object]]:
         return list(self.orders_by_client_order_id.values())
 
     def get_account(self) -> dict[str, object]:
@@ -123,25 +127,34 @@ def _components() -> ResolvedDeploymentComponents:
     risk_id = uuid4()
     execution_id = uuid4()
     universe_id = uuid4()
-    strategy = StrategyVersion(
+    strategy = StrategyVersionV4(
         id=strategy_id,
-        strategy_id=uuid4(),
+        strategy_v4_id=uuid4(),
         version=1,
-        name="Paper Smoke Strategy",
-        entry_rules=[
-            SignalRule(
-                name="close_above_open",
-                side=CandidateSide.LONG,
-                intent_type=IntentType.ENTRY,
-                condition=ConditionNode(
-                    left_feature="5m.close[0]",
-                    operator=ConditionOperator.GREATER_THAN,
-                    right_feature="5m.open[0]",
-                ),
-                stop_candidate_feature="5m.low[0]",
-                target_candidate_feature="5m.high[0]",
-            )
-        ],
+        name="Paper Smoke V4 Strategy",
+        variables=(
+            StrategyVariableV4(
+                name="bull_bar",
+                expression_text="5m.close > 5m.open",
+                kind="expression",
+                feature_requirements=("5m.close", "5m.open"),
+            ),
+        ),
+        entries=StrategyEntriesV4(
+            long=StrategyEntryV4(expression_text="bull_bar"),
+        ),
+        stops=(StrategyStopV4(mode="simple", scope="all", simple_type="%", simple_value=2.0),),
+        legs=(
+            StrategyLegV4(
+                position=1,
+                kind="target",
+                size_pct=1.0,
+                target_type="%",
+                target_value=3.0,
+                on_fill_action=OnFillActionV4(kind="leave"),
+            ),
+        ),
+        feature_requirements=("5m.close", "5m.open"),
     )
     controls = StrategyControlsVersion(
         id=controls_id,
@@ -173,20 +186,9 @@ def _components() -> ResolvedDeploymentComponents:
         name="Paper Smoke Universe",
         symbols=[UniverseSymbol(symbol="SPY")],
     )
-    program = ProgramVersion(
-        id=uuid4(),
-        program_id=uuid4(),
-        name="Paper Smoke Program",
-        version=1,
-        strategy_version_id=strategy_id,
-        strategy_controls_version_id=controls_id,
-        risk_profile_version_id=risk_id,
-        execution_style_version_id=execution_id,
-        universe_snapshot_id=universe_id,
-    )
     return ResolvedDeploymentComponents(
-        program=program,
-        strategy=strategy,
+        strategy=None,
+        strategy_version_v4=strategy,
         strategy_controls=controls,
         risk_profile=risk,
         execution_style=execution,
@@ -195,10 +197,33 @@ def _components() -> ResolvedDeploymentComponents:
 
 
 def _deployment(components: ResolvedDeploymentComponents) -> DeploymentContext:
+    strategy = components.strategy_version_v4
+    assert strategy is not None
     return DeploymentContext(
         deployment_id=DEPLOYMENT_ID,
-        strategy_version_id=components.strategy.id,
-        strategy_version=components.strategy.version,
+        strategy_version_id=strategy.id,
+        strategy_version=strategy.version,
+    )
+
+
+def _strategy_artifact_resolver(
+    components: ResolvedDeploymentComponents,
+) -> StrategyArtifactResolver:
+    registry = SignalSourceRegistry()
+    registry.register(
+        StrategyArtifactKind.EXPRESSION_V1,
+        lambda _metadata: V4ExpressionSignalSource(),
+    )
+
+    def lookup(strategy_version_v4_id: UUID) -> StrategyVersionV4:
+        sv4 = components.strategy_version_v4
+        if sv4 is None or sv4.id != strategy_version_v4_id:
+            raise KeyError(strategy_version_v4_id)
+        return sv4
+
+    return StrategyArtifactResolver(
+        registry=registry,
+        strategy_v4_lookup=lookup,
     )
 
 
@@ -233,13 +258,16 @@ def _paper_context(tmp_path, monkeypatch, *, broker_freshness: GovernorBrokerSyn
         account_id=ACCOUNT_ID,
         deployment=deployment,
         components=components,
+        feature_engine=IncrementalFeatureEngine(),
         governor=PortfolioGovernor(governor_policy, state_store=store),
         order_manager=manager,
         broker_adapter=adapter,
         broker_sync=broker_sync,
         broker_freshness=broker_freshness or GovernorBrokerSyncFreshness(),
+        portfolio_snapshot=PortfolioSnapshot(equity=100_000),
         control_plane=runtime_control_plane,
         runtime_store=store,
+        strategy_artifact_resolver=_strategy_artifact_resolver(components),
     )
     return {
         "store": store,

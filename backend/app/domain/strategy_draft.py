@@ -77,7 +77,7 @@ class StrategyDraftBacktestPlan(DomainSchema):
 
 
 class StrategyDraftLaunchPlan(DomainSchema):
-    surface: Literal["chart_lab", "backtest", "walk_forward"]
+    surface: Literal["backtest", "walk_forward"]
     method: Literal["GET", "POST"] = "POST"
     route: str
     request: JsonDict = Field(default_factory=dict)
@@ -87,7 +87,6 @@ class StrategyDraftLaunchPlan(DomainSchema):
 
 
 class StrategyDraftLaunchPlans(DomainSchema):
-    chart_lab: StrategyDraftLaunchPlan
     backtest: StrategyDraftLaunchPlan
     walk_forward: StrategyDraftLaunchPlan
 

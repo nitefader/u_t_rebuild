@@ -7,11 +7,9 @@ import { RebindDeploymentDrawer } from "./RebindDeploymentDrawer";
 import { ApiError } from "@/api/client";
 import { AccountsApi } from "@/api/accounts";
 import { DeploymentsApi } from "@/api/deployments";
-import { StrategiesApi } from "@/api/strategies";
 import { WatchlistsApi } from "@/api/watchlists";
-import { listAllHeads } from "@/api/strategiesV4";
+import { listAllHeads, listByStrategy, type StrategyVersionV4 } from "@/api/strategiesV4";
 import type { Deployment } from "@/api/schemas/deployments";
-import type { Strategy, StrategyVersionRecord } from "@/api/schemas/strategies";
 import { TRADING_HORIZON_LABELS, type TradingHorizon } from "@/api/schemas/risk";
 import { Banner } from "@/components/ui/Banner";
 import { Button } from "@/components/ui/Button";
@@ -51,11 +49,6 @@ export function Deployments(): JSX.Element {
     staleTime: 60_000,
   });
   const strategies = useQuery({
-    queryKey: ["strategies", "list"],
-    queryFn: () => StrategiesApi.list(),
-    staleTime: 60_000,
-  });
-  const strategiesV4 = useQuery({
     queryKey: ["strategies-v4", "heads"],
     queryFn: listAllHeads,
     staleTime: 60_000,
@@ -66,21 +59,15 @@ export function Deployments(): JSX.Element {
   const [bulkMessage, setBulkMessage] = useState<string | null>(null);
   const qc = useQueryClient();
 
-  // Unified strategy name lookup: v4 heads take priority over legacy.
+  // V4 strategy name lookup.
   const strategyNameById: Record<string, string> = useMemo(() => {
     const map: Record<string, string> = {};
-    for (const s of strategies.data?.strategies ?? []) {
-      if (s.latest_version_id) map[s.latest_version_id] = s.name;
-      for (const fid of s.frozen_version_ids ?? []) {
-        map[fid] = s.name;
-      }
-    }
-    for (const h of strategiesV4.data ?? []) {
+    for (const h of strategies.data ?? []) {
       map[h.strategy_v4_id] = h.name;
       map[h.head_version_id] = h.name;
     }
     return map;
-  }, [strategies.data, strategiesV4.data]);
+  }, [strategies.data]);
 
   const deployments = list.data?.deployments ?? [];
   const selectedDeployments = deployments.filter((d) => selectedIds.includes(d.deployment_id));
@@ -187,7 +174,6 @@ export function Deployments(): JSX.Element {
               key={d.deployment_id}
               d={d}
               watchlists={watchlists.data?.watchlists ?? []}
-              strategies={strategies.data?.strategies ?? []}
               strategyNameById={strategyNameById}
               selected={selectedIds.includes(d.deployment_id)}
               onSelectedChange={(checked) => toggleSelected(d.deployment_id, checked)}
@@ -283,14 +269,12 @@ function lifecycleTone(status: Deployment["lifecycle_status"]): "ok" | "warn" | 
 function DeploymentCard({
   d,
   watchlists,
-  strategies,
   strategyNameById,
   selected,
   onSelectedChange,
 }: {
   d: Deployment;
   watchlists: { watchlist_id: string; name: string; kind: string }[];
-  strategies: Strategy[];
   strategyNameById: Record<string, string>;
   selected: boolean;
   onSelectedChange: (checked: boolean) => void;
@@ -328,23 +312,11 @@ function DeploymentCard({
   const watchlistNames = d.watchlist_ids.map(
     (id) => watchlists.find((w) => w.watchlist_id === id)?.name ?? "Watchlist loading",
   );
-  // Prefer v4 name, fall back to legacy strategy name lookup.
   const strategyName = (() => {
     if (d.strategy_version_v4_id && strategyNameById[d.strategy_version_v4_id]) {
       return strategyNameById[d.strategy_version_v4_id];
     }
-    if (d.strategy_version_id) {
-      return (
-        strategyNameById[d.strategy_version_id] ??
-        strategies.find(
-          (s) =>
-            s.latest_version_id === d.strategy_version_id ||
-            s.frozen_version_ids.includes(d.strategy_version_id!),
-        )?.name ??
-        "Strategy version"
-      );
-    }
-    return "Strategy version";
+    return "V4 strategy unavailable";
   })();
 
   return (
@@ -528,7 +500,7 @@ function CreateDeploymentDrawer({
 }): JSX.Element {
   const qc = useQueryClient();
 
-  const strategies = useQuery({ queryKey: ["strategies", "list"], queryFn: () => StrategiesApi.list(), enabled: open });
+  const strategies = useQuery({ queryKey: ["strategies-v4", "heads"], queryFn: listAllHeads, enabled: open });
   const watchlists = useQuery({ queryKey: ["watchlists", "list"], queryFn: () => WatchlistsApi.list(), enabled: open });
   const accounts = useQuery({ queryKey: ["accounts", "list"], queryFn: () => AccountsApi.list(), enabled: open });
 
@@ -541,11 +513,11 @@ function CreateDeploymentDrawer({
   const [error, setError] = useState<string | null>(null);
 
   const versions = useQuery({
-    queryKey: ["strategies", "versions", strategyId],
-    queryFn: () => StrategiesApi.listVersions(strategyId),
+    queryKey: ["strategies-v4", "versions", strategyId],
+    queryFn: () => listByStrategy(strategyId),
     enabled: open && Boolean(strategyId),
   });
-  const deployableVersions: StrategyVersionRecord[] = useMemo(
+  const deployableVersions: StrategyVersionV4[] = useMemo(
     () => versions.data ?? [],
     [versions.data],
   );
@@ -565,7 +537,7 @@ function CreateDeploymentDrawer({
       DeploymentsApi.create({
         name: name.trim(),
         description: null,
-        strategy_version_id: strategyVersionId,
+        strategy_version_v4_id: strategyVersionId,
         watchlist_ids: watchlistIds,
         subscribed_account_ids: accountIds,
         runtime_overrides: {},
@@ -613,9 +585,9 @@ function CreateDeploymentDrawer({
             }}
           >
             <option value="">Select strategy…</option>
-            {(strategies.data?.strategies ?? []).map((s: Strategy) => (
-              <option key={s.strategy_id} value={s.strategy_id}>
-                {s.name} ({s.version_count} version{s.version_count === 1 ? "" : "s"})
+            {(strategies.data ?? []).map((s) => (
+              <option key={s.strategy_v4_id} value={s.strategy_v4_id}>
+                {s.name} ({s.total_versions} version{s.total_versions === 1 ? "" : "s"})
               </option>
             ))}
           </Select>
@@ -627,8 +599,8 @@ function CreateDeploymentDrawer({
           >
             <option value="">{strategyId ? "Select version…" : "pick a strategy first"}</option>
             {deployableVersions.map((v) => (
-              <option key={v.strategy_version_id} value={v.strategy_version_id}>
-                v{v.version} - {v.status === "frozen" && v.frozen_at ? `frozen ${relativeTime(v.frozen_at)}` : v.status}
+              <option key={v.id} value={v.id}>
+                v{v.version} - {v.validation_status.valid ? "valid" : "needs fixes"}
               </option>
             ))}
           </Select>

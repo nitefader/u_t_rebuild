@@ -550,10 +550,16 @@ class StrategyV4Repository:
         long_entry: StrategyEntryV4 | None = None
         short_entry: StrategyEntryV4 | None = None
         for row in entries:
+            row_keys = row.keys()
             feat = tuple(json.loads(row["feature_requirements_json"]))
             e = StrategyEntryV4(
                 expression_text=row["expression_text"],
                 feature_requirements=feat,
+                compiled_blob=(
+                    row["expression_ast_blob"]
+                    if "expression_ast_blob" in row_keys
+                    else None
+                ),
             )
             if row["side"] == "long":
                 long_entry = e
@@ -571,12 +577,18 @@ class StrategyV4Repository:
                     expression_text=row["expression_text"],
                     kind=var_kind,
                     feature_requirements=tuple(json.loads(row["feature_requirements_json"])),
+                    compiled_blob=(
+                        row["expression_ast_blob"]
+                        if "expression_ast_blob" in rk
+                        else None
+                    ),
                 )
             )
 
         # stops
         stops_out: list[StrategyStopV4] = []
         for row in stops:
+            row_keys = row.keys()
             stops_out.append(
                 StrategyStopV4(
                     id=UUID(row["strategy_stop_v4_id"]),
@@ -586,6 +598,11 @@ class StrategyV4Repository:
                     simple_value=row["simple_value"],
                     expression_text=row["expression_text"],
                     feature_requirements=tuple(json.loads(row["feature_requirements_json"])),
+                    compiled_blob=(
+                        row["expression_ast_blob"]
+                        if "expression_ast_blob" in row_keys
+                        else None
+                    ),
                 )
             )
 
