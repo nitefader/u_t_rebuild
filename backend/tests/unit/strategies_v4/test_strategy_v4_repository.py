@@ -133,6 +133,7 @@ def test_roundtrip_variables(repo: StrategyV4Repository) -> None:
     assert len(loaded.variables) == 1
     assert loaded.variables[0].name == "fast"
     assert loaded.variables[0].expression_text == "5m.ema(9)"
+    assert loaded.variables[0].compiled_blob is not None
 
 
 def test_roundtrip_entries(repo: StrategyV4Repository) -> None:
@@ -141,6 +142,7 @@ def test_roundtrip_entries(repo: StrategyV4Repository) -> None:
     loaded = repo.load_version(v.id)
     assert loaded.entries.long is not None
     assert loaded.entries.long.expression_text == "5m.ema(9) > 5m.ema(21)"
+    assert loaded.entries.long.compiled_blob is not None
     assert loaded.entries.short is None
 
 
@@ -162,6 +164,7 @@ def test_roundtrip_expression_stop(repo: StrategyV4Repository) -> None:
     s = loaded.stops[0]
     assert s.mode == "expression"
     assert s.expression_text == "5m.atr(14) > 0"
+    assert s.compiled_blob is not None
 
 
 def test_roundtrip_legs(repo: StrategyV4Repository) -> None:

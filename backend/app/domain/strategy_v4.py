@@ -34,11 +34,13 @@ class StrategyVariableV4(DomainSchema):
     expression_text: str
     kind: Literal["expression", "timeframe"] = "expression"
     feature_requirements: tuple[str, ...] = ()
+    compiled_blob: bytes | None = Field(default=None, exclude=True)
 
 
 class StrategyEntryV4(DomainSchema):
     expression_text: str
     feature_requirements: tuple[str, ...] = ()
+    compiled_blob: bytes | None = Field(default=None, exclude=True)
 
 
 class StrategyEntriesV4(DomainSchema):
@@ -60,6 +62,7 @@ class StrategyStopV4(DomainSchema):
     simple_value: float | None = None
     expression_text: str | None = None
     feature_requirements: tuple[str, ...] = ()
+    compiled_blob: bytes | None = Field(default=None, exclude=True)
 
     @model_validator(mode="after")
     def validate_stop_mode(self) -> "StrategyStopV4":

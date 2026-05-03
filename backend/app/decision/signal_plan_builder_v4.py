@@ -77,12 +77,11 @@ def _strategy_scoped_loader(
 ) -> "ExpressionLoader":
     """Wrap *base_loader* so the text-fallback path knows the strategy's variables.
 
-    The domain model does not carry compiled bytes today, so every call into
-    ``load_compiled`` re-parses text. The re-parse needs the strategy's
-    variable names, otherwise ``var_ref`` references like ``bull_bar`` raise
-    ``ValidationError: Unknown identifier``. Without this scoping, a
-    perfectly-saved strategy that uses a variable cannot fire a signal at
-    runtime.
+    When compiled bytes are absent or stale, ``load_compiled`` re-parses text.
+    The re-parse needs the strategy's variable names, otherwise ``var_ref``
+    references like ``bull_bar`` raise ``ValidationError: Unknown identifier``.
+    Without this scoping, a perfectly-saved strategy that uses a variable
+    cannot fire a signal at runtime.
 
     When a base_loader was injected (tests passing a stub) we honor it as-is
     only when the text contains no variable refs — we cannot retroactively
@@ -176,7 +175,7 @@ def _resolve_variables(
             history=expr_snapshot_no_vars.history,
             variables=dict(resolved),
         )
-        compiled = expression_loader(var.expression_text, None)
+        compiled = expression_loader(var.expression_text, var.compiled_blob)
         value = engine_evaluate(compiled, snap_with_vars)
         resolved[var.name] = value
 
@@ -229,7 +228,7 @@ def _build_stop_from_v4(
     # Expression mode: evaluate the expression to get a numeric offset.
     assert stop.expression_text is not None
     try:
-        compiled = expression_loader(stop.expression_text, None)
+        compiled = expression_loader(stop.expression_text, stop.compiled_blob)
         raw = engine_evaluate(compiled, expr_snapshot)
     except EvalError:
         return None
@@ -390,8 +389,7 @@ def build_signal_plan_from_v4(
     if entry is None:
         return None
 
-    # Wrap the loader so the text-fallback re-parse (used until persisted
-    # compiled bytes are plumbed onto the domain model) knows the strategy's
+    # Wrap the loader so the text-fallback re-parse knows the strategy's
     # variable names. Without this, an entry like ``bull_bar`` raises
     # ValidationError: Unknown identifier.
     scoped_loader = _strategy_scoped_loader(expression_loader, strategy)
@@ -416,7 +414,7 @@ def build_signal_plan_from_v4(
 
     # Evaluate the entry expression.
     try:
-        compiled_entry = scoped_loader(entry.expression_text, None)
+        compiled_entry = scoped_loader(entry.expression_text, entry.compiled_blob)
         entry_result = engine_evaluate(compiled_entry, full_expr_snap)
     except EvalError:
         return None
