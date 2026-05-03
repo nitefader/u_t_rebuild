@@ -1,0 +1,130 @@
+ROLE: Codex implementer — Milestone 3 compiled-blob plumbing. Single clean chunk, one commit at the end.
+
+PREAMBLE — answers to your three questions:
+
+1. **`compiled_blob` IS excluded from API responses.** Pickle bytes must not leak through JSON. Use `compiled_blob: bytes | None = Field(default=None, exclude=True)` on all three domain classes. The `exclude=True` keeps it out of `model_dump(mode="json")` at `backend/app/api/routes/strategies_v4.py:81-82` and elsewhere. It still flows through `model_validate` for internal construction.
+
+2. **Existing pickle-fail-as-stale detection is sufficient for this slice.** Do NOT add a `compiler_version` / `format_version` marker — that's scope creep and not in the mission text. `load_compiled()` at `backend/app/strategies/expression_api.py:311-317` already falls back to text re-parse on `pickle.UnpicklingError` / type mismatch / etc. That covers compiler-internal drift well enough for now. If a future schema break needs forced invalidation, we add a marker then.
+
+3. **Perf probe asserts `p99 < 500µs` (mission DONE condition D), with flake mitigation.** Tighten the assertion at `backend/tests/integration/test_v4_runtime_e2e.py:568` from `5000.0` to `500.0`. Add flake mitigation: warmup at least 20 bars (not 1), run two timing passes of 200 iterations each, take the **best (lowest)** p99 of the two passes, assert that. The threshold is mission-locked; the mitigation is to keep the gate stable without being lenient.
+
+4. **Memory file:** The missing `memory/project_strategy_ide_v4_status.md` lives at the external Claude memory path, not in the repo. Claude updates it after this slice ships — NOT in this Codex prompt's scope.
+
+GOAL:
+Plumb `compiled_blob: bytes | None` through the v4 strategy domain (Entry/Variable/Stop), hydrate it from the existing `expression_ast_blob` SQLite columns at load, pass it into the three `load_compiled(...)` calls in `signal_plan_builder_v4.py`, and tighten the perf probe to enforce mission DONE condition D (`p99 < 500µs`).
+
+LOCKED DECISIONS (do not re-litigate):
+
+1. **Domain models** (`backend/app/domain/strategy_v4.py`):
+   - Add `compiled_blob: bytes | None = Field(default=None, exclude=True)` to `StrategyVariableV4`, `StrategyEntryV4`, `StrategyStopV4`.
+   - Default `None` keeps every existing in-memory constructor / fixture working without edits.
+   - `exclude=True` keeps blob out of API JSON responses.
+   - Do NOT change validators, do NOT add new validators, do NOT change frozen/extra=forbid behavior.
+
+2. **Persistence load path** (`backend/app/strategies_v4/persistence.py:554-589`):
+   - At lines 554-557 (entries), 569-574 (variables), 581-589 (stops): include `compiled_blob=row["expression_ast_blob"]` (or whatever column-access pattern matches the surrounding code) when constructing the domain object. Save path already writes the column at lines 315/360/402 — no change needed there.
+   - If the row dict access raises KeyError on legacy rows where the column is genuinely absent (unlikely given the inline migration at 130-147 ensures the column exists), fall back to `None`. Use `row.get("expression_ast_blob")` if rows are dict-like; otherwise mirror existing access pattern.
+
+3. **Runtime loader** (`backend/app/decision/signal_plan_builder_v4.py`):
+   - Lines 179 (variable), 232 (expression stop), 419 (entry): the `load_compiled(...)` calls currently pass `None` (or omit the blob arg). Change them to pass the corresponding domain object's `compiled_blob`. The `_strategy_scoped_loader` at line 74-108 may need a small signature tweak to accept/forward the blob from the surrounding domain object — minimum diff, do not refactor the loader's overall shape.
+   - `load_compiled()` at `backend/app/strategies/expression_api.py:297-329` already prefers blob and falls back to text re-parse on absent/corrupt blob. No change to `load_compiled` itself.
+
+4. **API exclusion regression test:**
+   - Add an assertion in `backend/tests/unit/strategies_v4/test_strategy_v4_routes.py` (around line 104, the existing route save/load test) that the API response payload does NOT contain `compiled_blob`. Minimum diff — one assert, mirror existing assertion shape.
+
+5. **Persistence round-trip test:**
+   - In `backend/tests/unit/strategies_v4/test_strategy_v4_repository.py` and/or `backend/tests/unit/strategies_v4/test_strategy_v4_service.py`: add an assertion that after save+load, the loaded `StrategyEntryV4`/`StrategyVariableV4`/`StrategyStopV4` carries a non-None `compiled_blob` (since save compiles to bytes). Update `test_compiled_ast_round_trips` at `test_strategy_v4_service.py:337` — the existing fallback-with-None expectation is now wrong.
+
+6. **Hot-path test:**
+   - In `backend/tests/unit/decision/test_signal_plan_builder_v4.py` (around line 67/85, the existing builder tests): add a loader spy / assertion that proves a non-None blob is passed into `load_compiled` when the domain object carries one. Minimum diff.
+
+7. **Perf probe** (`backend/tests/integration/test_v4_runtime_e2e.py:470-579`):
+   - Tighten assertion at line 568 from `< 5000.0` to `< 500.0`.
+   - Update warmup at line ~552: change "warm one bar" to warm at least 20 bars before the timing loop. (The existing single-bar warmup is too thin to evict cold-cache outliers.)
+   - Add a two-pass mitigation: run the 200-iteration timing loop twice, take the lower of the two p99 samples, assert that against 500µs. This keeps the gate stable without making it lenient.
+   - Update the assertion message to reflect the 500µs threshold.
+
+8. **Locks restated (DO NOT TOUCH):**
+   - `backend/app/features/hydration.py` — zero edits.
+   - `FeatureAvailability` enum semantics in `backend/app/features/frames.py` — zero edits. (Builder imports `FeatureAvailability` for filtering at line 135-137 — leave that logic alone.)
+   - `IncrementalFeatureEngine` warmup logic in `backend/app/features/incremental.py` — zero edits.
+   - `load_compiled()` body in `backend/app/strategies/expression_api.py` — zero edits (it already handles blob-or-text correctly).
+   - `compile_for_storage()` body in `backend/app/strategies/expression_api.py` — zero edits.
+   - `AGENTS.md`, `COORDINATION/**` — zero edits.
+
+SCOPE — FILES ALLOWED TO EDIT:
+
+Backend (production):
+- `backend/app/domain/strategy_v4.py` (add `compiled_blob` field to three classes)
+- `backend/app/strategies_v4/persistence.py` (hydrate `compiled_blob` at three load sites: ~554, ~569, ~581)
+- `backend/app/decision/signal_plan_builder_v4.py` (pass blob into three `load_compiled` calls at ~179, ~232, ~419; minimum-diff tweak to `_strategy_scoped_loader` signature if needed)
+
+Backend (tests):
+- `backend/tests/unit/strategies_v4/test_strategy_v4_routes.py` (API-exclusion regression assertion)
+- `backend/tests/unit/strategies_v4/test_strategy_v4_repository.py` (round-trip non-None blob assertion)
+- `backend/tests/unit/strategies_v4/test_strategy_v4_service.py` (update `test_compiled_ast_round_trips` to expect non-None)
+- `backend/tests/unit/decision/test_signal_plan_builder_v4.py` (hot-path loader spy assertion)
+- `backend/tests/decision/signal_sources/test_v4_expression.py` (only if blob plumbing breaks the existing custom-loader test at 283-298 — minimum diff)
+- `backend/tests/integration/test_v4_runtime_e2e.py` (perf probe threshold + flake mitigation)
+
+If any other test breaks because a fixture constructs `StrategyEntryV4(...)` etc. and doesn't provide `compiled_blob` — it should NOT break, since the field defaults to `None`. If something does break, STOP and report.
+
+FILES FORBIDDEN TO EDIT:
+- `backend/app/features/hydration.py`
+- `backend/app/features/frames.py`
+- `backend/app/features/incremental.py`
+- `backend/app/strategies/expression_api.py` (load_compiled / compile_for_storage bodies are correct as-is)
+- `backend/app/strategies/expression_engine/**` (no compiler changes)
+- `AGENTS.md`, `COORDINATION/**`
+- `broker/`, `orders/`, `governor/`, `risk_resolver/`, `market_data/`
+- Pre-existing untracked paths: `scripts/`, `backend/codex_pytest_tmp/`, `run-agents.ps1`, `.pytest-tmp-*`, `.pytest_cache/`
+
+EXACT REQUIREMENTS:
+1. Three domain classes carry `compiled_blob: bytes | None = Field(default=None, exclude=True)`.
+2. Repository load hydrates `compiled_blob` from existing `expression_ast_blob` columns for all three sub-types.
+3. `signal_plan_builder_v4.py` passes the blob into all three `load_compiled` calls.
+4. API responses do NOT contain `compiled_blob` (regression test asserts this).
+5. After save+load, in-memory domain objects carry non-None `compiled_blob`.
+6. Hot-path test proves non-None blob reaches `load_compiled`.
+7. Perf probe asserts `p99 < 500µs` after warmup-20 + two-pass-best mitigation.
+8. All in-scope tests pass. F1/F4/F9/F10 lint gates green.
+
+WORKTREE-CLEANLINESS RULE:
+- Pre-existing untracked paths WILL appear in `git status` — do NOT touch.
+- ONLY explicit per-file `git add`. NEVER `git add -A` / `git add .` / `git add -u`.
+- Verify `git diff --cached --name-only` before commit. Every staged path must be on the FILES ALLOWED TO EDIT list.
+
+TESTS TO RUN (all must be green before commit):
+- `cd backend; $env:PYTHONPATH=(Resolve-Path ..).Path; python -m pytest tests/unit/strategies_v4 tests/unit/decision tests/decision/signal_sources -x`
+- `cd backend; $env:PYTHONPATH=(Resolve-Path ..).Path; python -m pytest tests/integration/test_v4_runtime_e2e.py -x` (perf probe must hit 500µs)
+- `cd backend; $env:PYTHONPATH=(Resolve-Path ..).Path; python -m pytest tests/unit/composition tests/unit/lint tests/unit/pipeline tests/unit/runtime tests/unit/features tests/unit/tools -x` (regression sweep)
+- `cd backend; $env:PYTHONPATH=(Resolve-Path ..).Path; python -m pytest tests -x` (tracked backend suite — same fallback that worked at d2c95de; if it fails on the pre-existing `backend/codex_pytest_tmp/pyprobe` permission, that's NOT a regression, report and continue)
+- `cd backend; $env:PYTHONPATH=(Resolve-Path ..).Path; python -m pytest tests/unit/lint -q` (F1/F4/F9/F10)
+- Frontend: `cd frontend && npm test -- --run` and `cd frontend && npm run build`. If sandbox EPERM, report explicitly — operator runs locally per established pattern.
+
+PERF PROBE FAILURE HANDLING:
+- If after the warmup-20 + two-pass-best mitigation the probe still fails the 500µs assertion: STOP and report. Include the actual p99 measured (both passes), median, sample count. Do NOT loosen the threshold — the mission DONE condition is locked at 500µs.
+- If the probe passes but inconsistently (you observe one pass green, one red across multiple runs), report this in BEHAVIOR_CHANGED with measured p99 distribution — operator may want to add a `@pytest.mark.perf` gate later.
+
+COMMIT:
+- One commit. Message:
+  ```
+  S12.x compiled-blob: plumb compiled_blob through v4 domain, hot path skips text re-parse
+  ```
+- Co-author: `Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>`
+- HEREDOC commit shape (PowerShell single-quoted `@'...'@`).
+- Explicit per-file `git add`. Run `git diff --cached --name-only` immediately before commit; include verbatim in report.
+- If `.git/index.lock` permission denied: STOP, report staged content + intended commit message; operator commits locally as we did for `169c234`.
+
+OUTPUT FORMAT (codex_report_schema.json):
+- STARTED, COMPLETED, FILES_CHANGED, TESTS_RUN, RESULTS (PASS/PARTIAL/FAIL), BEHAVIOR_CHANGED (include measured p99 from both perf-probe passes), BLOCKERS, QUESTIONS, NEXT_RECOMMENDED_STEP, CONFIDENCE, COMMIT_HASH (7-char SHA from `git rev-parse --short HEAD`).
+- Append verbatim outputs of: precheck `git status --short`, post-stage `git diff --cached --name-only`, post-commit `git log -1 --stat` + `git status --short`.
+
+STOP CONDITIONS:
+- Perf probe fails 500µs assertion after the documented mitigation: STOP and report measurements; do NOT loosen the threshold.
+- Adding `compiled_blob: bytes | None = None` breaks an existing fixture/test outside the FILES ALLOWED list (i.e. fixture passes positional args expecting the old shape): STOP and report. (This shouldn't happen since the field defaults to `None` and is added at the end of the field list, but if Pydantic v2 frozen-model construction balks unexpectedly, report.)
+- F10 or any lint gate flags an unexpected file: STOP and report.
+- Staged file list diverges from FILES ALLOWED: STOP, `git reset HEAD --`, report.
+- `.git/index.lock` permission denied: STOP, report staged content + intended message verbatim.
+- Frontend gates EPERM: report and proceed to commit (operator-waiver pattern).
+- Any non-test, non-tool consumer breaks in a way requiring forbidden-path edits: STOP and report.

@@ -1,0 +1,63 @@
+MISSION:
+Ship the next three Ultimate Trader milestones in order — close the v4 IDE plan and clear the live-loop perf gap so v4 is on-budget end to end.
+
+ROLES:
+- Operator: Nanyel
+- Claude: PM / architect / reviewer
+- Codex: implementer
+
+GOALS (work in order; finish #1 fully before starting #2):
+
+1. Slice 12 — Deployment dual-FK collapse.
+   - Delete `Deployment.strategy_version_id` and `DeploymentWriteRequest.strategy_version_id` plus their `_require_at_least_one_strategy_fk` validators in [backend/app/deployments/models.py](backend/app/deployments/models.py); make `strategy_version_v4_id` required.
+   - Lineage `strategy_version_id` on `Order`, `SignalPlan`, `RiskDecisionCard`, risk plans, research artifacts is NOT in scope. Those UUIDs already hold v4 IDs; the field name is historical and stays.
+   - Remove the warn-and-skip branch at [runtime_store.py:925-931](backend/app/persistence/runtime_store.py#L925-L931); missing `strategy_version_v4_id` becomes a hard error.
+   - Remove the V1 branch at [strategy_artifact_resolver.py:45-49](backend/app/composition/strategy_artifact_resolver.py#L45-L49); resolver still raises on "neither FK set."
+   - Frontend deployment forms drop the legacy field.
+   - Flip Slice 12 to ✅ in [project_strategy_ide_v4_status.md](memory/project_strategy_ide_v4_status.md).
+
+2. FeatureEnginePort — wrap `IncrementalFeatureEngine` behind a Protocol.
+   - New port: `update(plan, bar, cache)` + `compute(plan, bars)` only. Consumers continue to branch on `FeatureValue.availability` exactly as today.
+   - DO NOT TOUCH (locked per [feedback_feature_engine_ownership_locks.md](memory/feedback_feature_engine_ownership_locks.md)): `backend/app/features/hydration.py`, `FeatureAvailability` enum semantics, the per-feature `warmup: int` + `WARMUP/AVAILABLE` gating in `IncrementalFeatureEngine`.
+   - Wire via existing composition root pattern (`app.state.feature_engine`); fail-closed on re-registration.
+   - Add lint gate F10: forbid direct import of `IncrementalFeatureEngine` outside its module + composition root.
+
+3. Compiled-blob plumbing onto the v4 domain model — close the S11 perf gap.
+   - Add `compiled_blob: bytes | None` to `StrategyEntryV4`, `StrategyVariableV4`, `StrategyStopV4`. Persistence stores compiled bytes at save; runtime loader prefers blob, falls back to text re-parse only when blob is absent or stale.
+   - `_strategy_scoped_loader` in `signal_plan_builder_v4.py` takes the blob path so the runtime hot path stops re-parsing per bar.
+   - Re-run the v4 runtime perf probe; remove the deferred entry in [project_strategy_ide_v4_status.md](memory/project_strategy_ide_v4_status.md).
+
+DONE CONDITION (mission complete when ALL true):
+A. All three milestones shipped on `feature/PortLogic_Abstraction` (or successor).
+B. Backend pytest + frontend tests + lint gates F1/F4/F9/F10 + smoke fixture + `test_v4_runtime_e2e.py` green.
+C. Live-path canary 3/3 after each commit.
+D. v4 runtime perf probe: p99 < 500µs per bar.
+E. Memory updated: Slice 12 ✅, FeatureEnginePort logged shipped (with locks restated), compiled-blob removed from deferred list.
+
+CONSTRAINTS (in addition to AGENTS.md + CLAUDE.md + MEMORY.md):
+- Forbidden paths unless a milestone explicitly requires: broker, orders, governor, risk_resolver, market_data.
+- Do NOT modify AGENTS.md or COORDINATION/**.
+- Explicit per-file `git add`. Never `git add -A` / `git add .`.
+- One Codex prompt per cycle, 20–30 min chunks. Each prompt names: Goal / Scope / Files allowed / Files forbidden / Exact requirements / Tests / Output format / Stop conditions.
+- Investigation-only prompt before any risky implementation chunk.
+- Codex reports must use the schema in `codex_report_schema.json`.
+
+AUTONOMY:
+Claude decides routine tech and answers Codex QUESTIONS when implied by this mission, MEMORY.md, repo doctrine, tests, or prior cycle log. Page the Operator only for: product direction, risk tradeoffs, destructive ops beyond stated scope, unclear architecture ownership, broker / live-trading safety.
+
+CLAUDE STOP CONDITIONS (emit DIRECTIVE: HALT or OPERATOR_QUESTION):
+- Codex reports FAIL or non-trivial BLOCKERS.
+- Tests fail and the repair isn't obvious.
+- Git working tree is dirty in unexpected ways (anything beyond the operator's pinned `AGENTS.md` edit).
+- Codex asks something not answerable from mission + memory.
+- Implementation would touch a forbidden path or expand scope.
+- Claude cannot produce a concrete next Codex prompt.
+(Orchestrator additionally halts on: max cycles, no-progress hash repeats, HALT.flag.)
+
+OUTPUT FORMAT (parsed by orchestrator — emit every cycle):
+STATUS: <one line>
+STEP: <e.g. "2 of 3">
+DIRECTIVE: NEXT_CODEX_PROMPT | OPERATOR_QUESTION | MISSION_COMPLETE | HALT
+REASON: <one short sentence>
+PAYLOAD:
+<the codex prompt, or operator question, or completion summary, or halt reason>
