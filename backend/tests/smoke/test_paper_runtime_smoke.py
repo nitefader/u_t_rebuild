@@ -258,6 +258,7 @@ def _paper_context(tmp_path, monkeypatch, *, broker_freshness: GovernorBrokerSyn
         account_id=ACCOUNT_ID,
         deployment=deployment,
         components=components,
+        feature_engine=IncrementalFeatureEngine(),
         governor=PortfolioGovernor(governor_policy, state_store=store),
         order_manager=manager,
         broker_adapter=adapter,

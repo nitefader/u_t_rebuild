@@ -446,6 +446,7 @@ def _orchestrator(
         account_ids=account_ids,
         deployment=_deployment(resolved),
         components=resolved,
+        feature_engine=IncrementalFeatureEngine(),
         governor=governor,
         broker_adapter=broker_adapter,
         order_manager=order_manager,
@@ -1043,6 +1044,7 @@ def test_multi_account_governor_uses_account_specific_broker_freshness() -> None
         account_ids=(ACCOUNT_ID, OTHER_ACCOUNT_ID),
         deployment=_deployment(resolved),
         components=resolved,
+        feature_engine=IncrementalFeatureEngine(),
         broker_adapter=broker,
         broker_freshness_by_account={
             ACCOUNT_ID: BrokerSyncFreshness(is_stale=False),
@@ -1103,6 +1105,7 @@ def test_live_broker_adapter_submits_when_runtime_submit_is_explicitly_enabled()
         account_id=ACCOUNT_ID,
         deployment=_deployment(resolved),
         components=resolved,
+        feature_engine=IncrementalFeatureEngine(),
         broker_adapter=broker,
         live_order_submission_enabled=True,
         portfolio_snapshot=PortfolioSnapshot(equity=100_000),
@@ -1324,6 +1327,7 @@ def test_orchestrator_attaches_stream_router_to_provided_stream_adapter() -> Non
         account_id=ACCOUNT_ID,
         deployment=_deployment(resolved),
         components=resolved,
+        feature_engine=IncrementalFeatureEngine(),
         stream_adapter=stream_adapter,
     )
 
@@ -1425,6 +1429,7 @@ def _orchestrator_with_resolver(*, resolver, components=None, broker_adapter=Non
         account_id=ACCOUNT_ID,
         deployment=_deployment(resolved),
         components=resolved,
+        feature_engine=IncrementalFeatureEngine(),
         broker_adapter=broker_adapter,
         governor_policy_resolver=resolver,
         portfolio_snapshot=(
@@ -1563,6 +1568,7 @@ def test_resolver_handles_multi_account_fanout_independently() -> None:
         account_ids=(ACCOUNT_ID, OTHER_ACCOUNT_ID),
         deployment=_deployment(resolved),
         components=resolved,
+        feature_engine=IncrementalFeatureEngine(),
         governor_policy_resolver=resolver,
         portfolio_snapshot=PortfolioSnapshot(equity=100_000),
         strategy_artifact_resolver=_strategy_artifact_resolver(resolved),
@@ -1624,6 +1630,7 @@ def test_resolver_missing_plan_rejects_entry_signal() -> None:
         account_id=ACCOUNT_ID,
         deployment=deployment,
         components=resolved,
+        feature_engine=IncrementalFeatureEngine(),
         governor_policy_resolver=resolver,
         portfolio_snapshot=PortfolioSnapshot(equity=100_000),
         strategy_artifact_resolver=_strategy_artifact_resolver(resolved),
@@ -1654,6 +1661,7 @@ def test_missing_explicit_risk_horizon_rejects_when_floor_requires_plan() -> Non
         account_id=ACCOUNT_ID,
         deployment=deployment,
         components=resolved,
+        feature_engine=IncrementalFeatureEngine(),
         governor=PortfolioGovernor(GovernorPolicy(requires_risk_plan=True)),
         portfolio_snapshot=PortfolioSnapshot(equity=100_000),
         strategy_artifact_resolver=_strategy_artifact_resolver(resolved),
@@ -1737,6 +1745,7 @@ def test_resolver_missing_plan_does_not_block_protective_exit() -> None:
         account_ids=(ACCOUNT_ID,),
         deployment=deployment,
         components=components,
+        feature_engine=IncrementalFeatureEngine(),
         governor_policy_resolver=resolver,
         broker_adapter=FakeBrokerAdapter([BrokerOrderStatus.FILLED]),
         position_reader=PositionReader(

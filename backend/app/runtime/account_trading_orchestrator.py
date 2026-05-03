@@ -23,10 +23,10 @@ from backend.app.domain._base import utc_now
 from backend.app.features import (
     FeatureAvailability,
     FeatureCache,
+    FeatureEnginePort,
     FeatureHydrationBarsRequest,
     FeatureHydrationResult,
     FeatureHydrationService,
-    IncrementalFeatureEngine,
     NormalizedBar,
     ResolvedDeploymentComponents,
 )
@@ -128,7 +128,7 @@ class BrokerRuntimeOrchestrator:
         order_manager: OrderManager,
         control_plane: ControlPlane,
         governor: PortfolioGovernor | None = None,
-        feature_engine_factory: Callable[[], IncrementalFeatureEngine] = IncrementalFeatureEngine,
+        feature_engine: FeatureEnginePort,
         portfolio_snapshot_factory: Callable[[UUID], PortfolioSnapshot] | None = None,
         bar_source: Callable[[UUID], NormalizedBar | None] | None = None,
         startup_warmup_bars_source: StartupWarmupBarsSource | None = None,
@@ -141,7 +141,7 @@ class BrokerRuntimeOrchestrator:
         self._order_manager = order_manager
         self._control_plane = control_plane
         self._governor = governor or PortfolioGovernor()
-        self._feature_engine_factory = feature_engine_factory
+        self._feature_engine = feature_engine
         self._portfolio_snapshot_factory = portfolio_snapshot_factory or (lambda _account_id: PortfolioSnapshot())
         self._bar_source = bar_source
         self._startup_warmup_bars_source = startup_warmup_bars_source
@@ -968,7 +968,7 @@ class BrokerRuntimeOrchestrator:
             deployment=entry.deployment,
             components=entry.components,
             initial_cash=entry.initial_cash,
-            feature_engine=self._feature_engine_factory(),
+            feature_engine=self._feature_engine,
             governor=self._governor,
             governor_policy_resolver=self._build_governor_policy_resolver(),
             order_manager=self._order_manager,

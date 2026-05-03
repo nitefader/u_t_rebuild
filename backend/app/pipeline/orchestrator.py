@@ -53,7 +53,7 @@ from backend.app.features import (
     FeaturePlan,
     FeatureSnapshot,
     FeatureValue,
-    IncrementalFeatureEngine,
+    FeatureEnginePort,
     NormalizedBar,
     ResolvedDeploymentComponents,
     build_feature_plan,
@@ -148,7 +148,7 @@ class RuntimeOrchestrator:
         deployment: DeploymentContext,
         components: ResolvedDeploymentComponents,
         initial_cash: float = 100_000,
-        feature_engine: IncrementalFeatureEngine | None = None,
+        feature_engine: FeatureEnginePort,
         controls_gate: StrategyControlsGate | None = None,
         signal_plan_builder: SignalPlanBuilder | None = None,
         risk_resolver: RiskResolver | None = None,
@@ -195,7 +195,7 @@ class RuntimeOrchestrator:
         ):
             raise ValueError("v4 components require a strategy_artifact_resolver")
         self._initial_cash = initial_cash
-        self._feature_engine = feature_engine or IncrementalFeatureEngine()
+        self._feature_engine = feature_engine
         self._controls_gate = controls_gate or StrategyControlsGate()
         self._signal_plan_builder = signal_plan_builder or SignalPlanBuilder()
         self._risk_resolver = risk_resolver or RiskResolver()

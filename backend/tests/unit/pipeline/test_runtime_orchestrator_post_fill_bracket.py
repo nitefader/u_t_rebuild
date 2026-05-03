@@ -58,7 +58,7 @@ from backend.app.domain.strategy_v4 import (
     StrategyStopV4,
     StrategyVersionV4,
 )
-from backend.app.features import NormalizedBar, ResolvedDeploymentComponents
+from backend.app.features import IncrementalFeatureEngine, NormalizedBar, ResolvedDeploymentComponents
 from backend.app.orders import InternalOrderIntent, InternalOrderStatus
 from backend.app.orders.models import OrderOrigin
 from backend.app.pipeline import PipelineEventType, RuntimeOrchestrator
@@ -220,6 +220,7 @@ def _orchestrator(*, components: ResolvedDeploymentComponents, broker: FakeBroke
         account_id=ACCOUNT_ID,
         deployment=_deployment(components),
         components=components,
+        feature_engine=IncrementalFeatureEngine(),
         broker_adapter=broker,
         portfolio_snapshot=PortfolioSnapshot(equity=100_000),
         strategy_artifact_resolver=_strategy_artifact_resolver(components),
@@ -420,6 +421,7 @@ def test_orchestrator_blocks_open_when_gross_exposure_cap_breached_with_real_num
         account_id=ACCOUNT_ID,
         deployment=_deployment(components),
         components=components,
+        feature_engine=IncrementalFeatureEngine(),
         broker_adapter=broker,
         governor=governor,
         portfolio_snapshot=PortfolioSnapshot(equity=100_000),

@@ -48,7 +48,7 @@ from backend.app.domain.strategy_v4 import (
     StrategyStopV4,
     StrategyVersionV4,
 )
-from backend.app.features import NormalizedBar, ResolvedDeploymentComponents
+from backend.app.features import IncrementalFeatureEngine, NormalizedBar, ResolvedDeploymentComponents
 from backend.app.governor import BrokerSyncFreshness, GovernorPolicy, PortfolioGovernor, PortfolioSnapshot, PositionSummary
 from backend.app.market_data import AlpacaMarketDataAdapter, MarketDataSubscription
 from backend.app.orders import OrderManager
@@ -176,6 +176,7 @@ def _run_dry(
         components=components,
         governor=PortfolioGovernor(GovernorPolicy(global_kill_active=True)),
         broker_sync=broker_freshness,
+        feature_engine=IncrementalFeatureEngine(),
         portfolio_snapshot=portfolio_snapshot,
         strategy_artifact_resolver=strategy_artifact_resolver,
     )
@@ -221,6 +222,7 @@ def _run_execute(
         order_manager=order_manager,
         broker_adapter=broker_adapter,
         broker_sync=broker_sync,
+        feature_engine=IncrementalFeatureEngine(),
         broker_freshness=broker_freshness,
         portfolio_snapshot=portfolio_snapshot,
         strategy_artifact_resolver=strategy_artifact_resolver,

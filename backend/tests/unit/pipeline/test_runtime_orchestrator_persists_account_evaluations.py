@@ -56,7 +56,7 @@ from backend.app.domain.strategy_v4 import (
     StrategyStopV4,
     StrategyVersionV4,
 )
-from backend.app.features import NormalizedBar, ResolvedDeploymentComponents
+from backend.app.features import IncrementalFeatureEngine, NormalizedBar, ResolvedDeploymentComponents
 from backend.app.governor import GovernorPolicy, PortfolioGovernor, PortfolioSnapshot
 from backend.app.persistence import SQLiteRuntimeStore
 from backend.app.pipeline import RuntimeOrchestrator
@@ -222,6 +222,7 @@ def _orchestrator_with_store(
         account_ids=account_ids,
         deployment=_deployment(resolved),
         components=resolved,
+        feature_engine=IncrementalFeatureEngine(),
         broker_adapter=FakeBrokerAdapter(
             [BrokerOrderStatus.FILLED, BrokerOrderStatus.ACCEPTED, BrokerOrderStatus.ACCEPTED]
             * 5  # generous for multi-account fanout

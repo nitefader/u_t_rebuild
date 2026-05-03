@@ -49,7 +49,7 @@ from backend.app.domain import (
 from backend.app.domain.risk_profile import PositionSizingMethod
 from backend.app.domain.strategy import SignalRule
 from backend.app.domain.strategy_v4 import StrategyVersionV4
-from backend.app.features import NormalizedBar, ResolvedDeploymentComponents
+from backend.app.features import IncrementalFeatureEngine, NormalizedBar, ResolvedDeploymentComponents
 from backend.app.governor import PortfolioSnapshot
 from backend.app.orders import OrderManager
 from backend.app.persistence import SQLiteOrderLedger, SQLiteRuntimeStore
@@ -219,6 +219,7 @@ def _make_orchestrator(
         broker_sync=broker_sync,
         order_manager=order_manager,
         control_plane=control_plane,
+        feature_engine=IncrementalFeatureEngine(),
         startup_warmup_bars_source=_WARMUP_SOURCE,
         portfolio_snapshot_factory=lambda aid: portfolio_snapshot_by_account.get(aid, PortfolioSnapshot()),
     )
@@ -373,6 +374,7 @@ def test_deployment_with_null_strategy_fails_fast_at_start() -> None:
             account_id=uuid4(),
             deployment=dep,
             components=comps_no_strategy,
+            feature_engine=IncrementalFeatureEngine(),
         )
 
 
@@ -424,6 +426,7 @@ def test_deployment_with_v4_strategy_does_not_raise() -> None:
         account_id=uuid4(),
         deployment=dep,
         components=comps_v4_only,
+        feature_engine=IncrementalFeatureEngine(),
         strategy_artifact_resolver=_strategy_artifact_resolver(comps_v4_only),
     )
     assert orchestrator is not None

@@ -67,7 +67,7 @@ from backend.app.domain.strategy_v4 import (
     StrategyStopV4,
     StrategyVersionV4,
 )
-from backend.app.features import NormalizedBar, ResolvedDeploymentComponents
+from backend.app.features import IncrementalFeatureEngine, NormalizedBar, ResolvedDeploymentComponents
 from backend.app.governor import PortfolioSnapshot
 from backend.app.orders import InternalOrder, InternalOrderIntent, InternalOrderStatus, OrderManager, OrderOrigin
 from backend.app.persistence import SQLiteOrderLedger, SQLiteRuntimeStore
@@ -352,6 +352,7 @@ def _build_runtime(
         broker_sync=broker_sync,
         order_manager=order_manager,
         control_plane=control_plane,
+        feature_engine=IncrementalFeatureEngine(),
         startup_warmup_bars_source=_WARMUP_SOURCE,
         portfolio_snapshot_factory=lambda _: PortfolioSnapshot(equity=100_000.0),
         strategy_artifact_resolver=_strategy_artifact_resolver(components),

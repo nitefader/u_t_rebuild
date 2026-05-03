@@ -45,6 +45,7 @@ from .planner import (
     build_strategy_only_feature_plan,
     collect_feature_refs,
 )
+from .port import FeatureEnginePort
 from .registry import FEATURE_REGISTRY, FeatureRegistry, FeatureRegistryEntry, registry
 from .spec import CANONICAL_TIMEFRAMES, FeatureNamespace, FeatureScope, FeatureSpec, FeatureValidationError
 from .subscription_manager import (
@@ -74,6 +75,7 @@ __all__ = [
     "FeatureAvailability",
     "FeatureCache",
     "FeatureDataRequirement",
+    "FeatureEnginePort",
     "FeatureFrame",
     "FeatureFrameSet",
     "FeatureHydrationBarsRequest",

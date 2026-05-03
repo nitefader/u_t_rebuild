@@ -49,7 +49,7 @@ from backend.app.domain.strategy_v4 import (
     StrategyStopV4,
     StrategyVersionV4,
 )
-from backend.app.features import NormalizedBar, ResolvedDeploymentComponents
+from backend.app.features import IncrementalFeatureEngine, NormalizedBar, ResolvedDeploymentComponents
 from backend.app.governor import GovernorPolicy, PortfolioGovernor, PortfolioSnapshot
 from backend.app.orders import InternalOrder, InternalOrderIntent, InternalOrderStatus, OrderManager, OrderManagerError, OrderOrigin
 from backend.app.persistence import SQLiteOrderLedger, SQLiteRuntimeStore
@@ -440,6 +440,7 @@ def _runtime(
         order_manager=manager,
         control_plane=control_plane or ControlPlane(state_store=store),
         governor=governor,
+        feature_engine=IncrementalFeatureEngine(),
         bar_source=bar_source,
         startup_warmup_bars_source=startup_warmup_bars_source,
         portfolio_snapshot_factory=lambda _aid: PortfolioSnapshot(equity=100_000),
@@ -593,6 +594,7 @@ def test_broker_sync_is_called_after_broker_submit_result(tmp_path) -> None:
         broker_sync=sync,
         order_manager=OrderManager(ledger=ledger),
         control_plane=ControlPlane(state_store=store),
+        feature_engine=IncrementalFeatureEngine(),
         startup_warmup_bars_source=_startup_warmup_source,
         portfolio_snapshot_factory=lambda _aid: PortfolioSnapshot(equity=100_000),
         strategy_artifact_resolver=_strategy_artifact_resolver(components),
@@ -617,6 +619,7 @@ def test_broker_sync_failure_marks_runtime_degraded_and_blocks_further_opens(tmp
         broker_sync=FailingBrokerSync(ledger=ledger, adapter=broker, runtime_store=store),
         order_manager=OrderManager(ledger=ledger),
         control_plane=ControlPlane(state_store=store),
+        feature_engine=IncrementalFeatureEngine(),
         startup_warmup_bars_source=_startup_warmup_source,
         portfolio_snapshot_factory=lambda _aid: PortfolioSnapshot(equity=100_000),
         strategy_artifact_resolver=_strategy_artifact_resolver(components),
@@ -646,6 +649,7 @@ def _degraded_runtime(tmp_path, *, last_error: str) -> tuple[BrokerRuntimeOrches
         broker_sync=BrokerSync(ledger=ledger, adapter=broker, runtime_store=store, provider="alpaca"),
         order_manager=OrderManager(ledger=ledger),
         control_plane=ControlPlane(state_store=store),
+        feature_engine=IncrementalFeatureEngine(),
         startup_warmup_bars_source=_startup_warmup_source,
         portfolio_snapshot_factory=lambda _aid: PortfolioSnapshot(equity=100_000),
         strategy_artifact_resolver=_strategy_artifact_resolver(components),
@@ -755,6 +759,7 @@ def test_startup_allows_empty_feature_plan_without_warmup_source(tmp_path) -> No
         broker_sync=BrokerSync(ledger=ledger, adapter=broker, runtime_store=store, provider="alpaca"),
         order_manager=order_manager,
         control_plane=ControlPlane(state_store=store),
+        feature_engine=IncrementalFeatureEngine(),
         startup_warmup_bars_source=None,
         portfolio_snapshot_factory=lambda _aid: PortfolioSnapshot(equity=100_000),
     )
@@ -1089,6 +1094,7 @@ def test_one_deployment_can_fan_out_signal_plan_to_multiple_accounts(tmp_path) -
         broker_sync=BrokerSync(ledger=order_manager.ledger, adapter=broker, runtime_store=store),
         order_manager=order_manager,
         control_plane=ControlPlane(state_store=store),
+        feature_engine=IncrementalFeatureEngine(),
         startup_warmup_bars_source=_startup_warmup_source,
         portfolio_snapshot_factory=lambda _aid: PortfolioSnapshot(equity=100_000),
         strategy_artifact_resolver=_strategy_artifact_resolver(components),

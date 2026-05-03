@@ -47,7 +47,7 @@ from backend.app.domain.strategy_v4 import (
     StrategyStopV4,
     StrategyVersionV4,
 )
-from backend.app.features import NormalizedBar, ResolvedDeploymentComponents
+from backend.app.features import IncrementalFeatureEngine, NormalizedBar, ResolvedDeploymentComponents
 from backend.app.orders import InternalOrderIntent
 from backend.app.orders.models import InternalOrderStatus
 from backend.app.pipeline import PipelineEventType, RuntimeOrchestrator
@@ -211,6 +211,7 @@ def test_critic_fix_1_protection_placed_does_not_fire_when_all_children_rejected
         account_id=ACCOUNT_ID,
         deployment=_deployment(components),
         components=components,
+        feature_engine=IncrementalFeatureEngine(),
         broker_adapter=broker,
         portfolio_snapshot=PortfolioSnapshot(equity=100_000),
         strategy_artifact_resolver=_strategy_artifact_resolver(components),
@@ -236,6 +237,7 @@ def test_critic_fix_2_single_native_oco_child_submission() -> None:
         account_id=ACCOUNT_ID,
         deployment=_deployment(components),
         components=components,
+        feature_engine=IncrementalFeatureEngine(),
         broker_adapter=broker,
         portfolio_snapshot=PortfolioSnapshot(equity=100_000),
         strategy_artifact_resolver=_strategy_artifact_resolver(components),
@@ -327,6 +329,7 @@ def test_critic_fix_6_post_fill_skipped_when_entry_has_order_class_bracket() -> 
         account_id=ACCOUNT_ID,
         deployment=_deployment(components),
         components=components,
+        feature_engine=IncrementalFeatureEngine(),
         broker_adapter=broker,
         portfolio_snapshot=PortfolioSnapshot(equity=100_000),
         strategy_artifact_resolver=_strategy_artifact_resolver(components),
@@ -429,6 +432,7 @@ def test_p0_6_concurrent_partial_fill_handlers_do_not_double_protect() -> None:
         account_id=ACCOUNT_ID,
         deployment=_deployment(components),
         components=components,
+        feature_engine=IncrementalFeatureEngine(),
         broker_adapter=broker,
         portfolio_snapshot=PortfolioSnapshot(equity=100_000),
         strategy_artifact_resolver=_strategy_artifact_resolver(components),
@@ -493,6 +497,7 @@ def test_s2_operator_canceled_stop_child_not_replaced_on_next_fill() -> None:
         account_id=ACCOUNT_ID,
         deployment=_deployment(components),
         components=components,
+        feature_engine=IncrementalFeatureEngine(),
         broker_adapter=broker,
         portfolio_snapshot=PortfolioSnapshot(equity=100_000),
         strategy_artifact_resolver=_strategy_artifact_resolver(components),

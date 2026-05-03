@@ -52,7 +52,7 @@ from backend.app.execution_plans.persistence import ExecutionPlanRepository
 from backend.app.execution_plans.registry import ExecutionPlanRegistry
 from backend.app.execution_plans.service import ExecutionPlanService
 from backend.app.execution_plans.service_models import ExecutionPlanDraft
-from backend.app.features import NormalizedBar
+from backend.app.features import IncrementalFeatureEngine, NormalizedBar
 from backend.app.governor import PortfolioGovernor, PortfolioSnapshot
 from backend.app.persistence import SQLiteRuntimeStore
 from backend.app.pipeline import RuntimeOrchestrator
@@ -290,6 +290,7 @@ def _build_orchestrator(
         account_ids=runtime_deployment.account_ids,
         deployment=runtime_deployment.deployment,
         components=components,
+        feature_engine=IncrementalFeatureEngine(),
         broker_adapter=FakeBrokerAdapter(),
         portfolio_snapshot=PortfolioSnapshot(equity=100_000),
         governor=PortfolioGovernor(),

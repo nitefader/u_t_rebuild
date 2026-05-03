@@ -60,7 +60,7 @@ from backend.app.domain.strategy_v4 import (
     StrategyStopV4,
     StrategyVersionV4,
 )
-from backend.app.features import NormalizedBar, ResolvedDeploymentComponents
+from backend.app.features import IncrementalFeatureEngine, NormalizedBar, ResolvedDeploymentComponents
 from backend.app.orders import InternalOrderIntent
 from backend.app.pipeline import PipelineEventType, RuntimeOrchestrator
 from backend.app.runtime import DeploymentContext
@@ -238,6 +238,7 @@ def test_no_naked_invariant_emits_alarm_when_protective_child_rejected() -> None
         account_id=ACCOUNT_ID,
         deployment=_deployment(components),
         components=components,
+        feature_engine=IncrementalFeatureEngine(),
         broker_adapter=broker,
         portfolio_snapshot=PortfolioSnapshot(equity=100_000),
         strategy_artifact_resolver=_strategy_artifact_resolver(components),
@@ -286,6 +287,7 @@ def test_no_naked_invariant_alarm_on_missing_fill_price() -> None:
         account_id=ACCOUNT_ID,
         deployment=_deployment(components),
         components=components,
+        feature_engine=IncrementalFeatureEngine(),
         broker_adapter=broker,
         portfolio_snapshot=PortfolioSnapshot(equity=100_000),
         strategy_artifact_resolver=_strategy_artifact_resolver(components),
@@ -320,6 +322,7 @@ def test_no_naked_invariant_logs_naked_when_signal_plan_intent_produces_no_legs(
         account_id=ACCOUNT_ID,
         deployment=_deployment(components),
         components=components,
+        feature_engine=IncrementalFeatureEngine(),
         broker_adapter=broker,
         portfolio_snapshot=PortfolioSnapshot(equity=100_000),
         strategy_artifact_resolver=_strategy_artifact_resolver(components),

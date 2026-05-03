@@ -27,7 +27,7 @@ from backend.app.domain import (
 )
 from backend.app.domain.risk_profile import PositionSizingMethod
 from backend.app.domain.strategy import SignalRule
-from backend.app.features import NormalizedBar, ResolvedDeploymentComponents
+from backend.app.features import IncrementalFeatureEngine, NormalizedBar, ResolvedDeploymentComponents
 from backend.app.market_data import MarketDataStreamHub
 from backend.app.orders import OrderManager
 from backend.app.persistence import SQLiteOrderLedger, SQLiteRuntimeStore
@@ -196,6 +196,7 @@ def _build_runtime(tmp_path, *, deployments) -> tuple[BrokerRuntimeOrchestrator,
         broker_sync=sync,
         order_manager=manager,
         control_plane=ControlPlane(state_store=store),
+        feature_engine=IncrementalFeatureEngine(),
         startup_warmup_bars_source=StartupWarmupSource(),
     )
     return runtime, store

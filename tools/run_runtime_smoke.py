@@ -48,7 +48,7 @@ from backend.app.domain.strategy_v4 import (
     StrategyStopV4,
     StrategyVersionV4,
 )
-from backend.app.features import NormalizedBar, ResolvedDeploymentComponents
+from backend.app.features import IncrementalFeatureEngine, NormalizedBar, ResolvedDeploymentComponents
 from backend.app.governor import BrokerSyncFreshness, PortfolioSnapshot, PositionSummary
 from backend.app.orders import OrderManager
 from backend.app.pipeline import RuntimeOrchestrator
@@ -120,6 +120,7 @@ def main(argv: list[str] | None = None) -> int:
         order_manager=order_manager,
         broker_adapter=adapter,
         broker_sync=broker_sync,
+        feature_engine=IncrementalFeatureEngine(),
         broker_freshness=broker_freshness,
         portfolio_snapshot=portfolio_snapshot,
         strategy_artifact_resolver=_strategy_artifact_resolver(components),

@@ -19,11 +19,13 @@ except ImportError:  # pragma: no cover
 from fastapi import FastAPI, Request
 
 from backend.app.api.api_key_middleware import OptionalApiKeyMiddleware
+from backend.app.composition.feature_engine import register_feature_engine
 from backend.app.composition import (
     SignalSourceRegistry,
     StrategyArtifactResolver,
     build_strategy_artifact_resolver,
 )
+from backend.app.features import IncrementalFeatureEngine
 from backend.app.api.routes import (
     ai,
     broker_accounts,
@@ -58,6 +60,10 @@ def _configure_strategy_artifact_composition(target_app: FastAPI) -> None:
     target_app.state.strategy_artifact_resolver = resolver
 
 
+def _configure_feature_engine_composition(target_app: FastAPI) -> None:
+    register_feature_engine(target_app.state, IncrementalFeatureEngine())
+
+
 def get_signal_source_registry(request: Request) -> SignalSourceRegistry:
     registry: object | None = getattr(
         request.app.state,
@@ -81,6 +87,7 @@ def get_strategy_artifact_resolver(request: Request) -> StrategyArtifactResolver
 
 
 _configure_strategy_artifact_composition(app)
+_configure_feature_engine_composition(app)
 
 
 def _kill_orphan_python_children() -> int:
@@ -298,6 +305,7 @@ def _bootstrap_streams() -> None:  # pragma: no cover
             )
             control_plane = ControlPlane(state_store=runtime_store)
             strategy_artifact_resolver = app.state.strategy_artifact_resolver
+            feature_engine = app.state.feature_engine
             account_trading = BrokerRuntimeOrchestrator(
                 deployments=(),
                 runtime_store=runtime_store,
@@ -305,6 +313,7 @@ def _bootstrap_streams() -> None:  # pragma: no cover
                 broker_sync=broker_sync,
                 order_manager=order_manager,
                 control_plane=control_plane,
+                feature_engine=feature_engine,
                 strategy_artifact_resolver=strategy_artifact_resolver,
                 portfolio_snapshot_factory=build_portfolio_snapshot_factory(
                     runtime_store

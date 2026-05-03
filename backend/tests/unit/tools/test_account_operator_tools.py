@@ -14,7 +14,7 @@ from backend.app.brokers import (
 )
 from backend.app.domain import TradingMode
 from backend.app.domain._base import utc_now
-from backend.app.features import NormalizedBar
+from backend.app.features import IncrementalFeatureEngine, NormalizedBar
 from backend.app.governor import GovernorPolicy, PortfolioGovernor, PortfolioSnapshot
 from backend.app.orders import InternalOrder, OrderManager
 from backend.app.pipeline import RuntimeOrchestrator
@@ -383,6 +383,7 @@ def test_runtime_smoke_governor_blocks_when_required() -> None:
         account_id=runtime_smoke.DEFAULT_ACCOUNT_ID,
         deployment=deployment,
         components=components,
+        feature_engine=IncrementalFeatureEngine(),
         governor=PortfolioGovernor(GovernorPolicy(global_kill_active=True)),
         portfolio_snapshot=PortfolioSnapshot(equity=100_000),
         strategy_artifact_resolver=runtime_smoke._strategy_artifact_resolver(components),
