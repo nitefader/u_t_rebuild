@@ -87,9 +87,6 @@ def test_current_frontend_http_api_contract_is_registered() -> None:
         ("POST", "/api/v1/ai/providers/{service_id}/set-default"),
         ("POST", "/api/v1/ai/providers/{service_id}/disable"),
         ("POST", "/api/v1/ai/providers/{service_id}/delete"),
-        ("GET", "/api/v1/chart-lab/health"),
-        ("GET", "/api/v1/chart-lab/features"),
-        ("POST", "/api/v1/chart-lab/preview"),
         ("GET", "/api/v1/strategies"),
         ("POST", "/api/v1/strategies"),
         ("GET", "/api/v1/strategies/builder/features"),
@@ -186,9 +183,7 @@ def test_current_frontend_http_api_contract_is_registered() -> None:
 
 
 def test_current_frontend_websocket_api_contract_is_registered() -> None:
-    expected = {
-        "/api/v1/chart-lab/stream",
-    }
+    expected: set[str] = set()
 
     assert expected <= _registered_websocket_routes()
 

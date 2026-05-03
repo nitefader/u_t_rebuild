@@ -36,12 +36,12 @@ from backend.app.domain import (
     RiskPlanVersion,
     SignalPlan,
 )
+from backend.app.domain._simulated_trade import SimulatedTrade
 from backend.app.domain._base import utc_now
 from backend.app.governor import GovernorPolicy
 from backend.app.orders import InternalOrder, InternalOrderStatus, OrderLedger, OrderManagerError
 from backend.app.runtime import RuntimeState
 from backend.app.runtime.daily_account_state import DailyAccountState
-from backend.app.simulation import SimulatedTrade
 
 from .models import RESEARCH_ORCHESTRATION_TABLES, RUNTIME_SCHEMA
 from .session import SQLiteSessionFactory

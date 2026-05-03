@@ -4,8 +4,8 @@ These are Pydantic contracts only. They are not database models and they do not
 own API, broker, or persistence behavior.
 """
 
-from .chart_lab import ChartLabSession
 from .execution_style import ExecutionStyleVersion, OrderType, TimeInForce
+from .governor_mode import GovernorMode
 from .program import ProgramStatus, ProgramVersion, ValidationStatus
 from .research_evidence import (
     BacktestRun,
@@ -41,7 +41,6 @@ from .risk_plan import (
     WholeShareRounding,
 )
 from .risk_profile import RiskProfileVersion
-from .simulation import GovernorMode, SimulationSession
 from .signal_plan import (
     AccountEvaluationStatus,
     AccountParticipationDecision,
@@ -111,7 +110,6 @@ __all__ = [
     "AccountParticipationDecision",
     "AccountSignalPlanEvaluation",
     "BacktestRun",
-    "ChartLabSession",
     "ChartLabPreviewEvidence",
     "ConditionGroup",
     "ConditionNode",
@@ -165,7 +163,6 @@ __all__ = [
     "SignalPlanTarget",
     "SignalPlanTargetAction",
     "SimulationRunEvidence",
-    "SimulationSession",
     "BROKER_MODES",
     "CHART_LAB_MODES",
     "SIM_LAB_MODES",

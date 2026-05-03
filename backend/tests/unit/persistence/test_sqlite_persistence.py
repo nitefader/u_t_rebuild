@@ -36,6 +36,7 @@ from backend.app.domain import (
     TimeInForce,
     TradingMode,
 )
+from backend.app.domain._simulated_trade import SimulatedTrade, SimulatedTradeExitReason
 from backend.app.governor import GovernorPolicy
 from backend.app.governor import PortfolioGovernor
 from backend.app.orders import InternalOrder, InternalOrderIntent, InternalOrderStatus, OrderManager, OrderOrigin
@@ -49,7 +50,6 @@ from backend.app.persistence import (
 )
 from backend.app.runtime import RuntimeState, RuntimeStatus
 from backend.tests.fixtures.modern_order import make_signal_plan_order
-from backend.app.simulation import SimulatedOrderIntent, SimulatedTrade
 
 
 ACCOUNT_ID = UUID("11111111-2222-3333-4444-555555555555")
@@ -308,7 +308,7 @@ def test_trade_persists(tmp_path) -> None:  # type: ignore[no-untyped-def]
         opened_at=datetime(2026, 1, 2, 14, 30, tzinfo=timezone.utc),
         closed_at=datetime(2026, 1, 2, 14, 35, tzinfo=timezone.utc),
         realized_pnl=10,
-        exit_reason=SimulatedOrderIntent.TAKE_PROFIT,
+        exit_reason=SimulatedTradeExitReason.TAKE_PROFIT,
     )
 
     SQLiteTradeLedger(db_path).add(trade)
@@ -570,25 +570,3 @@ def test_broker_sync_is_only_broker_truth_persistence_writer() -> None:
     assert "save_broker_order_mapping" not in adapter_source
     assert "save_broker_account_snapshot" in sync_module_source
     assert "save_broker_sync_freshness" in sync_module_source
-
-
-def test_sim_lab_does_not_use_broker_adapter_or_runtime_persistence() -> None:
-    import inspect
-    import backend.app.simulation.historical_replay as historical_replay
-
-    source = inspect.getsource(historical_replay)
-
-    assert "BrokerAdapter" not in source
-    assert "SQLiteRuntimeStore" not in source
-    assert "runtime_store" not in source
-    assert "persistence" not in source
-
-
-def test_chart_lab_does_not_create_orders_trades_or_broker_state() -> None:
-    import inspect
-    import backend.app.chart_lab.preview_service as preview_service
-
-    source = inspect.getsource(preview_service)
-
-    for forbidden in ["OrderManager", "InternalOrder", "BrokerSync", "BrokerAdapter", "TradeLedger", "SQLiteRuntimeStore"]:
-        assert forbidden not in source

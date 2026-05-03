@@ -16,11 +16,8 @@ PROGRAM_LINEAGE_PATTERNS = (
 
 PROGRAM_LINEAGE_ALLOWED_FILES = frozenset(
     {
-        "chart_lab/preview_service.py",
         "domain/__init__.py",
-        "domain/chart_lab.py",
         "domain/program.py",
-        "domain/simulation.py",
         "domain/validation.py",
         "features/planner.py",
         "market_data/stream_hub.py",
@@ -33,7 +30,6 @@ PROGRAM_LINEAGE_ALLOWED_FILES = frozenset(
         "runtime/account_trading_supervisor.py",
         "runtime/engine.py",
         "runtime/models.py",
-        "simulation/historical_replay.py",
     }
 )
 

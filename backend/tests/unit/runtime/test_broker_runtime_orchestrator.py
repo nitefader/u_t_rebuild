@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import inspect
 from datetime import datetime, timedelta, timezone
 from uuid import UUID, uuid4
 
@@ -668,16 +667,6 @@ def test_broker_account_mode_must_match_deployment_mode(tmp_path) -> None:
     assert store.list_orders() == ()
     assert broker.submitted_orders == []
     assert store.load_deployment_runtime_state(DEPLOYMENT_ID).last_error == "broker_account_mode_mismatch"
-
-
-def test_sim_lab_and_chart_lab_do_not_import_or_use_broker_adapter() -> None:
-    import backend.app.chart_lab.preview_service as chart_preview
-    import backend.app.simulation.engine as sim_engine
-
-    sources = inspect.getsource(chart_preview) + inspect.getsource(sim_engine)
-
-    assert "BrokerAdapter" not in sources
-    assert "AlpacaBrokerAdapter" not in sources
 
 
 def test_runtime_restart_resumes_idempotently_without_duplicate_order_submission(tmp_path) -> None:

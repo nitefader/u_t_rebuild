@@ -27,7 +27,6 @@ from backend.app.composition import (
 from backend.app.api.routes import (
     ai,
     broker_accounts,
-    chart_lab,
     data_center,
     deployments,
     discovery_schedules,
@@ -257,12 +256,12 @@ def _bootstrap_streams() -> None:  # pragma: no cover
             BrokerRuntimeSupervisor,
         )
         from backend.app.runtime.runtime_context import hub_registry, HubKey
-        from backend.app.api.routes.chart_lab import ChartLabConfig
         from backend.app.brokers import BrokerSync
         from backend.app.broker_accounts.runtime_service import (
             create_broker_account_service_from_environment,
         )
         from backend.app.control_plane import ControlPlane
+        from backend.app.market_data.data_feed_config import ChartLabConfig
         from backend.app.orders import OrderManager
         from backend.app.runtime.account_trading_entrypoint import (
             AccountScopedAlpacaBrokerAdapter,
@@ -410,7 +409,6 @@ app.include_router(risk_plans.router)
 app.include_router(market_data.router)
 app.include_router(data_center.router)
 app.include_router(ai.router)
-app.include_router(chart_lab.router)
 app.include_router(strategies.router)
 app.include_router(strategies_v4.router)
 app.include_router(execution_plans.router)

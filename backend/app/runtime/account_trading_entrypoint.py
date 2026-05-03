@@ -327,7 +327,7 @@ def run_account_trading(
         provider="alpaca",
     )
     control_plane = ControlPlane(state_store=runtime_store)
-    from backend.app.api.routes.chart_lab import ChartLabConfig
+    from backend.app.market_data.data_feed_config import ChartLabConfig
     from backend.app.runtime.runtime_context import HubKey, bootstrap_manual_trade_composition, bootstrap_streams, hub_registry
 
     bootstrap_manual_trade_composition(broker_account_service)
