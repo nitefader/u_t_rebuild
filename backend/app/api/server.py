@@ -37,7 +37,6 @@ from backend.app.api.routes import (
     risk_decisions,
     risk_plans,
     screener,
-    strategies,
     strategies_v4,
     execution_plans,
     strategy_controls,
@@ -409,7 +408,6 @@ app.include_router(risk_plans.router)
 app.include_router(market_data.router)
 app.include_router(data_center.router)
 app.include_router(ai.router)
-app.include_router(strategies.router)
 app.include_router(strategies_v4.router)
 app.include_router(execution_plans.router)
 app.include_router(strategy_controls.router)

@@ -48,6 +48,15 @@ from .session import SQLiteSessionFactory
 
 ModelT = TypeVar("ModelT", bound=BaseModel)
 
+_LEGACY_STRATEGY_INDEXES = (
+    "ix_strategies_status",
+    "ix_strategies_name",
+    "ix_strategy_versions_strategy_id",
+    "ix_strategy_versions_status",
+)
+_LEGACY_STRATEGY_TABLES = ("strategy_versions", "strategies")
+
+
 class SQLiteRuntimeStore:
     """Durable SQLite runtime repository.
 
@@ -60,6 +69,7 @@ class SQLiteRuntimeStore:
         with self._connect() as connection:
             connection.executescript(RUNTIME_SCHEMA)
             self._drop_research_orchestration_tables(connection)
+            self._drop_legacy_strategy_persistence(connection)
             self._migrate_legacy_tables(connection)
 
     def save_order(self, order: InternalOrder) -> InternalOrder:
@@ -1727,6 +1737,12 @@ class SQLiteRuntimeStore:
 
     def _drop_research_orchestration_tables(self, connection: sqlite3.Connection) -> None:
         for table_name in RESEARCH_ORCHESTRATION_TABLES:
+            connection.execute(f"DROP TABLE IF EXISTS {table_name}")
+
+    def _drop_legacy_strategy_persistence(self, connection: sqlite3.Connection) -> None:
+        for index_name in _LEGACY_STRATEGY_INDEXES:
+            connection.execute(f"DROP INDEX IF EXISTS {index_name}")
+        for table_name in _LEGACY_STRATEGY_TABLES:
             connection.execute(f"DROP TABLE IF EXISTS {table_name}")
 
     def _migrate_legacy_tables(self, connection: sqlite3.Connection) -> None:

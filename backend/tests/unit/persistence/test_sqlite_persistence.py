@@ -457,13 +457,16 @@ def test_deployment_runtime_state_persists(tmp_path) -> None:  # type: ignore[no
     assert persisted == state
 
 
-def test_research_orchestration_tables_are_dropped_on_boot(tmp_path) -> None:  # type: ignore[no-untyped-def]
+def test_research_and_v1_strategy_tables_are_dropped_on_boot(tmp_path) -> None:  # type: ignore[no-untyped-def]
     db_path = tmp_path / "utos.db"
     with sqlite3.connect(db_path) as conn:
         conn.execute("CREATE TABLE research_jobs (job_id TEXT PRIMARY KEY)")
         conn.execute("CREATE TABLE research_evidence (evidence_id TEXT PRIMARY KEY)")
         conn.execute("CREATE TABLE backtest_runs (run_id TEXT PRIMARY KEY)")
+        conn.execute("CREATE TABLE strategies (strategy_id TEXT PRIMARY KEY)")
         conn.execute("CREATE TABLE strategy_versions (strategy_version_id TEXT PRIMARY KEY)")
+        conn.execute("CREATE INDEX ix_strategies_status ON strategies(strategy_id)")
+        conn.execute("CREATE INDEX ix_strategy_versions_strategy_id ON strategy_versions(strategy_version_id)")
 
     SQLiteRuntimeStore(db_path)
 
@@ -478,7 +481,8 @@ def test_research_orchestration_tables_are_dropped_on_boot(tmp_path) -> None:  #
     assert "research_jobs" not in tables
     assert "research_evidence" not in tables
     assert "backtest_runs" not in tables
-    assert "strategy_versions" in tables
+    assert "strategies" not in tables
+    assert "strategy_versions" not in tables
 
 
 def test_broker_positions_can_be_queried_by_deployment_lineage(tmp_path) -> None:  # type: ignore[no-untyped-def]
