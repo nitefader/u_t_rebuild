@@ -33,19 +33,15 @@ class StrategyArtifactResolver:
         self,
         deployment: Deployment,
     ) -> tuple[SignalSourcePort, StrategyArtifactMetadata]:
-        if deployment.strategy_version_v4_id is not None:
-            strategy = self._strategy_v4_lookup(deployment.strategy_version_v4_id)
-            metadata = StrategyArtifactMetadata(
-                kind=StrategyArtifactKind.EXPRESSION_V1,
-                strategy_version_v4_id=deployment.strategy_version_v4_id,
-                strategy_id=strategy.strategy_v4_id,
-            )
-            return self._registry.resolve(metadata), metadata
-
-        if deployment.strategy_version_id is not None:
+        if deployment.strategy_version_v4_id is None:
             raise StrategyArtifactResolutionError(
-                "V4 path required; V1 strategy resolution offline pending "
-                "S12.7/S12.8 rewire"
+                "deployment strategy_version_v4_id is missing"
             )
 
-        raise StrategyArtifactResolutionError("deployment has no strategy reference")
+        strategy = self._strategy_v4_lookup(deployment.strategy_version_v4_id)
+        metadata = StrategyArtifactMetadata(
+            kind=StrategyArtifactKind.EXPRESSION_V1,
+            strategy_version_v4_id=deployment.strategy_version_v4_id,
+            strategy_id=strategy.strategy_v4_id,
+        )
+        return self._registry.resolve(metadata), metadata

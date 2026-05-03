@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 from uuid import UUID
@@ -16,14 +17,12 @@ SCHEMA = """
 CREATE TABLE IF NOT EXISTS deployments (
     deployment_id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
-    strategy_version_id TEXT,
     lifecycle_status TEXT NOT NULL,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     payload TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS ix_deployments_lifecycle_status ON deployments(lifecycle_status);
-CREATE INDEX IF NOT EXISTS ix_deployments_strategy_version_id ON deployments(strategy_version_id);
 
 CREATE TABLE IF NOT EXISTS deployment_binding_history (
     entry_id TEXT PRIMARY KEY,
@@ -48,19 +47,45 @@ class DeploymentRepository:
         self._session_factory = SQLiteSessionFactory(path)
         with self._session_factory.connect() as conn:
             conn.executescript(SCHEMA)
+            self._drop_legacy_strategy_version_id(conn)
+            self._remove_legacy_strategy_version_payload_key(conn)
+
+    def _drop_legacy_strategy_version_id(self, conn: sqlite3.Connection) -> None:
+        conn.execute("DROP INDEX IF EXISTS ix_deployments_strategy_version_id")
+        columns = {
+            str(row[1])
+            for row in conn.execute("PRAGMA table_info(deployments)").fetchall()
+        }
+        if "strategy_version_id" not in columns:
+            return
+        try:
+            conn.execute("ALTER TABLE deployments DROP COLUMN strategy_version_id")
+        except sqlite3.OperationalError as exc:
+            raise RuntimeError(
+                "deployments.strategy_version_id exists but this SQLite build "
+                "cannot drop it with ALTER TABLE DROP COLUMN; table rebuild was "
+                "not attempted"
+            ) from exc
+
+    def _remove_legacy_strategy_version_payload_key(
+        self,
+        conn: sqlite3.Connection,
+    ) -> None:
+        rows = conn.execute("SELECT deployment_id, payload FROM deployments").fetchall()
+        for deployment_id, payload_json in rows:
+            payload = json.loads(payload_json)
+            if "strategy_version_id" not in payload:
+                continue
+            payload.pop("strategy_version_id", None)
+            conn.execute(
+                "UPDATE deployments SET payload = ? WHERE deployment_id = ?",
+                (json.dumps(payload), deployment_id),
+            )
 
     def list_deployments(self) -> tuple[Deployment, ...]:
         with self._session_factory.connect() as conn:
             rows = conn.execute(
                 "SELECT payload FROM deployments ORDER BY created_at DESC"
-            ).fetchall()
-        return tuple(Deployment.model_validate_json(row[0]) for row in rows)
-
-    def list_deployments_for_strategy_version(self, strategy_version_id: UUID) -> tuple[Deployment, ...]:
-        with self._session_factory.connect() as conn:
-            rows = conn.execute(
-                "SELECT payload FROM deployments WHERE strategy_version_id = ? ORDER BY created_at DESC",
-                (str(strategy_version_id),),
             ).fetchall()
         return tuple(Deployment.model_validate_json(row[0]) for row in rows)
 
@@ -75,23 +100,16 @@ class DeploymentRepository:
         return Deployment.model_validate_json(row[0])
 
     def save_deployment(self, deployment: Deployment) -> Deployment:
-        # strategy_version_id column may be NULL for v4-only deployments.
-        legacy_sv_id = (
-            str(deployment.strategy_version_id)
-            if deployment.strategy_version_id is not None
-            else None
-        )
         with self._session_factory.connect() as conn:
             conn.execute(
                 """
                 INSERT INTO deployments(
-                    deployment_id, name, strategy_version_id, lifecycle_status,
-                    created_at, updated_at, payload
+                    deployment_id, name, lifecycle_status, created_at,
+                    updated_at, payload
                 )
-                VALUES(?, ?, ?, ?, ?, ?, ?)
+                VALUES(?, ?, ?, ?, ?, ?)
                 ON CONFLICT(deployment_id) DO UPDATE SET
                     name=excluded.name,
-                    strategy_version_id=excluded.strategy_version_id,
                     lifecycle_status=excluded.lifecycle_status,
                     updated_at=excluded.updated_at,
                     payload=excluded.payload
@@ -99,7 +117,6 @@ class DeploymentRepository:
                 (
                     str(deployment.deployment_id),
                     deployment.name,
-                    legacy_sv_id,
                     deployment.lifecycle_status.value,
                     deployment.created_at.isoformat(),
                     deployment.updated_at.isoformat(),

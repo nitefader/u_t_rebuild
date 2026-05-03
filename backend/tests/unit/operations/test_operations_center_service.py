@@ -508,7 +508,7 @@ def test_runtime_overview_counts_real_deployment_records_without_order_lineage()
                 Deployment(
                     deployment_id=DEPLOYMENT_ID,
                     name="Mean Reversion Deployment",
-                    strategy_version_id=STRATEGY_VERSION_ID,
+                    strategy_version_v4_id=STRATEGY_VERSION_ID,
                     watchlist_ids=(uuid4(),),
                     subscribed_account_ids=(ACCOUNT_ID,),
                 ),

@@ -923,12 +923,10 @@ class SQLiteRuntimeStore:
             risk_horizon_raw = payload.get("risk_horizon")
 
             if sv4_id_raw is None:
-                _LOGGER.warning(
-                    "deployment %s skipped: legacy strategy_version_id deployments "
-                    "are not loaded by this runtime path; only v4 is supported",
-                    deployment_id,
+                raise RuntimeError(
+                    f"active deployment {deployment_id} is missing "
+                    "strategy_version_v4_id"
                 )
-                continue
             if not (controls_id_raw and plan_id_raw and account_ids_raw and watchlist_ids_raw):
                 _LOGGER.warning(
                     "deployment %s skipped: missing required FK "

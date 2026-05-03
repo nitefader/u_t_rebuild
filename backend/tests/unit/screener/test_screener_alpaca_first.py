@@ -480,18 +480,18 @@ def test_step10_backend_flow_keeps_screener_watchlist_deployment_and_exit_bounda
     assert refreshed_dynamic_snapshot.stayed_symbols == ("AAPL",)
 
     deployment_service = DeploymentService(repository=deployment_repo)
-    strategy_version_id = uuid4()
+    strategy_version_v4_id = uuid4()
     deployment = deployment_service.create_deployment(
         DeploymentWriteRequest(
             name="Day Gainers Fractionable Deployment",
-            strategy_version_id=strategy_version_id,
+            strategy_version_v4_id=strategy_version_v4_id,
             watchlist_ids=(dynamic_watchlist.watchlist_id,),
             subscribed_account_ids=(uuid4(),),
         )
     )
     started = deployment_service.start(deployment.deployment_id, reason="operator approved entry universe")
     assert started.lifecycle_status == DeploymentLifecycleStatus.ACTIVE
-    assert started.strategy_version_id == strategy_version_id
+    assert started.strategy_version_v4_id == strategy_version_v4_id
     assert started.watchlist_ids == (dynamic_watchlist.watchlist_id,)
     assert "symbols" not in StrategyVersion.model_fields
 

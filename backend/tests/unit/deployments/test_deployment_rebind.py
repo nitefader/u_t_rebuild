@@ -32,7 +32,7 @@ def _make_active(service: DeploymentService) -> object:
     d = service.create_deployment(
         DeploymentWriteRequest(
             name="Test Deployment",
-            strategy_version_id=uuid4(),
+            strategy_version_v4_id=uuid4(),
             watchlist_ids=(uuid4(),),
             subscribed_account_ids=(uuid4(),),
         )
@@ -135,7 +135,7 @@ def test_rebind_rejects_draft_deployment(service: DeploymentService) -> None:
     d = service.create_deployment(
         DeploymentWriteRequest(
             name="Draft",
-            strategy_version_id=uuid4(),
+            strategy_version_v4_id=uuid4(),
             watchlist_ids=(uuid4(),),
             subscribed_account_ids=(uuid4(),),
         )

@@ -162,7 +162,7 @@ def test_retire_409_when_bound(tmp_path: Path) -> None:
     dep = Deployment(
         deployment_id=uuid4(),
         name="Bound Deployment",
-        strategy_version_id=uuid4(),
+        strategy_version_v4_id=uuid4(),
         strategy_controls_version_id=sc_version_id,
     )
     DeploymentRepository(db).save_deployment(dep)
@@ -209,7 +209,7 @@ def test_used_by(tmp_path: Path) -> None:
     dep = Deployment(
         deployment_id=uuid4(),
         name="User",
-        strategy_version_id=uuid4(),
+        strategy_version_v4_id=uuid4(),
         strategy_controls_version_id=sc_version_id,
     )
     DeploymentRepository(db).save_deployment(dep)

@@ -47,13 +47,11 @@ def _strategy(
 
 def _deployment(
     *,
-    strategy_version_id: UUID | None = None,
     strategy_version_v4_id: UUID | None = None,
 ) -> Deployment:
     return Deployment.model_construct(
         deployment_id=uuid4(),
         name="Resolver Test Deployment",
-        strategy_version_id=strategy_version_id,
         strategy_version_v4_id=strategy_version_v4_id,
     )
 
@@ -102,44 +100,6 @@ def test_v4_deployment_returns_v4_expression_source_and_metadata() -> None:
     assert calls == [strategy_version_v4_id]
 
 
-def test_dual_set_deployment_prefers_v4() -> None:
-    strategy_version_v4_id = uuid4()
-    strategy_id = uuid4()
-    calls: list[UUID] = []
-    resolver = _resolver(
-        strategy=_strategy(
-            strategy_version_v4_id=strategy_version_v4_id,
-            strategy_id=strategy_id,
-        ),
-        lookup_calls=calls,
-    )
-
-    source, metadata = resolver.resolve(
-        _deployment(
-            strategy_version_id=uuid4(),
-            strategy_version_v4_id=strategy_version_v4_id,
-        )
-    )
-
-    assert isinstance(source, V4ExpressionSignalSource)
-    assert metadata.strategy_version_v4_id == strategy_version_v4_id
-    assert metadata.strategy_id == strategy_id
-    assert calls == [strategy_version_v4_id]
-
-
-def test_v1_only_deployment_raises_v4_required() -> None:
-    calls: list[UUID] = []
-    resolver = _resolver(
-        strategy=_strategy(strategy_version_v4_id=uuid4(), strategy_id=uuid4()),
-        lookup_calls=calls,
-    )
-
-    with pytest.raises(StrategyArtifactResolutionError, match="V4 path required"):
-        resolver.resolve(_deployment(strategy_version_id=uuid4()))
-
-    assert calls == []
-
-
 def test_deployment_without_strategy_reference_raises() -> None:
     calls: list[UUID] = []
     resolver = _resolver(
@@ -147,7 +107,7 @@ def test_deployment_without_strategy_reference_raises() -> None:
         lookup_calls=calls,
     )
 
-    with pytest.raises(StrategyArtifactResolutionError, match="no strategy reference"):
+    with pytest.raises(StrategyArtifactResolutionError, match="strategy_version_v4_id is missing"):
         resolver.resolve(_deployment())
 
     assert calls == []

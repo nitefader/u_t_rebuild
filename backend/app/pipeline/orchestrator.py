@@ -784,11 +784,6 @@ class RuntimeOrchestrator:
             Deployment(
                 deployment_id=self._deployment.deployment_id,
                 name=str(self._deployment.deployment_id),
-                strategy_version_id=(
-                    self._components.strategy.id
-                    if self._components.strategy is not None
-                    else None
-                ),
                 strategy_version_v4_id=getattr(sv4, "id"),
                 risk_horizon=self._deployment_risk_horizon,
             )

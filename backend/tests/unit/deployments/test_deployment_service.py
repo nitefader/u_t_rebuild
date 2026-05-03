@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import sqlite3
 from pathlib import Path
 from uuid import uuid4
 
@@ -22,7 +24,7 @@ def service(tmp_path: Path) -> DeploymentService:
 def _request(name: str = "Test Deployment") -> DeploymentWriteRequest:
     return DeploymentWriteRequest(
         name=name,
-        strategy_version_id=uuid4(),
+        strategy_version_v4_id=uuid4(),
         watchlist_ids=(uuid4(),),
         subscribed_account_ids=(uuid4(),),
     )
@@ -33,7 +35,7 @@ def test_create_requires_watchlist_and_account(service: DeploymentService) -> No
         service.create_deployment(
             DeploymentWriteRequest(
                 name="bad",
-                strategy_version_id=uuid4(),
+                strategy_version_v4_id=uuid4(),
                 watchlist_ids=(),
                 subscribed_account_ids=(uuid4(),),
             )
@@ -42,7 +44,7 @@ def test_create_requires_watchlist_and_account(service: DeploymentService) -> No
         service.create_deployment(
             DeploymentWriteRequest(
                 name="bad2",
-                strategy_version_id=uuid4(),
+                strategy_version_v4_id=uuid4(),
                 watchlist_ids=(uuid4(),),
                 subscribed_account_ids=(),
             )
@@ -121,7 +123,7 @@ def test_create_persists_risk_horizon(service: DeploymentService) -> None:
 
     request = DeploymentWriteRequest(
         name="With Horizon",
-        strategy_version_id=uuid4(),
+        strategy_version_v4_id=uuid4(),
         watchlist_ids=(uuid4(),),
         subscribed_account_ids=(uuid4(),),
         risk_horizon=TradingHorizon.SWING,
@@ -151,7 +153,7 @@ def test_update_can_change_risk_horizon(service: DeploymentService) -> None:
         created.deployment_id,
         DeploymentWriteRequest(
             name=created.name,
-            strategy_version_id=created.strategy_version_id,
+            strategy_version_v4_id=created.strategy_version_v4_id,
             watchlist_ids=created.watchlist_ids,
             subscribed_account_ids=created.subscribed_account_ids,
             risk_horizon=TradingHorizon.INTRADAY,
@@ -169,11 +171,10 @@ def test_start_requires_subscriptions(service: DeploymentService) -> None:
 
 
 # ---------------------------------------------------------------------------
-# v4 strategy FK tests (Slice 9)
+# v4 strategy FK tests
 # ---------------------------------------------------------------------------
 
-def test_create_with_v4_only_id_succeeds(service: DeploymentService) -> None:
-    """v4-only Deployment: no legacy strategy_version_id required."""
+def test_create_with_v4_id_succeeds(service: DeploymentService) -> None:
     v4_id = uuid4()
     d = service.create_deployment(
         DeploymentWriteRequest(
@@ -184,35 +185,14 @@ def test_create_with_v4_only_id_succeeds(service: DeploymentService) -> None:
         )
     )
     assert d.strategy_version_v4_id == v4_id
-    assert d.strategy_version_id is None
 
 
-def test_create_with_both_ids_succeeds(service: DeploymentService) -> None:
-    """Transition state: both legacy and v4 FKs may be set simultaneously."""
-    legacy_id = uuid4()
-    v4_id = uuid4()
-    d = service.create_deployment(
-        DeploymentWriteRequest(
-            name="both ids",
-            strategy_version_id=legacy_id,
-            strategy_version_v4_id=v4_id,
-            watchlist_ids=(uuid4(),),
-            subscribed_account_ids=(uuid4(),),
-        )
-    )
-    assert d.strategy_version_id == legacy_id
-    assert d.strategy_version_v4_id == v4_id
-
-
-def test_create_with_neither_id_raises(service: DeploymentService) -> None:
-    """Neither FK set → pydantic ValidationError."""
+def test_create_without_v4_id_raises() -> None:
     from pydantic import ValidationError
 
     with pytest.raises(ValidationError):
         DeploymentWriteRequest(
             name="neither",
-            strategy_version_id=None,
-            strategy_version_v4_id=None,
             watchlist_ids=(uuid4(),),
             subscribed_account_ids=(uuid4(),),
         )
@@ -231,4 +211,60 @@ def test_v4_id_round_trips_through_persistence(service: DeploymentService) -> No
     )
     fetched = service.get_deployment(created.deployment_id).deployment
     assert fetched.strategy_version_v4_id == v4_id
-    assert fetched.strategy_version_id is None
+
+
+def test_repository_schema_init_drops_legacy_strategy_version_column(tmp_path: Path) -> None:
+    db = tmp_path / "legacy.db"
+    deployment_id = uuid4()
+    v4_id = uuid4()
+    with sqlite3.connect(db) as conn:
+        conn.execute(
+            """
+            CREATE TABLE deployments (
+                deployment_id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                strategy_version_id TEXT,
+                lifecycle_status TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                payload TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX ix_deployments_strategy_version_id "
+            "ON deployments(strategy_version_id)"
+        )
+        payload = {
+            "deployment_id": str(deployment_id),
+            "name": "Legacy payload row",
+            "strategy_version_id": str(uuid4()),
+            "strategy_version_v4_id": str(v4_id),
+        }
+        conn.execute(
+            """
+            INSERT INTO deployments (
+                deployment_id, name, strategy_version_id, lifecycle_status,
+                created_at, updated_at, payload
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                str(deployment_id),
+                "Legacy payload row",
+                str(uuid4()),
+                "draft",
+                "2026-01-01T00:00:00+00:00",
+                "2026-01-01T00:00:00+00:00",
+                json.dumps(payload),
+            ),
+        )
+
+    repo = DeploymentRepository(db)
+
+    with sqlite3.connect(db) as conn:
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(deployments)")}
+        indexes = {row[1] for row in conn.execute("PRAGMA index_list(deployments)")}
+    assert "strategy_version_id" not in columns
+    assert "ix_deployments_strategy_version_id" not in indexes
+    fetched = repo.get_deployment(deployment_id)
+    assert fetched.strategy_version_v4_id == v4_id

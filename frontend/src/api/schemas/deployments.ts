@@ -13,14 +13,7 @@ export const DeploymentSchema = z.object({
   deployment_id: z.string(),
   name: z.string(),
   description: z.string().nullable().optional(),
-  /**
-   * Legacy FK — kept until Slice 11 cutover. Optional for v4-only rows.
-   */
-  strategy_version_id: z.string().nullable().optional(),
-  /**
-   * v4 FK — set by Slice 9+ deployments that bind a StrategyVersionV4.
-   */
-  strategy_version_v4_id: z.string().nullable().optional(),
+  strategy_version_v4_id: z.string(),
   strategy_controls_version_id: z.string().nullable().optional(),
   execution_plan_version_id: z.string().nullable().optional(),
   risk_plan_version_id: z.string().nullable().optional(),
@@ -55,10 +48,7 @@ export type DeploymentListResponse = z.infer<typeof DeploymentListResponseSchema
 export const DeploymentWriteRequestSchema = z.object({
   name: z.string().min(1).max(120),
   description: z.string().nullable().optional(),
-  /** Legacy FK — optional for v4-only rows. */
-  strategy_version_id: z.string().nullable().optional(),
-  /** v4 FK — set when binding a StrategyVersionV4. */
-  strategy_version_v4_id: z.string().nullable().optional(),
+  strategy_version_v4_id: z.string(),
   strategy_controls_version_id: z.string().nullable().optional(),
   execution_plan_version_id: z.string().nullable().optional(),
   risk_plan_version_id: z.string().nullable().optional(),

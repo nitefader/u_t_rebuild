@@ -28,13 +28,8 @@ class Deployment(BaseModel):
     optionally a ``risk_plan_version_id``. The same StrategyVersion can run
     with different controls / execution plans across Accounts.
 
-    Strategy version binding (Slice 9):
-    - Legacy deployments set ``strategy_version_id`` (legacy FK, kept until
-      Slice 11 cutover).
-    - v4 deployments set ``strategy_version_v4_id`` (points to a
-      ``strategy_versions_v4`` row).
-    - Transition state: both FKs may be set simultaneously.
-    - At least one of the two MUST be non-None.
+    Strategy version binding: deployments bind a required StrategyVersionV4
+    row through ``strategy_version_v4_id``.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -42,10 +37,7 @@ class Deployment(BaseModel):
     deployment_id: UUID = Field(default_factory=uuid4)
     name: str = Field(min_length=1, max_length=120)
     description: str | None = None
-    # Legacy FK — kept alive until Slice 11 cutover. Optional for v4-only rows.
-    strategy_version_id: UUID | None = None
-    # v4 FK — set by Slice 9+ deployments that bind a StrategyVersionV4.
-    strategy_version_v4_id: UUID | None = None
+    strategy_version_v4_id: UUID
     strategy_controls_version_id: UUID | None = None
     execution_plan_version_id: UUID | None = None
     risk_plan_version_id: UUID | None = None
@@ -65,14 +57,6 @@ class Deployment(BaseModel):
     started_at: datetime | None = None
     stopped_at: datetime | None = None
 
-    @model_validator(mode="after")
-    def _require_at_least_one_strategy_fk(self) -> "Deployment":
-        if self.strategy_version_id is None and self.strategy_version_v4_id is None:
-            raise ValueError(
-                "at least one of strategy_version_id or strategy_version_v4_id must be set"
-            )
-        return self
-
 
 class DeploymentResponse(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -91,10 +75,7 @@ class DeploymentWriteRequest(BaseModel):
 
     name: str = Field(min_length=1, max_length=120)
     description: str | None = None
-    # Legacy FK — kept alive until Slice 11 cutover. Optional for v4-only rows.
-    strategy_version_id: UUID | None = None
-    # v4 FK — set by Slice 9+ deployments that bind a StrategyVersionV4.
-    strategy_version_v4_id: UUID | None = None
+    strategy_version_v4_id: UUID
     strategy_controls_version_id: UUID | None = None
     execution_plan_version_id: UUID | None = None
     risk_plan_version_id: UUID | None = None
@@ -102,14 +83,6 @@ class DeploymentWriteRequest(BaseModel):
     watchlist_ids: tuple[UUID, ...] = ()
     subscribed_account_ids: tuple[UUID, ...] = ()
     runtime_overrides: dict[str, object] = Field(default_factory=dict)
-
-    @model_validator(mode="after")
-    def _require_at_least_one_strategy_fk(self) -> "DeploymentWriteRequest":
-        if self.strategy_version_id is None and self.strategy_version_v4_id is None:
-            raise ValueError(
-                "at least one of strategy_version_id or strategy_version_v4_id must be set"
-            )
-        return self
 
 
 class DeploymentSubscribeRequest(BaseModel):

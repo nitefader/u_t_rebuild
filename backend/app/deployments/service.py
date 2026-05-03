@@ -110,7 +110,6 @@ class DeploymentService:
             deployment_id=uuid4(),
             name=request.name.strip(),
             description=request.description,
-            strategy_version_id=request.strategy_version_id,
             strategy_version_v4_id=request.strategy_version_v4_id,
             strategy_controls_version_id=request.strategy_controls_version_id,
             execution_plan_version_id=request.execution_plan_version_id,
@@ -141,7 +140,6 @@ class DeploymentService:
             update={
                 "name": request.name.strip(),
                 "description": request.description,
-                "strategy_version_id": request.strategy_version_id,
                 "strategy_version_v4_id": request.strategy_version_v4_id,
                 "strategy_controls_version_id": request.strategy_controls_version_id,
                 "execution_plan_version_id": request.execution_plan_version_id,
@@ -285,15 +283,8 @@ class DeploymentService:
         self._validate_plan_version_id(request.execution_plan_version_id)
 
         before: dict[str, str | None] = {
-            "strategy_version_id": (
-                str(deployment.strategy_version_id)
-                if deployment.strategy_version_id is not None
-                else None
-            ),
             "strategy_version_v4_id": (
                 str(deployment.strategy_version_v4_id)
-                if deployment.strategy_version_v4_id is not None
-                else None
             ),
             "strategy_controls_version_id": (
                 str(deployment.strategy_controls_version_id)
@@ -322,15 +313,8 @@ class DeploymentService:
         self._repo.save_deployment(updated)
 
         after: dict[str, str | None] = {
-            "strategy_version_id": (
-                str(updated.strategy_version_id)
-                if updated.strategy_version_id is not None
-                else None
-            ),
             "strategy_version_v4_id": (
                 str(updated.strategy_version_v4_id)
-                if updated.strategy_version_v4_id is not None
-                else None
             ),
             "strategy_controls_version_id": (
                 str(updated.strategy_controls_version_id)

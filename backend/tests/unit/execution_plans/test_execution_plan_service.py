@@ -43,7 +43,7 @@ def _make_deployment(execution_plan_version_id=None) -> Deployment:
     return Deployment(
         deployment_id=uuid4(),
         name="Test Deployment",
-        strategy_version_id=uuid4(),
+        strategy_version_v4_id=uuid4(),
         execution_plan_version_id=execution_plan_version_id,
         lifecycle_status=DeploymentLifecycleStatus.DRAFT,
     )
